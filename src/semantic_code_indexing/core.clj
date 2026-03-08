@@ -1,6 +1,7 @@
 (ns semantic-code-indexing.core
   (:require [semantic-code-indexing.runtime.index :as idx]
-            [semantic-code-indexing.runtime.retrieval :as retrieval]))
+            [semantic-code-indexing.runtime.retrieval :as retrieval]
+            [semantic-code-indexing.runtime.storage :as storage]))
 
 (defn create-index
   "Create a new in-memory index from a repository root.
@@ -42,3 +43,17 @@
   - :paths vector of file paths"
   [index selector]
   (retrieval/skeletons index selector))
+
+(defn in-memory-storage
+  "Create in-memory storage adapter for index snapshots."
+  []
+  (storage/in-memory-storage))
+
+(defn postgres-storage
+  "Create PostgreSQL storage adapter.
+
+  Options:
+  - :db-spec next.jdbc datasource spec map
+  - OR :jdbc-url (+ optional :user, :password)"
+  [opts]
+  (storage/postgres-storage opts))

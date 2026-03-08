@@ -1,7 +1,8 @@
 (ns semantic-code-indexing.runtime.index
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [semantic-code-indexing.runtime.adapters :as adapters]))
+            [semantic-code-indexing.runtime.adapters :as adapters]
+            [semantic-code-indexing.runtime.storage :as storage]))
 
 (defn- now-iso []
   (-> (java.time.Instant/now) str))
@@ -43,10 +44,10 @@
    {}
    units))
 
-(defn- parse-files [root-path paths]
+(defn- parse-files [root-path paths parser-opts]
   (reduce
    (fn [acc path]
-     (let [parsed (adapters/parse-file root-path path)
+     (let [parsed (adapters/parse-file root-path path parser-opts)
            file-rec {:path path
                      :language (:language parsed)
                      :module (:module parsed)
@@ -110,13 +111,31 @@
      :callers_index (build-callers-index units)
      :module_dependents (build-module-dependents (:files files-data))}))
 
+(defn- maybe-load-latest [storage-adapter root-path load-latest?]
+  (when (and storage-adapter load-latest?)
+    (storage/init-storage! storage-adapter)
+    (storage/load-latest-index storage-adapter root-path)))
+
+(defn- maybe-save-index! [storage-adapter index]
+  (when storage-adapter
+    (storage/init-storage! storage-adapter)
+    (storage/save-index! storage-adapter index))
+  index)
+
 (defn create-index
-  [{:keys [root_path paths] :or {root_path "."}}]
-  (let [discovered (if (seq paths)
-                     (normalize-paths paths)
-                     (discover-source-files root_path))
-        files-data (parse-files root_path discovered)]
-    (build-index-state root_path files-data)))
+  [{:keys [root_path paths parser_opts storage load_latest]
+    :or {root_path "."
+         parser_opts {:clojure_engine :clj-kondo
+                      :tree_sitter_enabled false}
+         load_latest false}}]
+  (if-let [latest (maybe-load-latest storage root_path load_latest)]
+    latest
+    (let [discovered (if (seq paths)
+                       (normalize-paths paths)
+                       (discover-source-files root_path))
+          files-data (parse-files root_path discovered parser_opts)
+          index (build-index-state root_path files-data)]
+      (maybe-save-index! storage index))))
 
 (defn- remove-paths-from-index [index paths]
   (let [path-set (set paths)
@@ -131,19 +150,25 @@
      :diagnostics remaining-diagnostics}))
 
 (defn update-index
-  [index {:keys [changed_paths] :or {changed_paths []}}]
+  [index {:keys [changed_paths parser_opts storage]
+          :or {changed_paths []
+               parser_opts {:clojure_engine :clj-kondo
+                            :tree_sitter_enabled false}}}]
   (if (empty? changed_paths)
-    (create-index {:root_path (:root_path index)})
+    (create-index {:root_path (:root_path index)
+                   :parser_opts parser_opts
+                   :storage storage})
     (let [paths (normalize-paths changed_paths)
           base (remove-paths-from-index index paths)
-          parsed (parse-files (:root_path index) paths)
+          parsed (parse-files (:root_path index) paths parser_opts)
           merged-files (merge (:files base) (:files parsed))
           merged-units (vec (concat (:units base) (:units parsed)))
-          merged-diags (vec (concat (:diagnostics base) (:diagnostics parsed)))]
-      (build-index-state (:root_path index)
-                         {:files merged-files
-                          :units merged-units
-                          :diagnostics merged-diags}))))
+          merged-diags (vec (concat (:diagnostics base) (:diagnostics parsed)))
+          updated (build-index-state (:root_path index)
+                                     {:files merged-files
+                                      :units merged-units
+                                      :diagnostics merged-diags})]
+      (maybe-save-index! storage updated))))
 
 (defn unit-by-id [index unit-id]
   (get (:units index) unit-id))

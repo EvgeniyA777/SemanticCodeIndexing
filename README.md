@@ -16,19 +16,22 @@ The project defines how a host system should request code context, how retrieval
 - mirrors contracts in Clojure (`malli`) for runtime validation
 - provides a local and CI gate to prevent contract drift
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `impact-analysis`, `skeletons`
-- includes lightweight parser adapters for `Clojure + Java` and emits diagnostics/guardrails outputs
+- includes parser adapters for `Clojure + Java` and emits diagnostics/guardrails outputs
+- supports optional snapshot persistence adapters (`in-memory`, `PostgreSQL`)
 
 ## What This Project Does Not Do (Yet)
 
-- does not implement full repository indexing/parsing runtime yet
-- does not implement ranking engine, graph storage, or parser adapters yet
+- does not implement production-grade deep semantic parsing (full compiler-level resolution)
+- does not implement advanced ranking calibration/benchmark suite beyond MVP gates
+- does not implement durable graph storage model beyond snapshot persistence
 - does not expose production API server endpoints yet
 
-Current scope is contract architecture and validation infrastructure.
+Current scope is contract architecture plus a working MVP runtime implementation.
 
 ## Repository Layout
 
 - `adr/` - architecture decisions (`ADR-001` .. `ADR-017`)
+- `docs/` - runtime API and operational docs
 - `contracts/schemas/` - JSON Schema contracts (external source of truth)
 - `contracts/examples/` - canonical examples for contract families
 - `fixtures/retrieval/` - retrieval fixture corpus (behavior bands)
@@ -46,6 +49,7 @@ Current scope is contract architecture and validation infrastructure.
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out /tmp/sci.json`
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
+- Runtime API docs: [docs/runtime-api.md](/Users/ae/workspaces/SemanticСodeIndexing/docs/runtime-api.md)
 
 ## Agent Limit Policy
 
@@ -68,6 +72,9 @@ Current scope is contract architecture and validation infrastructure.
 - seed fixture corpus established (`fixtures/retrieval`)
 - Clojure validation gate implemented (`src/semantic_code_indexing/contracts`)
 - MVP runtime implemented (`src/semantic_code_indexing/core.clj`, `src/semantic_code_indexing/runtime/*`)
+- Clojure retrieval uses `clj-kondo` as primary parser with fallback path
+- tiered structural-first ranking and non-compensating confidence model implemented
+- PostgreSQL persistence adapter implemented for optional snapshot storage
 
 ## License
 

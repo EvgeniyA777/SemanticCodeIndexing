@@ -35,9 +35,17 @@
                     {:type :invalid_query
                      :errors (me/humanize explain)}))))
 
-(defn- add-score [score-map uid points reason]
+(defn- tiered-entry []
+  {:tier1 0
+   :tier2 0
+   :tier3 0
+   :tier4 0
+   :reasons []})
+
+(defn- add-tier [score-map uid tier points reason]
   (-> score-map
-      (update-in [uid :score] (fnil + 0) points)
+      (update uid #(or % (tiered-entry)))
+      (update-in [uid tier] (fnil + 0) points)
       (update-in [uid :reasons] (fnil conj []) reason)))
 
 (defn- overlap-span? [u span]
@@ -68,6 +76,12 @@
              (str/starts-with? m module-str)
              (str/includes? m module-str)))))
 
+(defn- combine-score [{:keys [tier1 tier2 tier3 tier4]} parser-mode]
+  (let [raw (+ tier1 tier2 tier3 tier4)
+        capped-soft (if (zero? tier1) (min raw 89) raw)
+        capped-fallback (if (= parser-mode "fallback") (min capped-soft 59) capped-soft)]
+    capped-fallback))
+
 (defn- collect-candidates [index query]
   (let [units (idx/all-units index)
         target-symbols (get-in query [:targets :symbols] [])
@@ -89,23 +103,30 @@
                            by-span (some #(overlap-span? u %) changed-spans)
                            by-pref-path (contains? preferred-paths (:path u))
                            by-pref-module (some #(module-prefix-match? u %) preferred-modules)
+                           by-parser-fallback (= "fallback" (:parser_mode u))
                            by-lexical (lexical-match? u tokens)
                            acc1 (cond-> acc
-                                  by-symbol (add-score uid 140 (coded "exact_target_resolved" "Target symbol resolved to unit."))
-                                  by-path (add-score uid 100 (coded "target_path_match" "Unit path directly targeted by query."))
-                                  by-module (add-score uid 85 (coded "target_module_match" "Unit module targeted by query."))
-                                  by-test (add-score uid 60 (coded "target_test_match" "Unit appears in explicitly requested tests."))
-                                  by-span (add-score uid 95 (coded "diff_overlap_direct" "Changed span overlaps this unit."))
-                                  by-pref-path (add-score uid 15 (coded "hint_preferred_path" "Preferred path hint boosted this unit."))
-                                  by-pref-module (add-score uid 10 (coded "hint_preferred_module" "Preferred module hint boosted this unit."))
-                                  by-lexical (add-score uid 8 (coded "lexical_overlap" "Lexical overlap with query detail.")))]
-                       (if (contains? acc1 uid) acc1 (assoc acc1 uid {:score 0 :reasons []}))))
+                                  by-symbol (add-tier uid :tier1 140 (coded "exact_target_resolved" "Tier1: target symbol resolved to unit."))
+                                  by-path (add-tier uid :tier1 95 (coded "target_path_match" "Tier1: unit path directly targeted by query."))
+                                  by-span (add-tier uid :tier1 90 (coded "diff_overlap_direct" "Tier1: changed span overlaps this unit."))
+                                  by-module (add-tier uid :tier2 70 (coded "target_module_match" "Tier2: unit module targeted by query."))
+                                  by-test (add-tier uid :tier2 50 (coded "target_test_match" "Tier2: unit appears in explicitly requested tests."))
+                                  by-pref-path (add-tier uid :tier3 15 (coded "hint_preferred_path" "Tier3: preferred path hint boosted unit."))
+                                  by-pref-module (add-tier uid :tier3 10 (coded "hint_preferred_module" "Tier3: preferred module hint boosted unit."))
+                                  by-lexical (add-tier uid :tier4 8 (coded "lexical_overlap" "Tier4: lexical overlap with query detail."))
+                                  by-parser-fallback (add-tier uid :tier3 0 (coded "parser_fallback" "Fallback parser contributes limited-confidence evidence.")))]
+                       (if (contains? acc1 uid) acc1 (assoc acc1 uid (tiered-entry)))))
                    {}
                    units)
         scored (->> units
                     (map (fn [u]
-                           (let [{:keys [score reasons]} (get score-map (:unit_id u) {:score 0 :reasons []})]
-                             (assoc u :score score :selection_reasons reasons))))
+                           (let [{:keys [tier1 tier2 tier3 tier4 reasons] :as entry}
+                                 (get score-map (:unit_id u) (tiered-entry))
+                                 score (combine-score entry (:parser_mode u))]
+                             (assoc u
+                                    :tier_scores {:tier1 tier1 :tier2 tier2 :tier3 tier3 :tier4 tier4}
+                                    :score score
+                                    :selection_reasons reasons))))
                     (filter #(pos? (:score %)))
                     (sort-by (juxt (comp - :score) :path :start_line))
                     vec)
@@ -189,21 +210,25 @@
 (defn- build-confidence [selected query]
   (let [top (first selected)
         second-best (second selected)
+        tier1 (get-in top [:tier_scores :tier1] 0)
+        tier2 (get-in top [:tier_scores :tier2] 0)
         exact-target? (and (seq (get-in query [:targets :symbols]))
                            (some #(contains? (set (get-in query [:targets :symbols])) (:symbol %)) selected))
         parser-fallback? (some #(= "fallback" (:parser_mode %)) selected)
         ambiguous? (and top second-best (<= (Math/abs (- (:score top) (:score second-best))) 10))
         level (cond
-                (and exact-target? (not parser-fallback?) (not ambiguous?)) "high"
-                (or exact-target? (seq (get-in query [:targets :changed_spans])) (seq (get-in query [:targets :paths]))) "medium"
+                (and (pos? tier1) exact-target? (not parser-fallback?) (not ambiguous?)) "high"
+                (or (pos? tier1) (>= tier2 50) exact-target? (seq (get-in query [:targets :changed_spans])) (seq (get-in query [:targets :paths]))) "medium"
                 :else "low")
         adjusted-level (if parser-fallback? "low" level)
         reasons (cond-> []
                   exact-target? (conj (coded "exact_target_resolved" "Target symbol resolved to authority unit."))
+                  (and top (pos? tier1)) (conj (coded "tier1_structural_signal" "Strong tier1 structural evidence is present."))
                   (and top (>= (:score top) 80)) (conj (coded "graph_proximity_strong" "High structural score for selected unit."))
                   (seq (get-in query [:targets :changed_spans])) (conj (coded "diff_overlap_direct" "Changed span overlap contributed to retrieval.")))
         warnings (cond-> []
                    parser-fallback? (conj (coded "parser_fallback" "Fallback parser used for at least one selected unit."))
+                   (zero? tier1) (conj (coded "no_tier1_evidence" "No tier1 structural evidence; confidence is ceiling-limited."))
                    ambiguous? (conj (coded "target_ambiguous" "Top ranked units are close in score; authority target is ambiguous.")))
         missing (cond-> []
                   (not exact-target?) (conj (coded "exact_target_resolution_missing" "No exact symbol target resolved from query."))

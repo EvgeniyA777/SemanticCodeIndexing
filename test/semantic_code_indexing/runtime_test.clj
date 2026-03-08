@@ -49,7 +49,8 @@
     (testing "index has both languages"
       (is (seq (:files index)))
       (is (some #(= "clojure" (:language %)) (vals (:files index))))
-      (is (some #(= "java" (:language %)) (vals (:files index)))))
+      (is (some #(= "java" (:language %)) (vals (:files index))))
+      (is (= "full" (get-in index [:files "src/my/app/order.clj" :parser_mode]))))
     (testing "context packet validates against contract"
       (is (nil? (m/explain (:example/context-packet contracts/contracts) packet))))
     (testing "diagnostics validates against contract"
@@ -58,4 +59,15 @@
       (is (nil? (m/explain (:example/guardrail-assessment contracts/contracts) guardrails))))
     (testing "retrieval actually localizes target"
       (is (seq (:relevant_units packet)))
-      (is (some #(= "my.app.order/process-order" (:symbol %)) (:relevant_units packet))))))
+      (is (some #(= "my.app.order/process-order" (:symbol %)) (:relevant_units packet)))
+      (is (= "high" (get-in packet [:confidence :level]))))))
+
+(deftest in-memory-storage-roundtrip-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-storage-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        index-a (sci/create-index {:root_path tmp-root :storage storage})
+        ;; load_latest should return previously persisted snapshot
+        index-b (sci/create-index {:root_path tmp-root :storage storage :load_latest true})]
+    (is (= (:snapshot_id index-a) (:snapshot_id index-b)))
+    (is (= (count (:units index-a)) (count (:units index-b))))))
