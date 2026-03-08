@@ -38,6 +38,14 @@ Current scope is contract architecture and validation infrastructure.
 - Local: `./scripts/validate-contracts.sh`
 - CI: `.github/workflows/contracts-validation.yml`
 
+## Agent Limit Policy
+
+- If execution/model/tool limits are exhausted, the agent MUST stop work immediately.
+- No retries, no fallback execution, no bypass attempts.
+- The agent MUST send a short status message: `limit reached, waiting for user instruction`.
+- After that message, the agent MUST wait for explicit user instruction before continuing.
+- This local policy applies to this repository workflow.
+
 ## Current Contract Strategy
 
 1. `JSON Schema` is the external contract source of truth.
