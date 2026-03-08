@@ -62,27 +62,108 @@
    {:files {} :units [] :diagnostics []}
    paths))
 
-(defn- match-call-token? [token symbol]
-  (or (= token symbol)
-      (and (str/includes? symbol "/") (= token (last (str/split symbol #"/"))))
-      (and (str/includes? symbol "#") (= token (last (str/split symbol #"#"))))
-      (and (str/includes? token "/") (= symbol token))))
+(defn- lower [s]
+  (some-> s str/lower-case))
+
+(defn- symbol-call-tokens [symbol]
+  (let [sym (str symbol)
+        tokens-a (if (str/includes? sym "/")
+                   (let [[prefix name] (str/split sym #"/" 2)]
+                     (cond-> #{sym}
+                       (seq name) (conj name)
+                       (and (seq prefix) (seq name)) (conj (str prefix "." name) (str prefix "/" name))))
+                   #{sym})
+        tokens (if (str/includes? sym "#")
+                 (let [[prefix name] (str/split sym #"#" 2)
+                       cls (last (str/split prefix #"\."))]
+                   (cond-> tokens-a
+                     (seq name) (conj name)
+                     (and (seq cls) (seq name)) (conj (str cls "#" name))
+                     (and (seq prefix) (seq name)) (conj (str prefix "." name) (str prefix "#" name))))
+                 tokens-a)
+        with-tail (reduce (fn [acc token]
+                            (let [tail (last (str/split token #"[./#]"))]
+                              (cond-> acc
+                                (seq token) (conj token)
+                                (seq tail) (conj tail))))
+                          #{}
+                          tokens)]
+    (->> with-tail
+         (mapcat (fn [t] (if-let [l (lower t)] [t l] [t])))
+         (remove str/blank?)
+         set)))
+
+(defn- build-call-token-index [units]
+  (reduce
+   (fn [acc u]
+     (if-let [sym (:symbol u)]
+       (reduce (fn [a token] (update a token (fnil conj #{}) (:unit_id u)))
+               acc
+               (symbol-call-tokens sym))
+       acc))
+   {}
+   units))
+
+(defn- call-token-scopes [u]
+  (let [module (:module u)
+        symbol (str (:symbol u))
+        prefix-slash (first (str/split symbol #"/" 2))
+        prefix-hash (first (str/split symbol #"#" 2))]
+    (->> [module prefix-slash prefix-hash]
+         (remove str/blank?)
+         distinct
+         vec)))
+
+(defn- expand-call-token [caller token]
+  (let [t (str token)
+        tail (last (str/split t #"[./#]"))
+        scoped (when-not (re-find #"[./#/]" t)
+                 (mapcat (fn [scope] [(str scope "/" t) (str scope "." t) (str scope "#" t)])
+                         (call-token-scopes caller)))]
+    (->> (concat [t tail] scoped)
+         (remove str/blank?)
+         (mapcat (fn [x] (if-let [l (lower x)] [x l] [x])))
+         distinct
+         vec)))
+
+(defn- narrow-targets [caller targets token units-by-id]
+  (let [by-id #(get units-by-id %)
+        candidates (->> targets (map by-id) (remove nil?) vec)]
+    (cond
+      (<= (count candidates) 1)
+      (mapv :unit_id candidates)
+
+      (re-find #"[./#/]" (str token))
+      (mapv :unit_id candidates)
+
+      :else
+      (let [same-path (filter #(= (:path %) (:path caller)) candidates)
+            same-module (filter #(= (:module %) (:module caller)) candidates)]
+        (cond
+          (seq same-path) (mapv :unit_id same-path)
+          (seq same-module) (mapv :unit_id same-module)
+          :else (mapv :unit_id candidates))))))
 
 (defn- build-callers-index [units]
-  (let [units-by-id (into {} (map (juxt :unit_id identity) units))
-        symbol-candidates (->> units (keep :symbol) distinct vec)]
+  (let [token-index (build-call-token-index units)
+        units-by-id (into {} (map (juxt :unit_id identity) units))]
     (reduce
-     (fn [acc u]
+     (fn [acc caller]
        (reduce
         (fn [acc2 token]
-          (let [targets (->> units
-                             (filter (fn [cand]
-                                       (some-> cand :symbol (match-call-token? token))))
-                             (map :unit_id)
-                             distinct)]
-            (reduce (fn [a t] (update a t (fnil conj #{}) (:unit_id u))) acc2 targets)))
+          (let [target-ids (->> (expand-call-token caller token)
+                                (mapcat #(get token-index % #{}))
+                                distinct
+                                vec)
+                narrowed (narrow-targets caller target-ids token units-by-id)]
+            (reduce (fn [a target-id]
+                      (if (= target-id (:unit_id caller))
+                        a
+                        (update a target-id (fnil conj #{}) (:unit_id caller))))
+                    acc2
+                    narrowed)))
         acc
-        (:calls (get units-by-id (:unit_id u)))))
+        (:calls caller)))
      {}
      units)))
 

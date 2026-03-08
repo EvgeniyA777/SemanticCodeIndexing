@@ -9,6 +9,8 @@
   {:main-opts ["-m" "semantic-code-indexing.contracts.cli"]}
   :runtime
   {:main-opts ["-m" "semantic-code-indexing.runtime.cli"]}
+  :bench
+  {:main-opts ["-m" "semantic-code-indexing.runtime.benchmarks"]}
   :test
   {:extra-paths ["test"]
    :main-opts ["-m" "semantic-code-indexing.test-runner"]}}}

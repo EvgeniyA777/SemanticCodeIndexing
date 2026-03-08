@@ -65,7 +65,7 @@
   {:schema_version "1.0"
    :intent {:purpose "code_understanding"
             :details "Locate Python process_order function."}
-   :targets {:symbols ["app.orders/process_order"]
+   :targets {:symbols ["app.orders.OrderService/process_order"]
              :paths ["app/orders.py"]}
    :constraints {:token_budget 1200
                  :max_raw_code_level "enclosing_unit"
@@ -116,7 +116,7 @@
       (is (some #(= "MyApp.Order/process_order" (:symbol %))
                 (get-in ex-result [:context_packet :relevant_units]))))
     (testing "python symbol can be localized"
-      (is (some #(= "app.orders/process_order" (:symbol %))
+      (is (some #(= "app.orders.OrderService/process_order" (:symbol %))
                 (get-in py-result [:context_packet :relevant_units]))))))
 
 (deftest in-memory-storage-roundtrip-test
@@ -128,3 +128,14 @@
         index-b (sci/create-index {:root_path tmp-root :storage storage :load_latest true})]
     (is (= (:snapshot_id index-a) (:snapshot_id index-b)))
     (is (= (count (:units index-a)) (count (:units index-b))))))
+
+(deftest postgres-storage-roundtrip-test
+  (if-let [jdbc-url (System/getenv "SCI_TEST_POSTGRES_URL")]
+    (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-pg-storage-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+          _ (create-sample-repo! tmp-root)
+          storage (sci/postgres-storage {:jdbc-url jdbc-url})
+          index-a (sci/create-index {:root_path tmp-root :storage storage})
+          index-b (sci/create-index {:root_path tmp-root :storage storage :load_latest true})]
+      (is (= (:snapshot_id index-a) (:snapshot_id index-b)))
+      (is (= (count (:units index-a)) (count (:units index-b)))))
+    (is true "SCI_TEST_POSTGRES_URL is not set; skipping postgres storage smoke test.")))

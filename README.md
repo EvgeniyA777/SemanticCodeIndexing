@@ -17,13 +17,13 @@ The project defines how a host system should request code context, how retrieval
 - provides a local and CI gate to prevent contract drift
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `impact-analysis`, `skeletons`
 - includes parser adapters for `Clojure + Java + Elixir + Python` and emits diagnostics/guardrails outputs
-- supports optional snapshot persistence adapters (`in-memory`, `PostgreSQL`)
+- supports optional persistence adapters (`in-memory`, `PostgreSQL`) with snapshot + graph projection storage for PostgreSQL
+- includes retrieval benchmark suite aligned with fixture corpus (`ADR-014`)
 
 ## What This Project Does Not Do (Yet)
 
 - does not implement production-grade deep semantic parsing (full compiler-level resolution)
-- does not implement advanced ranking calibration/benchmark suite beyond MVP gates
-- does not implement durable graph storage model beyond snapshot persistence
+- does not implement full compiler-grade interprocedural resolution across all languages
 - does not expose production API server endpoints yet
 
 Current scope is contract architecture plus a working MVP runtime implementation.
@@ -46,6 +46,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 ## Runtime Validation and Smoke
 
 - Unit/integration tests: `clojure -M:test`
+- Retrieval benchmarks: `./scripts/run-benchmarks.sh`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out /tmp/sci.json`
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
@@ -58,6 +59,13 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - The agent MUST send a short status message: `limit reached, waiting for user instruction`.
 - After that message, the agent MUST wait for explicit user instruction before continuing.
 - This local policy applies to this repository workflow.
+
+## Service Restart Policy
+
+- Before running integration tests that depend on services (PostgreSQL or any other local server), first check whether an instance is already running.
+- If an instance is running, stop/shutdown it.
+- Start a fresh instance with the required test configuration.
+- Run tests only after the clean restart.
 
 ## Current Contract Strategy
 
@@ -74,8 +82,11 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - MVP runtime implemented (`src/semantic_code_indexing/core.clj`, `src/semantic_code_indexing/runtime/*`)
 - Clojure retrieval uses `clj-kondo` as primary parser with fallback path
 - Elixir and Python retrieval paths are implemented in the same runtime adapter pipeline
+- multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python
 - tiered structural-first ranking and non-compensating confidence model implemented
-- PostgreSQL persistence adapter implemented for optional snapshot storage
+- late raw-code escalation stage is implemented and controlled by query options/constraints
+- PostgreSQL persistence adapter stores snapshots plus unit/call-edge graph projections
+- fixture-driven retrieval benchmarks are integrated into local and CI gates
 
 ## License
 

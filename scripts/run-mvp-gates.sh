@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 
 ./scripts/validate-contracts.sh
 clojure -M:test
+./scripts/run-benchmarks.sh
 
 for q in contracts/examples/queries/*.json; do
   out="/tmp/sci-gate-$(basename "$q" .json).json"

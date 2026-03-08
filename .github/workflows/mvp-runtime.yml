@@ -41,3 +41,39 @@ jobs:
 
       - name: Run MVP Gates
         run: ./scripts/run-mvp-gates.sh
+
+  runtime-gates-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: semantic_index_test
+          POSTGRES_USER: semantic_user
+          POSTGRES_PASSWORD: semantic_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U semantic_user -d semantic_index_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.2
+        with:
+          cli: "1.12.0.1530"
+
+      - name: Run PostgreSQL Integration Smoke
+        env:
+          SCI_TEST_POSTGRES_URL: jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass
+        run: clojure -M:test

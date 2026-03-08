@@ -12,6 +12,7 @@ This document describes the current MVP in-memory library API.
 - Java (`.java`) via lightweight regex parser
 - Elixir (`.ex/.exs`) via lightweight regex parser
 - Python (`.py`) via lightweight regex parser
+- Java/Elixir/Python call tokens are normalized for module/class-aware call graph linking
 
 ## Public Functions
 
@@ -144,6 +145,12 @@ You can load latest stored snapshot:
                    :load_latest true})
 ```
 
+PostgreSQL adapter persists:
+
+- index snapshots (`semantic_index_snapshots`)
+- unit projections (`semantic_index_units`)
+- call edge projections (`semantic_index_call_edges`)
+
 ### `skeletons`
 
 Returns skeletons for specific units or paths.
@@ -175,13 +182,23 @@ Smoke helper:
 
 - Contracts only: `./scripts/validate-contracts.sh`
 - Tests: `clojure -M:test`
+- Benchmarks: `./scripts/run-benchmarks.sh`
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
 
 ## Current MVP Notes
 
 - Clojure parser pipeline is `clj-kondo` first, with regex fallback.
 - Java, Elixir, and Python parsers are lightweight regex-based in MVP.
-- `tree-sitter` is an optional slot in parser options and not enabled in this MVP build.
-- Default retrieval skips raw-code escalation stage and returns bounded context output.
+- `tree-sitter` remains optional; when enabled in parser opts, runtime emits availability diagnostics for Clojure/Java.
+- Raw-code escalation stage is late and opt-in via query options (`allow_raw_code_escalation`) and bounded by `constraints.max_raw_code_level`.
 - Ranking is structural-first and tiered, with hard ceilings when Tier1 evidence is missing.
 - Output contracts are validated against local `malli` mirrors of JSON schemas.
+
+### Optional PostgreSQL Test Smoke
+
+Set env var and run tests:
+
+```bash
+SCI_TEST_POSTGRES_URL='jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass' \
+clojure -M:test
+```

@@ -17,20 +17,20 @@
 (def ^:private java-import-re #"^\s*import\s+([a-zA-Z0-9_\.]+)\s*;")
 (def ^:private java-class-re #"^\s*(?:public\s+)?(?:class|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 (def ^:private java-method-re
-  #"^\s*(?:public|private|protected|static|final|native|synchronized|abstract|default|\s)+[a-zA-Z0-9_<>,\[\]\.?\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:\{|throws|;)")
-(def ^:private java-call-re #"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+  #"^\s*(?:public|private|protected|static|final|native|synchronized|abstract|default|\s)+[a-zA-Z0-9_<>,\[\]\.\?\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:\{|throws|;)")
+(def ^:private java-call-re #"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
 
 (def ^:private ex-module-re #"^\s*defmodule\s+([A-Za-z0-9_\.]+)\s+do")
 (def ^:private ex-import-re #"^\s*(?:alias|import|require|use)\s+([A-Za-z0-9_\.]+)")
 (def ^:private ex-def-re #"^\s*(defp?|defmacro|defmacrop)\s+([a-zA-Z_][a-zA-Z0-9_!?]*)")
 (def ^:private ex-test-re #"^\s*test\s+\"([^\"]+)\"\s+do")
-(def ^:private ex-call-re #"\b([a-z_][a-zA-Z0-9_!?]*)\s*\(")
+(def ^:private ex-call-re #"\b([A-Za-z_][A-Za-z0-9_\.!?\.]*)\s*\(")
 
 (def ^:private py-import-re #"^\s*import\s+([a-zA-Z0-9_\.]+)")
 (def ^:private py-from-import-re #"^\s*from\s+([a-zA-Z0-9_\.]+)\s+import\s+")
 (def ^:private py-class-re #"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)")
 (def ^:private py-def-re #"^\s*(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-(def ^:private py-call-re #"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+(def ^:private py-call-re #"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
 
 (def ^:private clj-call-stop
   #{"def" "defn" "defn-" "defmacro" "defmulti" "defmethod" "deftest" "ns"
@@ -70,6 +70,30 @@
 (defn- unit-end-lines [starts total-lines]
   (let [pairs (partition 2 1 (concat starts [(inc total-lines)]))]
     (mapv (fn [[s n]] (max s (dec n))) pairs)))
+
+(defn- tail-token [token]
+  (some-> token str (str/split #"[\./#]") last))
+
+(defonce ^:private tree-sitter-availability (atom nil))
+
+(defn- tree-sitter-available? []
+  (if (some? @tree-sitter-availability)
+    @tree-sitter-availability
+    (let [{:keys [exit]} (try
+                          (sh/sh "tree-sitter" "--version")
+                          (catch Exception _ {:exit 127}))
+          available? (zero? (int exit))]
+      (reset! tree-sitter-availability available?)
+      available?)))
+
+(defn- add-tree-sitter-diag [parsed enabled? language]
+  (if (and enabled? (#{"clojure" "java"} language))
+    (if (tree-sitter-available?)
+      (update parsed :diagnostics conj {:code "tree_sitter_probe"
+                                        :summary "tree-sitter CLI detected; adapter remains canonical extraction source."})
+      (update parsed :diagnostics conj {:code "tree_sitter_unavailable"
+                                        :summary "tree-sitter requested but CLI is unavailable; using adapter parser."}))
+    parsed))
 
 (defn- clj-kind [kw path]
   (cond
@@ -247,10 +271,9 @@
   (let [parsed (case clojure_engine
                  :regex (parse-clojure-regex path lines)
                  :clj-kondo (parse-clojure-kondo root-path path lines)
+                 :tree-sitter (parse-clojure-kondo root-path path lines)
                  (parse-clojure-kondo root-path path lines))]
-    (if tree_sitter_enabled
-      (update parsed :diagnostics conj {:code "tree_sitter_optional" :summary "tree-sitter path requested but not enabled in MVP runtime."})
-      parsed)))
+    (add-tree-sitter-diag parsed tree_sitter_enabled "clojure")))
 
 (defn- java-kind [path method-name]
   (if (or (str/includes? (str/lower-case path) "/test/")
@@ -262,11 +285,15 @@
 (defn- extract-java-calls [body]
   (->> (re-seq java-call-re body)
        (map second)
-       (remove java-call-stop)
+       (mapcat (fn [token]
+                 (let [tail (tail-token token)]
+                   (cond-> [token]
+                     (and tail (not= tail token)) (conj tail)))))
+       (remove #(contains? java-call-stop %))
        distinct
        vec))
 
-(defn- parse-java [path lines]
+(defn- parse-java [path lines parser-opts]
   (let [line-count (count lines)
         pkg (some (fn [line] (some-> (re-find java-package-re line) second)) lines)
         imports (->> lines
@@ -312,13 +339,14 @@
                              :imports imports
                              :calls (extract-java-calls body)
                              :parser_mode "full"})))
-                   vec)]
-    {:language "java"
-     :module pkg
-     :imports imports
-     :units units
-     :diagnostics []
-     :parser_mode "full"}))
+                   vec)
+        parsed {:language "java"
+                :module pkg
+                :imports imports
+                :units units
+                :diagnostics []
+                :parser_mode "full"}]
+    (add-tree-sitter-diag parsed (:tree_sitter_enabled parser-opts) "java")))
 
 (defn- ex-test-symbol [module test-name]
   (let [slug (-> test-name
@@ -330,7 +358,11 @@
 (defn- extract-ex-calls [body]
   (->> (re-seq ex-call-re body)
        (map second)
-       (remove ex-call-stop)
+       (mapcat (fn [token]
+                 (let [tail (tail-token token)]
+                   (cond-> [token]
+                     (and tail (not= tail token)) (conj tail)))))
+       (remove #(contains? ex-call-stop %))
        distinct
        vec))
 
@@ -352,7 +384,7 @@
                                :signature (trim-signature line)})
 
                             (re-find ex-def-re line)
-                            (let [[_ kw nm] (re-find ex-def-re line)
+                            (let [[_ _kw nm] (re-find ex-def-re line)
                                   kind (if (str/includes? path "/test/") "test" "function")]
                               {:start-line (inc idx)
                                :kind kind
@@ -401,10 +433,23 @@
     "test"
     "function"))
 
+(defn- py-indent [line]
+  (count (re-find #"^\s*" line)))
+
+(defn- py-in-class-context [stack indent]
+  (->> stack
+       (filter #(< (:indent %) indent))
+       last
+       :name))
+
 (defn- extract-py-calls [body]
   (->> (re-seq py-call-re body)
        (map second)
-       (remove py-call-stop)
+       (mapcat (fn [token]
+                 (let [tail (tail-token token)]
+                   (cond-> [token]
+                     (and tail (not= tail token)) (conj tail)))))
+       (remove #(contains? py-call-stop %))
        distinct
        vec))
 
@@ -417,23 +462,46 @@
                                  (some-> (re-find py-from-import-re line) second))))
                      distinct
                      vec)
-        defs (->> (map-indexed vector lines)
-                  (keep (fn [[idx line]]
-                          (cond
-                            (re-find py-class-re line)
-                            (let [[_ cls] (re-find py-class-re line)]
-                              {:start-line (inc idx)
-                               :kind "class"
-                               :raw-symbol (str module "." cls)
-                               :signature (trim-signature line)})
+        defs (loop [idx 0
+                    class-stack []
+                    out []]
+               (if (>= idx line-count)
+                 out
+                 (let [line (nth lines idx)
+                       indent (py-indent line)
+                       pruned (->> class-stack
+                                   (filter #(< (:indent %) indent))
+                                   vec)]
+                   (cond
+                     (re-find py-class-re line)
+                     (let [[_ cls] (re-find py-class-re line)
+                           entry {:start-line (inc idx)
+                                  :indent indent
+                                  :kind "class"
+                                  :raw-symbol (str module "." cls)
+                                  :signature (trim-signature line)}]
+                       (recur (inc idx) (conj pruned {:name cls :indent indent}) (conj out entry)))
 
-                            (re-find py-def-re line)
-                            (let [[_ fn-name] (re-find py-def-re line)]
-                              {:start-line (inc idx)
-                               :kind (py-kind path fn-name)
-                               :raw-symbol (str module "/" fn-name)
-                               :signature (trim-signature line)}))))
-                  vec)
+                     (re-find py-def-re line)
+                     (let [[_ fn-name] (re-find py-def-re line)
+                           class-name (py-in-class-context pruned indent)
+                           symbol (if class-name
+                                    (str module "." class-name "/" fn-name)
+                                    (str module "/" fn-name))
+                           kind (if class-name
+                                  (if (str/starts-with? (str/lower-case fn-name) "test")
+                                    "test"
+                                    "method")
+                                  (py-kind path fn-name))
+                           entry {:start-line (inc idx)
+                                  :indent indent
+                                  :kind (if (= kind "test") "test" kind)
+                                  :raw-symbol symbol
+                                  :signature (trim-signature line)}]
+                       (recur (inc idx) pruned (conj out entry)))
+
+                     :else
+                     (recur (inc idx) pruned out)))))
         starts (mapv :start-line defs)
         ends (unit-end-lines starts line-count)
         units (->> (map vector defs ends)
@@ -492,7 +560,7 @@
        (let [lines (slurp-lines abs)]
          (case language
            "clojure" (parse-clojure root-path file-path lines parser-opts)
-           "java" (parse-java file-path lines)
+           "java" (parse-java file-path lines parser-opts)
            "elixir" (parse-elixir file-path lines)
            "python" (parse-python file-path lines)
            (fallback-unit file-path lines language "unsupported_language")))

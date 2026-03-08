@@ -1,5 +1,6 @@
 (ns semantic-code-indexing.runtime.retrieval
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [malli.core :as m]
             [malli.error :as me]
             [semantic-code-indexing.contracts.schemas :as contracts]
@@ -25,8 +26,8 @@
                              vec)
    :hints_summary (->> (get query :hints)
                        (keep (fn [[k v]] (when (or (true? v)
-                                                   (and (coll? v) (seq v)))
-                                      (str (name k)))))
+                                                   (and (coll? v) (seq v))))
+                               (str (name k))))
                        vec)})
 
 (defn- validate-query! [query]
@@ -155,7 +156,7 @@
        (map (fn [u]
               (+ (count (or (:signature u) ""))
                  (count (or (:summary u) ""))
-                 (count (or (:symbol u) "")))) )
+                 (count (or (:symbol u) "")))))
        (reduce + 0)
        (#(int (Math/ceil (/ (double %) 4.0))))))
 
@@ -227,6 +228,7 @@
                   (and top (>= (:score top) 80)) (conj (coded "graph_proximity_strong" "High structural score for selected unit."))
                   (seq (get-in query [:targets :changed_spans])) (conj (coded "diff_overlap_direct" "Changed span overlap contributed to retrieval.")))
         warnings (cond-> []
+                   parser-fallback? (conj (coded "parser_partial" "Parser coverage is partial for at least one selected unit."))
                    parser-fallback? (conj (coded "parser_fallback" "Fallback parser used for at least one selected unit."))
                    (zero? tier1) (conj (coded "no_tier1_evidence" "No tier1 structural evidence; confidence is ceiling-limited."))
                    ambiguous? (conj (coded "target_ambiguous" "Top ranked units are close in score; authority target is ambiguous.")))
@@ -244,9 +246,10 @@
      :warnings (vec (take 10 warnings))
      :missing_evidence (vec (take 10 missing))}))
 
-(defn- build-guardrails [confidence impact]
+(defn- build-guardrails [confidence impact query]
   (let [level (:level confidence)
-        broad-impact? (> (count (:risky_neighbors impact)) 6)
+        broad-impact? (> (count (:risky_neighbors impact)) 2)
+        raw-level (get-in query [:constraints :max_raw_code_level] "enclosing_unit")
         posture (case level
                   "high" "draft_patch_safe"
                   "medium" "plan_safe"
@@ -267,7 +270,7 @@
                                     "analysis_only")
                             :allow_multi_file_edit false
                             :allow_apply_without_human_review false
-                            :max_raw_code_level "enclosing_unit"}
+                            :max_raw_code_level raw-level}
      :risk_flags (cond-> []
                    broad-impact? (conj (coded "impact_broad" "Riskiest neighbors exceed safe localized threshold."))
                    blocked? (conj (coded "review_gate" "Host override + review required for risky action.")))}))
@@ -316,6 +319,105 @@
     (some? (:docstring_excerpt u))
     (assoc :docstring_excerpt (:docstring_excerpt u))))
 
+(def ^:private raw-level-order
+  {"none" 0
+   "target_span" 1
+   "enclosing_unit" 2
+   "local_neighborhood" 3
+   "whole_file" 4})
+
+(defn- raw-escalation-level [query]
+  (if (true? (get-in query [:options :allow_raw_code_escalation]))
+    (get-in query [:constraints :max_raw_code_level] "enclosing_unit")
+    "none"))
+
+(defn- read-file-lines [index path]
+  (let [root (:root_path index)
+        f (io/file root path)]
+    (when (.exists f)
+      (-> f slurp str/split-lines vec))))
+
+(defn- bounded-span [unit level total-lines]
+  (let [start (:start_line unit)
+        end (:end_line unit)
+        clamp (fn [n] (-> n (max 1) (min total-lines)))]
+    (case level
+      "target_span" {:start (clamp start) :end (clamp end)}
+      "enclosing_unit" {:start (clamp start) :end (clamp end)}
+      "local_neighborhood" {:start (clamp (- start 8)) :end (clamp (+ end 8))}
+      "whole_file" {:start 1 :end total-lines}
+      nil)))
+
+(defn- snippet-bytes [s]
+  (count (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8)))
+
+(defn- perform-raw-fetch [index selected query requested-token-budget]
+  (let [level (raw-escalation-level query)]
+    (if (= level "none")
+      {:status "skipped"
+       :level "none"
+       :requests 0
+       :snippets 0
+       :bytes 0
+       :warnings []
+       :degradations []}
+      (let [max-units 6
+            max-bytes (* 4 (max 200 requested-token-budget))
+            chosen (take max-units selected)]
+        (loop [units chosen
+               requests 0
+               snippets 0
+               bytes 0
+               warnings []
+               degradations []
+               truncated? false]
+          (if (empty? units)
+            (let [status (if (or (seq degradations) truncated?) "degraded" "completed")
+                  status* (if (zero? snippets) "degraded" status)
+                  warnings* (cond-> warnings
+                              truncated? (conj (coded "raw_fetch_budget_limited" "Raw fetch was truncated by budget limits.")))
+                  degradations* (cond-> degradations
+                                  (zero? snippets) (conj (coded "raw_fetch_empty" "Raw-code escalation produced no snippets.")))]
+              {:status status*
+               :level level
+               :requests requests
+               :snippets snippets
+               :bytes bytes
+               :warnings (vec (take 10 warnings*))
+               :degradations (vec (take 10 degradations*))})
+            (let [u (first units)
+                  lines (read-file-lines index (:path u))]
+              (if-not (seq lines)
+                (recur (rest units)
+                       (inc requests)
+                       snippets
+                       bytes
+                       warnings
+                       (conj degradations (coded "raw_fetch_file_missing" (str "Unable to read " (:path u) " for raw fetch.")))
+                       truncated?)
+                (let [span (bounded-span u level (count lines))]
+                  (if-not span
+                    (recur (rest units)
+                           (inc requests)
+                           snippets
+                           bytes
+                           warnings
+                           (conj degradations (coded "raw_fetch_level_invalid" "Unknown raw-code fetch level requested."))
+                           truncated?)
+                    (let [chunk (->> (subvec lines (dec (:start span)) (:end span))
+                                     (str/join "\n"))
+                          chunk-bytes (snippet-bytes chunk)
+                          next-bytes (+ bytes chunk-bytes)]
+                      (if (> next-bytes max-bytes)
+                        (recur [] requests snippets bytes warnings degradations true)
+                        (recur (rest units)
+                               (inc requests)
+                               (inc snippets)
+                               next-bytes
+                               warnings
+                               degradations
+                               truncated?)))))))))))))
+
 (defn resolve-context [index query]
   (validate-query! query)
   (let [trace-id (get-in query [:trace :trace_id] (str (java.util.UUID/randomUUID)))
@@ -332,8 +434,27 @@
         truncation (cond-> [] (> estimated requested) (conj "budget_restricted"))
         budget {:requested_tokens requested :estimated_tokens estimated :truncation_flags truncation}
         impact (build-impact-hints index selected)
-        confidence (build-confidence selected query)
-        guardrails (build-guardrails confidence impact)
+        base-confidence (build-confidence selected query)
+        raw-fetch (perform-raw-fetch index selected query requested)
+        fallback-selected? (some #(= "parser_fallback" (:code %)) (:warnings base-confidence))
+        confidence-a (cond-> base-confidence
+                       (and (not= "none" (:level raw-fetch))
+                            (pos? (:snippets raw-fetch)))
+                       (update :reasons conj (coded "raw_code_escalated" "Late raw-code fetch was performed for selected units."))
+                       (seq (:degradations raw-fetch))
+                       (update :warnings conj (coded "raw_fetch_degraded" "Raw-code escalation produced degraded signals.")))
+        confidence-b (if (and (= "low" (:level base-confidence))
+                              (= "completed" (:status raw-fetch))
+                              (>= (:snippets raw-fetch) 2)
+                              (not fallback-selected?))
+                       (-> confidence-a
+                           (assoc :level "medium" :score 0.55)
+                           (update :reasons conj (coded "raw_fetch_disambiguated" "Raw-code spans reduced ambiguity for low-confidence retrieval.")))
+                       confidence-a)
+        confidence (-> confidence-b
+                       (update :reasons #(vec (take 10 %)))
+                       (update :warnings #(vec (take 10 %))))
+        guardrails (build-guardrails confidence impact query)
         focus-paths (->> selected (map :path) distinct (take 20) vec)
         focus-modules (->> selected (map :module) (remove nil?) distinct (take 20) vec)
         context-packet {:schema_version "1.0"
@@ -347,14 +468,49 @@
                         :evidence {:selection_reasons (top-reasons selected)
                                    :hint_effects (cond-> []
                                                    (seq (:hints_summary summary))
-                                                   (conj (coded "hints_applied" "Soft hints were applied during candidate ranking.")))}
+                                                   (conj (coded "hints_applied" "Soft hints were applied during candidate ranking."))
+                                                   (and (not= "none" (:level raw-fetch))
+                                                        (pos? (:snippets raw-fetch)))
+                                                   (conj (coded "raw_code_escalated" "Late raw-code fetch was executed for ranked units.")))}
                         :budget budget
                         :confidence confidence}
-        packet-status (if (= "low" (:level confidence)) "degraded" "completed")
-        packet-warns (if (= "low" (:level confidence)) [(coded "confidence_low" "Context packet confidence is low.")] [])
+        packet-status (if (or (= "low" (:level confidence))
+                              (= "degraded" (:status raw-fetch)))
+                        "degraded"
+                        "completed")
+        packet-warns (cond-> []
+                       (= "low" (:level confidence)) (conj (coded "confidence_low" "Context packet confidence is low."))
+                       (= "degraded" (:status raw-fetch)) (conj (coded "raw_fetch_degraded" "Raw-code fetch was executed in degraded mode.")))
         stage-packet (build-stage "context_packet_assembly" packet-status "Assembled bounded context packet." {:selected_units (count selected) :selected_files (count focus-paths)} packet-warns [] 5)
-        stage-fetch (build-stage "raw_code_fetch" "skipped" "Late raw-code fetch not required in default pipeline." {:raw_fetch_requests 0} [] [] 0)
-        stage-final (build-stage "result_finalization" "completed" "Confidence, guardrails, and diagnostics emitted." {:warning_count (count (:warnings confidence)) :degradation_count (if (= "low" (:level confidence)) 1 0)} [] [] 2)
+        stage-fetch (build-stage "raw_code_fetch"
+                                 (:status raw-fetch)
+                                 (case (:status raw-fetch)
+                                   "skipped" "Late raw-code fetch skipped by query options."
+                                   "degraded" "Late raw-code fetch executed with degradation flags."
+                                   "completed" "Late raw-code fetch completed for ranked units."
+                                   "Late raw-code fetch stage completed.")
+                                 {:raw_fetch_requests (:requests raw-fetch)
+                                  :raw_fetch_snippets (:snippets raw-fetch)
+                                  :raw_fetch_bytes (:bytes raw-fetch)}
+                                 (:warnings raw-fetch)
+                                 (:degradations raw-fetch)
+                                 (if (= "skipped" (:status raw-fetch)) 0 3))
+        base-degradations (cond-> []
+                            (= "low" (:level confidence)) (conj (coded "confidence_low" "Confidence degraded due to weak or ambiguous evidence."))
+                            fallback-selected? (conj (coded "parser_fallback" "Fallback parser evidence contributed to selected units.")))
+        diagnostics-degradations (vec (take 10 (concat base-degradations (:degradations raw-fetch))))
+        stage-final-status (if (or (= "low" (:level confidence))
+                                   (seq diagnostics-degradations))
+                             "degraded"
+                             "completed")
+        stage-final (build-stage "result_finalization"
+                                 stage-final-status
+                                 "Confidence, guardrails, and diagnostics emitted."
+                                 {:warning_count (count (:warnings confidence))
+                                  :degradation_count (count diagnostics-degradations)}
+                                 []
+                                 diagnostics-degradations
+                                 2)
         stages [stage-query stage-candidates stage-ranking stage-packet stage-fetch stage-final]
         diagnostics {:schema_version "1.0"
                      :trace {:trace_id trace-id
@@ -364,23 +520,28 @@
                              :host_metadata {:host "library_runtime"
                                              :interactive true}}
                      :query (assoc summary :options_summary (->> (:options query) (keep (fn [[k v]] (when (true? v) (name k)))) vec)
-                                    :validation_status "accepted")
+                                   :validation_status "accepted")
                      :stages stages
                      :result {:selected_units_count (count selected)
                               :selected_files_count (count focus-paths)
-                              :raw_fetch_level_reached "none"
+                              :raw_fetch_level_reached (:level raw-fetch)
                               :packet_size_estimate estimated
                               :top_authority_targets (->> selected (filter #(= "top_authority" (:rank_band %))) (map :unit_id) (take 10) vec)
-                              :result_status (if (= "low" (:level confidence)) "degraded" "completed")}
-                     :warnings (:warnings confidence)
-                     :degradations (if (= "low" (:level confidence)) [(coded "confidence_low" "Confidence degraded due to weak or ambiguous evidence.")] [])
+                              :result_status (if (or (= "low" (:level confidence))
+                                                     (= "degraded" (:status raw-fetch)))
+                                               "degraded"
+                                               "completed")}
+                     :warnings (vec (take 10 (concat (:warnings confidence) (:warnings raw-fetch))))
+                     :degradations diagnostics-degradations
                      :confidence confidence
                      :guardrails guardrails
-                     :performance {:total_duration_ms 20
+                     :performance {:total_duration_ms (+ 20 (if (= "skipped" (:status raw-fetch)) 0 3))
                                    :cache_summary {:cache_hits 0 :cache_misses 1}
                                    :parser_summary {:fallback_units (count (filter #(= "fallback" (:parser_mode %)) selected))
                                                     :selected_units (count selected)}
-                                   :fetch_summary {:raw_fetch_requests 0 :raw_fetch_bytes 0}
+                                   :fetch_summary {:raw_fetch_requests (:requests raw-fetch)
+                                                   :raw_fetch_snippets (:snippets raw-fetch)
+                                                   :raw_fetch_bytes (:bytes raw-fetch)}
                                    :budget_summary {:requested_tokens requested :estimated_tokens estimated}}}
         events (build-stage-events trace-id request-id (get-in query [:intent :purpose] "unknown") stages {:requested_tokens requested :estimated_tokens estimated})]
     (when-let [explain (m/explain (:example/context-packet contracts/contracts) context-packet)]

@@ -54,7 +54,7 @@
       },
       {
         "unit_id": "test/my/app/order_test.clj::process-order-test",
-        "rank_band": "useful_support"
+        "rank_band": "exploratory"
       }
     ],
     "confidence_level": "high",
