@@ -16,9 +16,15 @@
   (write-file! root "test/my/app/order_test.clj"
                "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
   (write-file! root "src/com/acme/CheckoutService.java"
-               "package com.acme;\n\nimport java.util.Objects;\n\npublic class CheckoutService {\n  public String processOrder(String id) {\n    return normalize(id);\n  }\n\n  private String normalize(String id) {\n    return Objects.requireNonNull(id).trim();\n  }\n}\n")
+               "package com.acme;\n\nimport java.util.Objects;\n\npublic class CheckoutService {\n  public String processOrder(String id) {\n    return normalize(id, true);\n  }\n\n  private String normalize(String id) {\n    return normalize(id, false);\n  }\n\n  private String normalize(String id, boolean strict) {\n    String base = Objects.requireNonNull(id).trim();\n    return strict ? base : base.toLowerCase();\n  }\n}\n")
   (write-file! root "lib/my_app/order.ex"
-               "defmodule MyApp.Order do\n  alias MyApp.Validator\n\n  def process_order(ctx, order) do\n    Validator.validate(order)\n    {:ok, order}\n  end\n\n  defp to_status(order) do\n    Map.get(order, :status, :new)\n  end\nend\n")
+               "defmodule MyApp.Order do\n  alias MyApp.{Validator, Payments.Adapter}\n  alias Adapter.Client, as: BillingClient\n  alias Validator, as: V\n\n  def process_order(ctx, order) do\n    V.validate(order)\n    Adapter.charge(order)\n    BillingClient.charge(order)\n    {:ok, order}\n  end\n\n  defp to_status(order) do\n    Map.get(order, :status, :new)\n  end\n\n  defdelegate charge(order), to: MyApp.Validator\nend\n")
+  (write-file! root "lib/my_app/validator.ex"
+               "defmodule MyApp.Validator do\n  def validate(order) do\n    {:ok, order}\n  end\n\n  def charge(order) do\n    {:ok, order}\n  end\nend\n")
+  (write-file! root "lib/my_app/payments/adapter.ex"
+               "defmodule MyApp.Payments.Adapter do\n  def charge(order) do\n    {:ok, order}\n  end\nend\n")
+  (write-file! root "lib/my_app/payments/adapter_client.ex"
+               "defmodule MyApp.Payments.Adapter.Client do\n  def charge(order) do\n    {:ok, order}\n  end\nend\n")
   (write-file! root "app/orders.py"
                "from app.validators import validate_order\n\nclass OrderService:\n    def process_order(self, order):\n        return validate_order(order)\n\n\ndef validate_local(order):\n    return bool(order)\n"))
 
@@ -118,6 +124,47 @@
     (testing "python symbol can be localized"
       (is (some #(= "app.orders.OrderService/process_order" (:symbol %))
                 (get-in py-result [:context_packet :relevant_units]))))))
+
+(deftest elixir-alias-aware-call-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-alias-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        validator-units (sci/query-units storage tmp-root {:module "MyApp.Validator" :limit 20})
+        validate-unit-id (some->> validator-units (filter #(= "MyApp.Validator/validate" (:symbol %))) first :unit_id)
+        callers (sci/query-callers storage tmp-root validate-unit-id {:limit 20})]
+    (is validate-unit-id)
+    (is (some #(= "MyApp.Order/process_order" (:symbol %)) callers))))
+
+(deftest elixir-brace-and-nested-alias-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-nested-alias-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        adapter-units (sci/query-units storage tmp-root {:module "MyApp.Payments.Adapter" :limit 20})
+        client-units (sci/query-units storage tmp-root {:module "MyApp.Payments.Adapter.Client" :limit 20})
+        adapter-charge-id (some->> adapter-units (filter #(= "MyApp.Payments.Adapter/charge" (:symbol %))) first :unit_id)
+        client-charge-id (some->> client-units (filter #(= "MyApp.Payments.Adapter.Client/charge" (:symbol %))) first :unit_id)
+        adapter-callers (sci/query-callers storage tmp-root adapter-charge-id {:limit 20})
+        client-callers (sci/query-callers storage tmp-root client-charge-id {:limit 20})]
+    (is adapter-charge-id)
+    (is client-charge-id)
+    (is (some #(= "MyApp.Order/process_order" (:symbol %)) adapter-callers))
+    (is (some #(= "MyApp.Order/process_order" (:symbol %)) client-callers))))
+
+(deftest java-overload-unit-identity-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-java-overload-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        java-units (->> (:unit_order index)
+                        (map #(get (:units index) %))
+                        (filter #(= "src/com/acme/CheckoutService.java" (:path %)))
+                        (filter #(= "com.acme.CheckoutService#normalize" (:symbol %)))
+                        vec)
+        unit-ids (mapv :unit_id java-units)]
+    (is (= 2 (count java-units)))
+    (is (= 2 (count (distinct unit-ids))))
+    (is (every? #(re-find #"\$arity[0-9]+" %) unit-ids))))
 
 (deftest in-memory-storage-roundtrip-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-storage-test" (make-array java.nio.file.attribute.FileAttribute 0)))

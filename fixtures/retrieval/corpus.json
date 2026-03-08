@@ -25,6 +25,36 @@
       "category": "multi_file_change",
       "path": "multi-file-broad-impact.json",
       "purpose": "Broad multi-file impact should remain explainable and review-oriented."
+    },
+    {
+      "fixture_id": "retrieval_python_method_function_collision_001",
+      "category": "python_ambiguity",
+      "path": "python-method-function-collision.json",
+      "purpose": "Python method/function name collisions should remain explicit and confidence-bounded."
+    },
+    {
+      "fixture_id": "retrieval_java_overload_like_call_ambiguity_001",
+      "category": "java_ambiguity",
+      "path": "java-overload-like-call-ambiguity.json",
+      "purpose": "Java normalize-call paths across similarly named utilities should stay explainable and ambiguity-aware."
+    },
+    {
+      "fixture_id": "retrieval_elixir_aliased_local_ambiguity_001",
+      "category": "elixir_ambiguity",
+      "path": "elixir-aliased-local-ambiguity.json",
+      "purpose": "Elixir aliased module and local function call surfaces should remain bounded under ambiguity."
+    },
+    {
+      "fixture_id": "retrieval_elixir_mixed_def_forms_001",
+      "category": "elixir_semantics",
+      "path": "elixir-mixed-def-forms.json",
+      "purpose": "Elixir def/defp/defdelegate extraction should keep private targets resolvable as authority units."
+    },
+    {
+      "fixture_id": "retrieval_elixir_exunit_module_scenario_001",
+      "category": "elixir_test_targeting",
+      "path": "elixir-exunit-module-scenario.json",
+      "purpose": "ExUnit-targeted retrieval should stay plan-safe and preserve test ranking metadata."
     }
   ]
 }

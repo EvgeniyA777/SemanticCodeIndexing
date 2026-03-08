@@ -1,0 +1,51 @@
+{
+  "fixture_id": "retrieval_java_overload_like_call_ambiguity_001",
+  "category": "java_ambiguity",
+  "purpose": "Java normalize-call paths across similarly named utilities should stay explainable and ambiguity-aware.",
+  "adr_refs": ["ADR-005", "ADR-008", "ADR-014"],
+  "snapshot_ref": "seed-polyglot-app@rev-006",
+  "input": {
+    "query": {
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "review_support",
+        "details": "Review normalize behavior across com.acme.text and com.acme.audit utilities."
+      },
+      "targets": {
+        "paths": ["src/com/acme/text/Normalizer.java", "src/com/acme/audit/AuditNormalizer.java"],
+        "diff_summary": "Touched normalize-like paths used by checkout service."
+      },
+      "constraints": {
+        "token_budget": 1800,
+        "snapshot_id": "seed-polyglot-app@rev-006",
+        "language_allowlist": ["java"],
+        "allowed_path_prefixes": ["src/com/acme/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["src/com/acme/CheckoutService.java"],
+        "preferred_modules": ["com.acme.text", "com.acme.audit"],
+        "prefer_definitions_over_callers": false,
+        "prefer_breadth_over_depth": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false,
+        "favor_compact_packet": true,
+        "favor_higher_recall": true
+      },
+      "trace": {
+        "trace_id": "6445d625-e5bd-41ed-a0b4-8d8068bb664f",
+        "request_id": "fixture-java-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "must_include_paths": ["src/com/acme/text/Normalizer.java", "src/com/acme/audit/AuditNormalizer.java"],
+    "must_include_warning_codes": ["target_ambiguous"],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

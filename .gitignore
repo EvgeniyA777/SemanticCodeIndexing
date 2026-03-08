@@ -19,6 +19,8 @@ classes/
 *.log
 *.tmp
 tmp/
+.tree-sitter-grammars/
+.tree-sitter.env
 
 # Editor/IDE
 .idea/

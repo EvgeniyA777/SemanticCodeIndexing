@@ -17,12 +17,13 @@
 (def ^:private java-import-re #"^\s*import\s+([a-zA-Z0-9_\.\*]+)\s*;")
 (def ^:private java-class-re #"^\s*(?:public\s+)?(?:class|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)")
 (def ^:private java-method-re
-  #"^\s*(?:public|private|protected|static|final|native|synchronized|abstract|default|\s)+[a-zA-Z0-9_<>,\[\]\.\?\s]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:\{|throws|;)")
+  #"^\s*(?:(public|private|protected)\s+)?(?:(?:static|final|native|synchronized|abstract|default)\s+)*([A-Za-z0-9_<>,\[\]\.\?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|throws|;)")
 (def ^:private java-call-re #"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
 
 (def ^:private ex-module-re #"^\s*defmodule\s+([A-Za-z0-9_\.]+)\s+do")
-(def ^:private ex-import-re #"^\s*(?:alias|import|require|use)\s+([A-Za-z0-9_\.]+)")
-(def ^:private ex-def-re #"^\s*(defp?|defmacro|defmacrop)\s+([a-zA-Z_][a-zA-Z0-9_!?]*)")
+(def ^:private ex-import-re #"^\s*(?:import|require|use)\s+([A-Za-z0-9_\.]+)")
+(def ^:private ex-alias-line-re #"^\s*alias\s+(.+)$")
+(def ^:private ex-def-re #"^\s*(defdelegate|defp?|defmacro|defmacrop)\s+([a-zA-Z_][a-zA-Z0-9_!?]*)")
 (def ^:private ex-test-re #"^\s*test\s+\"([^\"]+)\"\s+do")
 (def ^:private ex-call-re #"\b([A-Za-z_][A-Za-z0-9_\.!?]*)\s*\(")
 
@@ -42,7 +43,7 @@
   #{"if" "for" "while" "switch" "catch" "return" "throw" "new" "super" "this" "synchronized"})
 
 (def ^:private ex-call-stop
-  #{"if" "case" "cond" "with" "fn" "def" "defp" "defmacro" "defmodule" "test" "describe" "quote" "unquote"})
+  #{"if" "case" "cond" "with" "fn" "def" "defp" "defmacro" "defdelegate" "defmodule" "test" "describe" "quote" "unquote" "alias" "import" "require" "use"})
 
 (def ^:private py-call-stop
   #{"if" "for" "while" "return" "yield" "lambda" "class" "def" "print"})
@@ -450,6 +451,38 @@
        distinct
        vec))
 
+(defn- java-normalized-params [params]
+  (-> (or params "")
+      str
+      (str/replace #"\s+" "")
+      (str/replace #",+" ",")
+      (str/replace #"^,+|,+$" "")))
+
+(defn- java-param-fragment-from-source [src-lines start-line]
+  (let [idx (max 0 (dec start-line))
+        window (->> (subvec src-lines idx (min (count src-lines) (+ idx 6)))
+                    (str/join " "))]
+    (some-> (re-find #"\(([^)]*)\)" window) second)))
+
+(defn- java-method-arity [params]
+  (let [p (java-normalized-params params)]
+    (if (str/blank? p) 0 (count (str/split p #",")))))
+
+(defn- short-hash [s]
+  (let [md (java.security.MessageDigest/getInstance "SHA-1")
+        bytes (.digest md (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
+    (format "%02x%02x%02x%02x" (aget bytes 0) (aget bytes 1) (aget bytes 2) (aget bytes 3))))
+
+(defn- java-method-unit-id [path symbol params]
+  (let [norm (java-normalized-params params)
+        arity (java-method-arity norm)
+        suffix (if (str/blank? norm)
+                 (str "$arity" arity)
+                 (str "$arity" arity "$sig" (short-hash norm)))]
+    {:unit_id (str path "::" symbol suffix)
+     :method_arity arity
+     :method_signature_key norm}))
+
 (defn- parse-java-regex [path lines]
   (let [line-count (count lines)
         pkg (some (fn [line] (some-> (re-find java-package-re line) second)) lines)
@@ -464,14 +497,16 @@
                          vec)
         methods (->> (map-indexed vector lines)
                      (keep (fn [[idx line]]
-                             (when-let [[_ m] (re-find java-method-re line)]
-                               {:start-line (inc idx)
-                                :method m
-                                :class (->> class-spots
-                                            (filter #(<= (:line %) (inc idx)))
-                                            last
-                                            :class)
-                                :signature (trim-signature line)})))
+                             (when-let [[_ _visibility return-type m params] (re-find java-method-re line)]
+                               (when-not (contains? java-call-stop (str/lower-case (str return-type)))
+                                 {:start-line (inc idx)
+                                  :method m
+                                  :params params
+                                  :class (->> class-spots
+                                              (filter #(<= (:line %) (inc idx)))
+                                              last
+                                              :class)
+                                  :signature (trim-signature line)}))))
                      vec)
         starts (mapv :start-line methods)
         ends (unit-end-lines starts line-count)
@@ -480,9 +515,11 @@
                           (let [start-line (:start-line m)
                                 cls (or (:class m) "UnknownClass")
                                 symbol (str (when pkg (str pkg ".")) cls "#" (:method m))
+                                {:keys [unit_id method_arity method_signature_key]}
+                                (java-method-unit-id path symbol (:params m))
                                 body (->> (subvec lines (dec start-line) end-line)
                                           (str/join "\n"))]
-                            {:unit_id (str path "::" symbol)
+                            {:unit_id unit_id
                              :kind (java-kind path (:method m))
                              :symbol symbol
                              :path path
@@ -493,6 +530,8 @@
                              :summary (str "method " symbol)
                              :docstring_excerpt nil
                              :imports imports
+                             :method_arity method_arity
+                             :method_signature_key method_signature_key
                              :calls (extract-java-calls body)
                              :parser_mode "full"})))
                    vec)]
@@ -550,7 +589,7 @@
                                     (let [method-name (or (node-name-inside ts-lines m "name:") "unknownMethod")
                                           cls (->> classes
                                                    (filter #(<= (:start-row %) (:start-row m) (:end-row %)))
-                                                   sort-by
+                                                   (sort-by :start-row)
                                                    last
                                                    :class-name)
                                           calls (->> ts-lines
@@ -564,12 +603,15 @@
                                        :end-line (inc (:end-row m))
                                        :method method-name
                                        :class (or cls "UnknownClass")
+                                       :params (java-param-fragment-from-source src-lines (inc (:start-row m)))
                                        :calls calls})))
                              vec)
                 units (->> methods
-                           (map (fn [{:keys [start-line end-line method class calls]}]
-                                  (let [symbol (str (when pkg (str pkg ".")) class "#" method)]
-                                    {:unit_id (str path "::" symbol)
+                           (map (fn [{:keys [start-line end-line method class calls params]}]
+                                  (let [symbol (str (when pkg (str pkg ".")) class "#" method)
+                                        {:keys [unit_id method_arity method_signature_key]}
+                                        (java-method-unit-id path symbol params)]
+                                    {:unit_id unit_id
                                      :kind (java-kind path method)
                                      :symbol symbol
                                      :path path
@@ -580,6 +622,8 @@
                                      :summary (str "method " symbol)
                                      :docstring_excerpt nil
                                      :imports imports
+                                     :method_arity method_arity
+                                     :method_signature_key method_signature_key
                                      :calls (->> calls
                                                  (mapcat (fn [token]
                                                            (let [tail (tail-token token)]
@@ -623,9 +667,111 @@
                  (str/replace #"^-+|-+$" ""))]
     (str (or module "Elixir.Unknown") "/test-" (if (seq slug) slug "unnamed"))))
 
-(defn- extract-ex-calls [body]
+(defn- ex-last-segment [module]
+  (some-> module str (str/split #"\.") last))
+
+(defn- ex-strip-comment [line]
+  (first (str/split (str line) #"#" 2)))
+
+(defn- ex-rewrite-alias-prefix [token alias-map]
+  (let [parts (->> (str/split (str token) #"\.")
+                   (remove str/blank?)
+                   vec)
+        n (count parts)]
+    (loop [i n]
+      (when (pos? i)
+        (let [prefix (str/join "." (take i parts))]
+          (if-let [mapped (get alias-map prefix)]
+            (let [suffix (drop i parts)]
+              (if (seq suffix)
+                (str mapped "." (str/join "." suffix))
+                mapped))
+            (recur (dec i))))))))
+
+(defn- ex-resolve-alias-ref [token alias-map]
+  (loop [current (str token)
+         step 0]
+    (if (>= step 8)
+      current
+      (if-let [rewritten (ex-rewrite-alias-prefix current alias-map)]
+        (if (= rewritten current)
+          current
+          (recur rewritten (inc step)))
+        current))))
+
+(defn- ex-expand-alias-targets [target-expr alias-map]
+  (let [target* (-> target-expr ex-strip-comment str/trim)]
+    (if-let [[_ base inner] (re-find #"^([A-Za-z0-9_\.]+)\.\{([^}]+)\}$" target*)]
+      (let [base* (ex-resolve-alias-ref base alias-map)]
+        (->> (str/split inner #",")
+             (map str/trim)
+             (remove str/blank?)
+             (map (fn [tail]
+                    (ex-resolve-alias-ref (str base* "." tail) alias-map)))
+             vec))
+      [(ex-resolve-alias-ref target* alias-map)])))
+
+(defn- ex-alias-entries-for-line [line alias-map]
+  (when-let [[_ body] (re-find ex-alias-line-re line)]
+    (let [body* (-> body ex-strip-comment str/trim)
+          [_ target-expr explicit-as] (or (re-find #"^(.*?),\s*as:\s*([A-Za-z0-9_\.]+)\s*$" body*)
+                                          [nil body* nil])
+          targets (ex-expand-alias-targets target-expr alias-map)]
+      (->> targets
+           (map-indexed
+            (fn [idx full]
+              (let [alias (if (and (seq explicit-as) (= 1 (count targets)) (zero? idx))
+                            explicit-as
+                            (ex-last-segment full))]
+                (when (and (seq alias) (seq full))
+                  [alias full]))))
+           (remove nil?)
+           vec))))
+
+(defn- ex-alias-map [lines]
+  (reduce
+   (fn [acc line]
+     (reduce (fn [m [alias full]] (assoc m alias full))
+             acc
+             (or (ex-alias-entries-for-line line acc) [])))
+   {}
+   lines))
+
+(defn- ex-keyword-count [line kw]
+  (count (re-seq (re-pattern (str "\\b" kw "\\b")) (str line))))
+
+(defn- ex-unit-end-line [lines start-line ceiling-line form]
+  (if (= form "defdelegate")
+    start-line
+    (let [start-idx (max 0 (dec start-line))
+          end-idx (max start-idx (dec ceiling-line))]
+      (loop [idx start-idx
+             depth 0
+             saw-do false]
+        (if (> idx end-idx)
+          (inc end-idx)
+          (let [line (nth lines idx "")
+                do-count (ex-keyword-count line "do")
+                end-count (ex-keyword-count line "end")
+                depth* (- (+ depth do-count) end-count)
+                saw-do* (or saw-do (pos? do-count))
+                complete? (and saw-do* (<= depth* 0))]
+            (if complete?
+              (inc idx)
+              (recur (inc idx) depth* saw-do*))))))))
+
+(defn- ex-expand-alias-token [token alias-map]
+  (let [expanded (ex-resolve-alias-ref token alias-map)]
+    (when (not= (str token) expanded)
+      expanded)))
+
+(defn- extract-ex-calls [body alias-map]
   (->> (re-seq ex-call-re body)
        (map second)
+       (mapcat (fn [token]
+                 (let [expanded (ex-expand-alias-token token alias-map)]
+                   (cond-> [token]
+                     (seq expanded) (conj expanded)))))
        (mapcat (fn [token]
                  (let [tail (tail-token token)]
                    (cond-> [token]
@@ -637,8 +783,10 @@
 (defn- parse-elixir [path lines]
   (let [line-count (count lines)
         module-name (some (fn [line] (some-> (re-find ex-module-re line) second)) lines)
-        imports (->> lines
-                     (keep (fn [line] (some-> (re-find ex-import-re line) second)))
+        alias-map (ex-alias-map lines)
+        imports (->> (concat
+                      (keep (fn [line] (some-> (re-find ex-import-re line) second)) lines)
+                      (vals alias-map))
                      distinct
                      vec)
         defs (->> (map-indexed vector lines)
@@ -647,20 +795,28 @@
                             (re-find ex-test-re line)
                             (let [[_ nm] (re-find ex-test-re line)]
                               {:start-line (inc idx)
+                               :form "test"
                                :kind "test"
                                :raw-symbol (ex-test-symbol module-name nm)
                                :signature (trim-signature line)})
 
                             (re-find ex-def-re line)
-                            (let [[_ _kw nm] (re-find ex-def-re line)
+                            (let [[_ kw nm] (re-find ex-def-re line)
                                   kind (if (str/includes? path "/test/") "test" "function")]
                               {:start-line (inc idx)
+                               :form kw
                                :kind kind
                                :raw-symbol (str (or module-name "Elixir.Unknown") "/" nm)
                                :signature (trim-signature line)}))))
                   vec)
-        starts (mapv :start-line defs)
-        ends (unit-end-lines starts line-count)
+        ends (->> defs
+                  (map-indexed
+                   (fn [idx d]
+                     (let [start-line (:start-line d)
+                           next-start (:start-line (nth defs (inc idx) nil))
+                           ceiling-line (max start-line (or (some-> next-start dec) line-count))]
+                       (ex-unit-end-line lines start-line ceiling-line (:form d)))))
+                  vec)
         units (->> (map vector defs ends)
                    (map (fn [[d end-line]]
                           (let [start-line (:start-line d)
@@ -674,10 +830,11 @@
                              :start_line start-line
                              :end_line end-line
                              :signature (:signature d)
-                             :summary (str (:kind d) " " (:raw-symbol d))
+                             :summary (str (:form d) " " (:raw-symbol d))
                              :docstring_excerpt nil
                              :imports imports
-                             :calls (extract-ex-calls body)
+                             :calls (extract-ex-calls body alias-map)
+                             :ex_form (:form d)
                              :parser_mode "full"})))
                    vec)]
     {:language "elixir"

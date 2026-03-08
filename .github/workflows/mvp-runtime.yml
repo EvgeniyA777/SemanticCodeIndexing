@@ -39,6 +39,19 @@ jobs:
         with:
           cli: "1.12.0.1530"
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install tree-sitter CLI
+        run: npm install -g tree-sitter-cli
+
+      - name: Setup tree-sitter grammars
+        run: |
+          ./scripts/setup-tree-sitter-grammars.sh --write-env-file .tree-sitter.env
+          cat .tree-sitter.env >> "$GITHUB_ENV"
+
       - name: Run MVP Gates
         run: ./scripts/run-mvp-gates.sh
 

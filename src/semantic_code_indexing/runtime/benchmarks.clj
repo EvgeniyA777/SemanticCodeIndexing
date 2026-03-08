@@ -25,19 +25,37 @@
                         "  (if (:id order)\n"
                         "    order\n"
                         "    (throw (ex-info \"invalid\" {}))))\n")]
-  (write-file! root "src/my/app/order.clj"
-               order-body)
-  (write-file! root "src/my/app/checkout.clj"
-               "(ns my.app.checkout\n  (:require [my.app.order :as order]\n            [my.app.payments :as payments]\n            [my.app.fulfillment :as fulfillment]))\n\n(defn submit-order! [ctx order-input]\n  (let [order (order/process-order ctx order-input)\n        charge (payments/charge! ctx order)]\n    (fulfillment/schedule! ctx order charge)))\n")
-  (write-file! root "src/my/app/payments.clj"
-               "(ns my.app.payments\n  (:require [my.app.order :as order]))\n\n(defn charge! [ctx order]\n  (retry-charge! ctx order))\n\n(defn retry-charge! [ctx order]\n  (if (:id order)\n    {:ok true :order-id (:id order)}\n    {:ok false}))\n")
-  (write-file! root "src/my/app/fulfillment.clj"
-               "(ns my.app.fulfillment\n  (:require [my.app.order :as order]))\n\n(defn schedule! [ctx order charge]\n  {:scheduled true :id (:id order) :charge charge})\n")
-  (write-file! root "test/my/app/order_test.clj"
-               "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
-  (write-file! root "test/my/app/checkout_test.clj"
-               "(ns my.app.checkout-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.checkout :as checkout]))\n\n(deftest submit-order-test\n  (is (map? (checkout/submit-order! {} {:id 1}))))\n"))
-  )
+    (write-file! root "src/my/app/order.clj"
+                 order-body)
+    (write-file! root "src/my/app/checkout.clj"
+                 "(ns my.app.checkout\n  (:require [my.app.order :as order]\n            [my.app.payments :as payments]\n            [my.app.fulfillment :as fulfillment]))\n\n(defn submit-order! [ctx order-input]\n  (let [order (order/process-order ctx order-input)\n        charge (payments/charge! ctx order)]\n    (fulfillment/schedule! ctx order charge)))\n")
+    (write-file! root "src/my/app/payments.clj"
+                 "(ns my.app.payments\n  (:require [my.app.order :as order]))\n\n(defn charge! [ctx order]\n  (retry-charge! ctx order))\n\n(defn retry-charge! [ctx order]\n  (if (:id order)\n    {:ok true :order-id (:id order)}\n    {:ok false}))\n")
+    (write-file! root "src/my/app/fulfillment.clj"
+                 "(ns my.app.fulfillment\n  (:require [my.app.order :as order]))\n\n(defn schedule! [ctx order charge]\n  {:scheduled true :id (:id order) :charge charge})\n")
+    (write-file! root "test/my/app/order_test.clj"
+                 "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
+    (write-file! root "test/my/app/checkout_test.clj"
+                 "(ns my.app.checkout-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.checkout :as checkout]))\n\n(deftest submit-order-test\n  (is (map? (checkout/submit-order! {} {:id 1}))))\n")
+
+    (write-file! root "src/com/acme/CheckoutService.java"
+                 "package com.acme;\n\nimport com.acme.audit.AuditNormalizer;\nimport com.acme.text.Normalizer;\n\npublic class CheckoutService {\n  public String processOrder(String raw) {\n    String normalized = Normalizer.normalize(raw);\n    return AuditNormalizer.normalize(normalized);\n  }\n}\n")
+    (write-file! root "src/com/acme/text/Normalizer.java"
+                 "package com.acme.text;\n\npublic final class Normalizer {\n  public static String normalize(String raw) {\n    return raw == null ? \"\" : raw.trim();\n  }\n\n  public static String normalize(String raw, String fallback) {\n    return raw == null ? fallback : raw.trim();\n  }\n}\n")
+    (write-file! root "src/com/acme/audit/AuditNormalizer.java"
+                 "package com.acme.audit;\n\npublic final class AuditNormalizer {\n  public static String normalize(String raw) {\n    return \"[AUDIT]\" + raw;\n  }\n}\n")
+
+    (write-file! root "app/orders.py"
+                 "class OrderService:\n    def process_order(self, order):\n        return process_order(order)\n\n\ndef process_order(order):\n    return normalize(order)\n\n\ndef normalize(order):\n    return bool(order)\n")
+    (write-file! root "app/workflow.py"
+                 "from app.orders import process_order\n\n\ndef run(order):\n    return process_order(order)\n")
+
+    (write-file! root "lib/my_app/payments/adapter.ex"
+                 "defmodule MyApp.Payments.Adapter do\n  def charge(order) do\n    {:ok, order}\n  end\nend\n")
+    (write-file! root "lib/my_app/order.ex"
+                 "defmodule MyApp.Order do\n  alias MyApp.Payments.Adapter, as: BillingAdapter\n\n  def process_order(ctx, order) do\n    BillingAdapter.charge(order)\n    to_status(order)\n  end\n\n  defp to_status(order) do\n    Map.get(order, :status, :new)\n  end\n\n  defdelegate charge(order), to: MyApp.Payments.Adapter\nend\n")
+    (write-file! root "test/my_app/order_test.exs"
+                 "defmodule MyApp.OrderTest do\n  use ExUnit.Case, async: true\n  alias MyApp.Order\n\n  test \"process order uses billing adapter\" do\n    assert {:ok, _} = Order.charge(%{id: 1})\n  end\nend\n")))
 
 (defn- parser-opts-for [fixture]
   (if (= "partial_parser" (:category fixture))

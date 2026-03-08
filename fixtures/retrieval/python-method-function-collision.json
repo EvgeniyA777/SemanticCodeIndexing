@@ -1,0 +1,52 @@
+{
+  "fixture_id": "retrieval_python_method_function_collision_001",
+  "category": "python_ambiguity",
+  "purpose": "Python method/function name collisions should remain explicit and confidence-bounded.",
+  "adr_refs": ["ADR-005", "ADR-008", "ADR-014"],
+  "snapshot_ref": "seed-polyglot-app@rev-005",
+  "input": {
+    "query": {
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "bug_investigation",
+        "details": "Investigate process_order collision between module function and class method in app.orders."
+      },
+      "targets": {
+        "modules": ["app.orders"],
+        "diff_summary": "Call paths in workflow and orders overlap around process_order invocation."
+      },
+      "constraints": {
+        "token_budget": 1800,
+        "snapshot_id": "seed-polyglot-app@rev-005",
+        "language_allowlist": ["python"],
+        "allowed_path_prefixes": ["app/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["app/orders.py", "app/workflow.py"],
+        "preferred_modules": ["app.orders"],
+        "suspected_symbols": ["app.orders/process_order", "app.orders.OrderService/process_order"],
+        "prefer_definitions_over_callers": true,
+        "prefer_breadth_over_depth": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false,
+        "favor_compact_packet": true,
+        "favor_higher_recall": true
+      },
+      "trace": {
+        "trace_id": "6b9b36f9-5790-47f1-b08f-71ccf2e5f91d",
+        "request_id": "fixture-python-collision-001"
+      }
+    }
+  },
+  "expected": {
+    "must_include_paths": ["app/orders.py", "app/workflow.py"],
+    "must_include_warning_codes": ["target_ambiguous"],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

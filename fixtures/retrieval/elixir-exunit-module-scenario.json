@@ -1,0 +1,55 @@
+{
+  "fixture_id": "retrieval_elixir_exunit_module_scenario_001",
+  "category": "elixir_test_targeting",
+  "purpose": "ExUnit-targeted retrieval should stay plan-safe and preserve test ranking metadata.",
+  "adr_refs": ["ADR-005", "ADR-011", "ADR-014"],
+  "snapshot_ref": "seed-polyglot-app@rev-009",
+  "input": {
+    "query": {
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "test_targeting",
+        "details": "Find nearest ExUnit target for process-order billing path."
+      },
+      "targets": {
+        "tests": ["test/my_app/order_test.exs"]
+      },
+      "constraints": {
+        "token_budget": 1100,
+        "snapshot_id": "seed-polyglot-app@rev-009",
+        "language_allowlist": ["elixir"],
+        "allowed_path_prefixes": ["test/my_app/", "lib/my_app/"],
+        "max_raw_code_level": "target_span",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "focus_on_tests": true,
+        "prefer_definitions_over_callers": true,
+        "prefer_breadth_over_depth": false
+      },
+      "options": {
+        "include_tests": true,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false,
+        "favor_compact_packet": true,
+        "favor_higher_recall": false
+      },
+      "trace": {
+        "trace_id": "66dce2bb-6cf5-432b-8a29-ef8a7c6a9ab2",
+        "request_id": "fixture-elixir-exunit-001"
+      }
+    }
+  },
+  "expected": {
+    "must_include_paths": ["test/my_app/order_test.exs"],
+    "must_include_warning_codes": ["no_tier1_evidence"],
+    "rank_band_expectations": [
+      {
+        "unit_id": "test/my_app/order_test.exs::MyApp.OrderTest/test-process-order-uses-billing-adapter",
+        "rank_band": "exploratory"
+      }
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

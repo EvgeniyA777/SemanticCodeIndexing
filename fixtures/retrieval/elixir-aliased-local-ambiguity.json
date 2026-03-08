@@ -1,0 +1,52 @@
+{
+  "fixture_id": "retrieval_elixir_aliased_local_ambiguity_001",
+  "category": "elixir_ambiguity",
+  "purpose": "Elixir aliased module and local function call surfaces should remain bounded under ambiguity.",
+  "adr_refs": ["ADR-005", "ADR-008", "ADR-014"],
+  "snapshot_ref": "seed-polyglot-app@rev-007",
+  "input": {
+    "query": {
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "bug_investigation",
+        "details": "Investigate charge flow where local and aliased module call surfaces overlap in MyApp.Order."
+      },
+      "targets": {
+        "paths": ["lib/my_app/order.ex", "lib/my_app/payments/adapter.ex"],
+        "diff_summary": "Changed process_order and charge delegation behavior."
+      },
+      "constraints": {
+        "token_budget": 1700,
+        "snapshot_id": "seed-polyglot-app@rev-007",
+        "language_allowlist": ["elixir"],
+        "allowed_path_prefixes": ["lib/my_app/", "test/my_app/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["lib/my_app/order.ex"],
+        "preferred_modules": ["MyApp.Order", "MyApp.Payments.Adapter"],
+        "focus_on_tests": false,
+        "prefer_definitions_over_callers": false,
+        "prefer_breadth_over_depth": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false,
+        "favor_compact_packet": true,
+        "favor_higher_recall": true
+      },
+      "trace": {
+        "trace_id": "3a31cc3f-6048-48ea-9b71-88cb925f66e4",
+        "request_id": "fixture-elixir-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "must_include_paths": ["lib/my_app/order.ex", "lib/my_app/payments/adapter.ex"],
+    "must_include_warning_codes": ["target_ambiguous"],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

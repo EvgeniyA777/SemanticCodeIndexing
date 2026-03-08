@@ -3,12 +3,20 @@
         org.clojure/data.json {:mvn/version "2.5.1"}
         metosin/malli {:mvn/version "0.19.1"}
         com.github.seancorfield/next.jdbc {:mvn/version "1.3.981"}
-        org.postgresql/postgresql {:mvn/version "42.7.8"}}
+        org.postgresql/postgresql {:mvn/version "42.7.8"}
+        io.grpc/grpc-netty-shaded {:mvn/version "1.63.0"}
+        io.grpc/grpc-stub {:mvn/version "1.63.0"}
+        io.grpc/grpc-protobuf {:mvn/version "1.63.0"}
+        com.google.protobuf/protobuf-java-util {:mvn/version "3.25.1"}}
  :aliases
  {:contracts
   {:main-opts ["-m" "semantic-code-indexing.contracts.cli"]}
   :runtime
   {:main-opts ["-m" "semantic-code-indexing.runtime.cli"]}
+  :runtime-http
+  {:main-opts ["-m" "semantic-code-indexing.runtime.http"]}
+  :runtime-grpc
+  {:main-opts ["-m" "semantic-code-indexing.runtime.grpc"]}
   :bench
   {:main-opts ["-m" "semantic-code-indexing.runtime.benchmarks"]}
   :test

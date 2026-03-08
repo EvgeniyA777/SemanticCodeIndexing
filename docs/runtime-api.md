@@ -57,6 +57,12 @@ Tree-sitter extraction path (optional):
                                        :java "/opt/grammars/tree-sitter-java"}}})
 ```
 
+Bootstrap pinned grammar checkouts under `.tree-sitter-grammars/`:
+
+```bash
+./scripts/setup-tree-sitter-grammars.sh
+```
+
 ### `update-index`
 
 Incrementally updates index for changed paths.
@@ -214,6 +220,87 @@ Smoke helper:
 ```bash
 ./scripts/run-mvp-smoke.sh . contracts/examples/queries/symbol-target.json /tmp/sci-smoke.json
 ```
+
+## Minimal HTTP Edge
+
+Run a minimal production-boundary HTTP wrapper over the same library runtime:
+
+```bash
+clojure -M:runtime-http --host 127.0.0.1 --port 8787
+```
+
+Optional auth boundary:
+
+```bash
+clojure -M:runtime-http --host 127.0.0.1 --port 8787 --api-key secret-token --require-tenant
+```
+
+Endpoints:
+
+- `GET /health`
+- `POST /v1/index/create` with JSON body: `root_path`, optional `paths`, optional `parser_opts`
+- `POST /v1/retrieval/resolve-context` with JSON body: `root_path`, optional `paths`, optional `parser_opts`, required `query`
+
+## Minimal gRPC Edge
+
+Run a minimal gRPC wrapper over the same library runtime semantics:
+
+```bash
+clojure -M:runtime-grpc --host 127.0.0.1 --port 8789
+```
+
+Optional auth boundary:
+
+```bash
+clojure -M:runtime-grpc --host 127.0.0.1 --port 8789 --api-key secret-token --require-tenant
+```
+
+Service: `semantic_code_indexing.RuntimeService`
+
+Unary methods:
+
+- `Health` (`google.protobuf.Struct` -> `google.protobuf.Struct`)
+- `CreateIndex` (`google.protobuf.Struct` -> `google.protobuf.Struct`)
+- `ResolveContext` (`google.protobuf.Struct` -> `google.protobuf.Struct`)
+
+Current gRPC transport uses typed protobuf messages (`google.protobuf.Struct`) while preserving runtime payload semantics compatible with HTTP/library contracts.
+
+When auth boundary is enabled:
+
+- HTTP expects `x-api-key` and `x-tenant-id` headers for protected endpoints.
+- gRPC expects `x-api-key` and `x-tenant-id` metadata for protected RPC methods.
+
+Optional host-integrated authz policy:
+
+- CLI flag: `--authz-policy-file /path/to/authz-policy.edn`
+- env fallback: `SCI_RUNTIME_AUTHZ_POLICY_FILE=/path/to/authz-policy.edn`
+- file format (EDN):
+
+```clojure
+{:tenants
+ {"tenant-001" {:allowed_roots ["/abs/path/to/repo-a"]
+                :allowed_path_prefixes ["src/my/app" "test/my/app"]}}}
+```
+
+Policy semantics:
+
+- `allowed_roots`: required per tenant; request `root_path` must be inside one of these roots.
+- `allowed_path_prefixes`: optional per tenant.
+- if `allowed_path_prefixes` is configured, request `paths` must be provided and every path must match an allowed prefix.
+- path checks require relative paths and reject traversal (`..`) segments.
+
+Host callback contract (for embedded usage):
+
+- both `runtime.http/start-server` and `runtime.grpc/start-server` accept `:authz_check`.
+- callback input map: `:operation`, `:tenant_id`, `:root_path`, `:paths`.
+- callback output:
+  - allow: `true` or `{:allowed? true}`
+  - deny: `false` or `{:allowed? false :code :forbidden|:invalid_request|:internal_error :message "..."}`
+
+Transport mapping for authz denials:
+
+- HTTP: `403` (`:forbidden`), `400` (`:invalid_request`), `500` (`:internal_error`)
+- gRPC: `PERMISSION_DENIED`, `INVALID_ARGUMENT`, `INTERNAL`
 
 ## Validation and Gates
 

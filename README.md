@@ -30,7 +30,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 
 ## Repository Layout
 
-- `adr/` - architecture decisions (`ADR-001` .. `ADR-017`)
+- `adr/` - architecture decisions (`ADR-001` .. `ADR-021`)
 - `docs/` - runtime API and operational docs
 - `contracts/schemas/` - JSON Schema contracts (external source of truth)
 - `contracts/examples/` - canonical examples for contract families
@@ -46,8 +46,14 @@ Current scope is contract architecture plus a working MVP runtime implementation
 ## Runtime Validation and Smoke
 
 - Unit/integration tests: `clojure -M:test`
+- Setup tree-sitter grammars (optional but reproducible): `./scripts/setup-tree-sitter-grammars.sh`
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out /tmp/sci.json`
+- Run minimal HTTP edge: `clojure -M:runtime-http --host 127.0.0.1 --port 8787`
+- Run minimal gRPC edge: `clojure -M:runtime-grpc --host 127.0.0.1 --port 8789`
+- Optional service auth boundary flags: `--api-key <token> --require-tenant` (or env `SCI_RUNTIME_API_KEY`, `SCI_RUNTIME_REQUIRE_TENANT=true`)
+- Optional host-integrated authz policy file: `--authz-policy-file /path/to/authz-policy.edn` (or env `SCI_RUNTIME_AUTHZ_POLICY_FILE`)
+- gRPC edge currently uses typed protobuf `google.protobuf.Struct` payloads for unary methods.
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
 - Runtime API docs: [docs/runtime-api.md](/Users/ae/workspaces/SemanticСodeIndexing/docs/runtime-api.md)
@@ -90,6 +96,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - PostgreSQL persistence adapter stores snapshots plus unit/call-edge graph projections
 - queryable graph access API is available via storage adapters (`query-units`, `query-callers`, `query-callees`)
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
+- HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file
 
 ## License
 

@@ -1,0 +1,57 @@
+{
+  "fixture_id": "retrieval_elixir_mixed_def_forms_001",
+  "category": "elixir_semantics",
+  "purpose": "Elixir def/defp/defdelegate extraction should keep private targets resolvable as authority units.",
+  "adr_refs": ["ADR-004", "ADR-005", "ADR-014"],
+  "snapshot_ref": "seed-polyglot-app@rev-008",
+  "input": {
+    "query": {
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the private status helper implementation for MyApp.Order."
+      },
+      "targets": {
+        "symbols": ["MyApp.Order/to_status"],
+        "paths": ["lib/my_app/order.ex"]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "snapshot_id": "seed-polyglot-app@rev-008",
+        "language_allowlist": ["elixir"],
+        "allowed_path_prefixes": ["lib/my_app/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["lib/my_app/order.ex"],
+        "preferred_modules": ["MyApp.Order"],
+        "prefer_definitions_over_callers": true,
+        "prefer_breadth_over_depth": false
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false,
+        "favor_compact_packet": true,
+        "favor_higher_recall": false
+      },
+      "trace": {
+        "trace_id": "5cae113b-12f5-4b68-a0ad-17f8a9e57d53",
+        "request_id": "fixture-elixir-def-forms-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": ["lib/my_app/order.ex::MyApp.Order/to_status"],
+    "must_include_paths": ["lib/my_app/order.ex"],
+    "rank_band_expectations": [
+      {
+        "unit_id": "lib/my_app/order.ex::MyApp.Order/to_status",
+        "rank_band": "top_authority"
+      }
+    ],
+    "confidence_level": "high",
+    "autonomy_posture": "draft_patch_safe"
+  }
+}
