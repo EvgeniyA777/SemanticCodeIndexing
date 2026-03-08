@@ -1,0 +1,43 @@
+name: MVP Runtime Gates
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "contracts/**"
+      - "fixtures/**"
+      - "deps.edn"
+      - ".github/workflows/mvp-runtime.yml"
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "src/**"
+      - "test/**"
+      - "scripts/**"
+      - "contracts/**"
+      - "fixtures/**"
+      - "deps.edn"
+      - ".github/workflows/mvp-runtime.yml"
+
+jobs:
+  runtime-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.2
+        with:
+          cli: "1.12.0.1530"
+
+      - name: Run MVP Gates
+        run: ./scripts/run-mvp-gates.sh

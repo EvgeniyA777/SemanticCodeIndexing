@@ -15,6 +15,8 @@ The project defines how a host system should request code context, how retrieval
 - defines retrieval fixture corpus for behavior-based validation
 - mirrors contracts in Clojure (`malli`) for runtime validation
 - provides a local and CI gate to prevent contract drift
+- provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `impact-analysis`, `skeletons`
+- includes lightweight parser adapters for `Clojure + Java` and emits diagnostics/guardrails outputs
 
 ## What This Project Does Not Do (Yet)
 
@@ -38,6 +40,13 @@ Current scope is contract architecture and validation infrastructure.
 - Local: `./scripts/validate-contracts.sh`
 - CI: `.github/workflows/contracts-validation.yml`
 
+## Runtime Validation and Smoke
+
+- Unit/integration tests: `clojure -M:test`
+- Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out /tmp/sci.json`
+- Full MVP gates: `./scripts/run-mvp-gates.sh`
+- CI runtime gates: `.github/workflows/mvp-runtime.yml`
+
 ## Agent Limit Policy
 
 - If execution/model/tool limits are exhausted, the agent MUST stop work immediately.
@@ -58,6 +67,7 @@ Current scope is contract architecture and validation infrastructure.
 - canonical example set established (`contracts/examples`)
 - seed fixture corpus established (`fixtures/retrieval`)
 - Clojure validation gate implemented (`src/semantic_code_indexing/contracts`)
+- MVP runtime implemented (`src/semantic_code_indexing/core.clj`, `src/semantic_code_indexing/runtime/*`)
 
 ## License
 

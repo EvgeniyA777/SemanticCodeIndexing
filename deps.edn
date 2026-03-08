@@ -4,4 +4,9 @@
         metosin/malli {:mvn/version "0.19.1"}}
  :aliases
  {:contracts
-  {:main-opts ["-m" "semantic-code-indexing.contracts.cli"]}}}
+  {:main-opts ["-m" "semantic-code-indexing.contracts.cli"]}
+  :runtime
+  {:main-opts ["-m" "semantic-code-indexing.runtime.cli"]}
+  :test
+  {:extra-paths ["test"]
+   :main-opts ["-m" "semantic-code-indexing.test-runner"]}}}
