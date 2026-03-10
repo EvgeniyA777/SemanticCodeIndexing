@@ -19,6 +19,8 @@
   {:main-opts ["-m" "semantic-code-indexing.runtime.http"]}
   :runtime-grpc
   {:main-opts ["-m" "semantic-code-indexing.runtime.grpc"]}
+  :eval
+  {:main-opts ["-m" "semantic-code-indexing.runtime.evaluation"]}
   :bench
   {:main-opts ["-m" "semantic-code-indexing.runtime.benchmarks"]}
   :test

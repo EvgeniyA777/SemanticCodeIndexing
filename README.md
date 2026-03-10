@@ -17,8 +17,10 @@ The project defines how a host system should request code context, how retrieval
 - provides a local and CI gate to prevent contract drift
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `impact-analysis`, `skeletons`
 - includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript` and emits diagnostics/guardrails outputs
+- supports versioned retrieval policy overrides plus emitted capability metadata for replayable ranking behavior
 - supports optional persistence adapters (`in-memory`, `PostgreSQL`) with snapshot + graph projection storage for PostgreSQL
 - supports optional usage metrics adapters (`in-memory`, `PostgreSQL`) for library and MCP adoption/usefulness telemetry
+- supports structured retrieval feedback plus offline query replay scoring for quality-loop evaluation
 - includes retrieval benchmark suite aligned with fixture corpus (`ADR-014`)
 
 ## What This Project Does Not Do (Yet)
@@ -52,6 +54,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - Scaffold new language adapter onboarding: `./scripts/new-language-adapter.sh <language> --ext .ext1,.ext2`
 - Validate language onboarding checklist and gates: `./scripts/validate-language-onboarding.sh <language>` (`--skip-gates` for fast checks)
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh`
+- Offline replay evaluation: `clojure -M:eval --root . --dataset path/to/dataset.json --out "${TMPDIR:-.tmp}/sci-eval.json"`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out "${TMPDIR:-.tmp}/sci.json"`
 - Run stdio MCP server: `SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" clojure -M:mcp`
 - Enable MCP usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:mcp`
@@ -101,9 +104,10 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets
 - optional tree-sitter extraction path is available for Clojure/Java (grammar-path configured)
 - tiered structural-first ranking and non-compensating confidence model implemented
+- ranking policy is now explicit, versioned, and replayable via `:retrieval_policy`
 - late raw-code escalation stage is implemented and controlled by query options/constraints
 - PostgreSQL persistence adapter stores snapshots plus unit/call-edge graph projections
-- optional usage metrics sinks capture `library` and `mcp` usage events plus explicit feedback for helpfulness tracking
+- optional usage metrics sinks capture `library` and `mcp` usage events plus structured feedback for relevance tracking
 - queryable graph access API is available via storage adapters (`query-units`, `query-callers`, `query-callees`)
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
 - HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file

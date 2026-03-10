@@ -136,7 +136,26 @@
     (testing "retrieval actually localizes target"
       (is (seq (:relevant_units packet)))
       (is (some #(= "my.app.order/process-order" (:symbol %)) (:relevant_units packet)))
-      (is (= "high" (get-in packet [:confidence :level]))))))
+      (is (= "high" (get-in packet [:confidence :level]))))
+    (testing "retrieval emits policy and capability metadata"
+      (is (= "heuristic_v1" (get-in packet [:retrieval_policy :policy_id])))
+      (is (= "heuristic_v1" (get-in diagnostics [:retrieval_policy :policy_id])))
+      (is (= "full" (get-in packet [:capabilities :coverage_level])))
+      (is (some #{"clojure"} (get-in packet [:capabilities :selected_languages])))
+      (is (string? (get-in packet [:capabilities :index_snapshot_id]))))))
+
+(deftest retrieval-policy-can-change-ranking-band-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-policy-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        baseline (sci/resolve-context index sample-query)
+        strict-policy {:policy_id "heuristic_v1_strict_top"
+                       :version "2026-03-10"
+                       :thresholds {:top_authority_min 500}}
+        strict-result (sci/resolve-context index sample-query {:retrieval_policy strict-policy})]
+    (is (= "top_authority" (get-in baseline [:context_packet :relevant_units 0 :rank_band])))
+    (is (not= "top_authority" (get-in strict-result [:context_packet :relevant_units 0 :rank_band])))
+    (is (= "heuristic_v1_strict_top" (get-in strict-result [:diagnostics_trace :retrieval_policy :policy_id])))))
 
 (deftest elixir-and-python-targeted-retrieval-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-lang-test" (make-array java.nio.file.attribute.FileAttribute 0)))

@@ -20,6 +20,12 @@
     "schema_version": {
       "$ref": "common.schema.json#/$defs/schemaVersion"
     },
+    "retrieval_policy": {
+      "$ref": "common.schema.json#/$defs/retrievalPolicySummary"
+    },
+    "capabilities": {
+      "$ref": "common.schema.json#/$defs/capabilitySummary"
+    },
     "query": {
       "type": "object",
       "required": ["intent", "targets_summary", "constraints_summary", "hints_summary"],
@@ -164,4 +170,3 @@
     }
   }
 }
-

@@ -100,6 +100,10 @@ Runs retrieval pipeline and returns:
 - `:diagnostics_trace`
 - `:stage_events`
 
+Optional opts:
+
+- `:retrieval_policy` - versioned ranking policy override map for replay/tuning
+
 ```clojure
 (def query
   {:schema_version "1.0"
@@ -124,6 +128,23 @@ Runs retrieval pipeline and returns:
 (def result
   (sci/resolve-context index query))
 ```
+
+Example with policy override:
+
+```clojure
+(sci/resolve-context
+ index
+ query
+ {:retrieval_policy
+  {:policy_id "heuristic_v1_strict_top"
+   :version "2026-03-10"
+   :thresholds {:top_authority_min 160}}})
+```
+
+Both `:context_packet` and `:diagnostics_trace` now include:
+
+- `:retrieval_policy` - `{ :policy_id ... :version ... }`
+- `:capabilities` - selected-language and parser-coverage summary
 
 ### `impact-analysis`
 
@@ -219,7 +240,11 @@ Usage metrics are optional and separate from index persistence.
 (sci/record-feedback! index {:trace_id "11111111-1111-4111-8111-111111111111"
                              :request_id "req-example-001"
                              :feedback_outcome "helpful"
-                             :followup_action "planned"})
+                             :followup_action "planned"
+                             :confidence_level "high"
+                             :retrieval_issue_codes ["resolved_target_correct"]
+                             :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                             :ground_truth_paths ["src/my/app/order.clj"]})
 ```
 
 ### PostgreSQL usage metrics
@@ -242,6 +267,32 @@ PostgreSQL usage metrics persist:
 - raw events in `semantic_usage_events`
 - explicit feedback in `semantic_usage_feedback`
 - daily aggregates in `semantic_usage_daily_rollups`
+
+## Offline Replay Evaluation
+
+Replay a dataset of structured queries against the current runtime:
+
+```bash
+clojure -M:eval --root . --dataset path/to/dataset.json --out "${TMPDIR:-.tmp}/sci-eval.json"
+```
+
+Dataset shape:
+
+```json
+{
+  "queries": [
+    {
+      "query_id": "order-authority",
+      "query": { "...": "retrieval query contract" },
+      "expected": {
+        "top_authority_unit_ids": ["src/my/app/order.clj::my.app.order/process-order"],
+        "required_paths": ["src/my/app/order.clj"],
+        "min_confidence_level": "medium"
+      }
+    }
+  ]
+}
+```
 
 ### `skeletons`
 

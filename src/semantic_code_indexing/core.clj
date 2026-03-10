@@ -159,7 +159,7 @@
          usage-context (resolve-usage-context index opts)
          start-ms (now-ms)]
      (try
-       (let [result (retrieval/resolve-context index query)
+       (let [result (retrieval/resolve-context index query opts)
              diagnostics (:diagnostics_trace result)
              packet (:context_packet result)
              guardrails (:guardrail_assessment result)]
@@ -182,7 +182,8 @@
                               :requested_tokens (get-in packet [:budget :requested_tokens])
                               :warning_count (count (:warnings diagnostics))
                               :degradation_count (count (:degradations diagnostics))
-                              :fallback_units (get-in diagnostics [:performance :parser_summary :fallback_units])}})))
+                              :fallback_units (get-in diagnostics [:performance :parser_summary :fallback_units])
+                              :policy_id (get-in diagnostics [:retrieval_policy :policy_id])}})))
          result)
        (catch Exception e
          (when (should-record-usage? sink opts)
@@ -206,7 +207,7 @@
          usage-context (resolve-usage-context index opts)
          start-ms (now-ms)]
      (try
-       (let [result (retrieval/impact-analysis index query)]
+       (let [result (retrieval/impact-analysis index query opts)]
          (when (should-record-usage? sink opts)
            (usage/safe-record-event!
             sink

@@ -21,6 +21,12 @@
     "schema_version": {
       "$ref": "common.schema.json#/$defs/schemaVersion"
     },
+    "retrieval_policy": {
+      "$ref": "common.schema.json#/$defs/retrievalPolicySummary"
+    },
+    "capabilities": {
+      "$ref": "common.schema.json#/$defs/capabilitySummary"
+    },
     "trace": {
       "type": "object",
       "required": ["trace_id", "request_id", "timestamp_start", "timestamp_end"],
@@ -190,4 +196,3 @@
     }
   }
 }
-

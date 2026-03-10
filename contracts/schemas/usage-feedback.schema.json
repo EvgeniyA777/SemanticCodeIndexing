@@ -60,6 +60,23 @@
     "followup_action": {
       "$ref": "common.schema.json#/$defs/followupAction"
     },
+    "confidence_level": {
+      "$ref": "common.schema.json#/$defs/confidenceLevel"
+    },
+    "retrieval_issue_codes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/retrievalIssueCode"
+      },
+      "maxItems": 12,
+      "uniqueItems": true
+    },
+    "ground_truth_unit_ids": {
+      "$ref": "common.schema.json#/$defs/stringArray"
+    },
+    "ground_truth_paths": {
+      "$ref": "common.schema.json#/$defs/stringArray"
+    },
     "payload": {
       "$ref": "common.schema.json#/$defs/boundedPayloadMap"
     }

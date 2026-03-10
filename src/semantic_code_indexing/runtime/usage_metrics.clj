@@ -1,5 +1,6 @@
 (ns semantic-code-indexing.runtime.usage-metrics
   (:require [clojure.data.json :as json]
+            [clojure.string :as str]
             [next.jdbc :as jdbc])
   (:import [java.security MessageDigest]
            [java.time Instant]
@@ -34,6 +35,14 @@
     (nil? payload) {}
     (map? payload) payload
     :else {:value (str payload)}))
+
+(defn- normalize-string-array [values]
+  (when (some? values)
+    (->> values
+         (map str)
+         (remove str/blank?)
+         distinct
+         vec)))
 
 (defn normalize-event [event]
   (let [payload (compact-payload (:payload event))]
@@ -77,6 +86,10 @@
      :feedback_outcome (:feedback_outcome feedback)
      :feedback_reason (:feedback_reason feedback)
      :followup_action (:followup_action feedback)
+     :confidence_level (:confidence_level feedback)
+     :retrieval_issue_codes (normalize-string-array (:retrieval_issue_codes feedback))
+     :ground_truth_unit_ids (normalize-string-array (:ground_truth_unit_ids feedback))
+     :ground_truth_paths (normalize-string-array (:ground_truth_paths feedback))
      :payload payload}))
 
 (defrecord NoOpUsageMetrics []
@@ -265,6 +278,10 @@
                            feedback_outcome text not null,
                            feedback_reason text,
                            followup_action text,
+                           confidence_level text,
+                           retrieval_issue_codes jsonb,
+                           ground_truth_unit_ids jsonb,
+                           ground_truth_paths jsonb,
                            payload jsonb not null
                          )"])
         (jdbc/execute! datasource
@@ -335,8 +352,9 @@
                        ["insert into semantic_usage_feedback
                          (feedback_id, occurred_at, surface, operation, trace_id, request_id,
                           session_id, task_id, actor_id, tenant_id, root_path_hash,
-                          feedback_outcome, feedback_reason, followup_action, payload)
-                         values (?, cast(? as timestamptz), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))"
+                          feedback_outcome, feedback_reason, followup_action, confidence_level,
+                          retrieval_issue_codes, ground_truth_unit_ids, ground_truth_paths, payload)
+                         values (?, cast(? as timestamptz), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb), cast(? as jsonb), cast(? as jsonb), cast(? as jsonb))"
                         (:feedback_id feedback*)
                         (:occurred_at feedback*)
                         (:surface feedback*)
@@ -351,6 +369,10 @@
                         (:feedback_outcome feedback*)
                         (:feedback_reason feedback*)
                         (:followup_action feedback*)
+                        (:confidence_level feedback*)
+                        (->json (:retrieval_issue_codes feedback*))
+                        (->json (:ground_truth_unit_ids feedback*))
+                        (->json (:ground_truth_paths feedback*))
                         (->json (:payload feedback*))])
         (upsert-rollup! tx (feedback-rollup feedback*)))
       true))

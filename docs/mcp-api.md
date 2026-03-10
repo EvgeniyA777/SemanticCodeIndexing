@@ -99,6 +99,11 @@ Returns the existing runtime retrieval payload plus `index_id`:
 - `diagnostics_trace`
 - `stage_events`
 
+The returned `context_packet` and `diagnostics_trace` now include:
+
+- `retrieval_policy` - versioned ranking policy summary used for this retrieval
+- `capabilities` - parser/language coverage summary for the selected evidence set
+
 ### `impact_analysis`
 
 Estimate what is likely to be affected by a proposed change, bug fix, refactor, or target query.

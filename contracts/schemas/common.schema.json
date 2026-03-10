@@ -111,6 +111,18 @@
       "type": "string",
       "enum": ["planned", "drafted", "patched", "discarded"]
     },
+    "retrievalIssueCode": {
+      "type": "string",
+      "enum": [
+        "resolved_target_correct",
+        "missing_authority",
+        "wrong_scope",
+        "too_broad",
+        "too_shallow",
+        "latency_too_high",
+        "confidence_miscalibrated"
+      ]
+    },
     "stageName": {
       "type": "string",
       "enum": [
@@ -235,6 +247,62 @@
       },
       "maxProperties": 16,
       "default": {}
+    },
+    "retrievalPolicySummary": {
+      "type": "object",
+      "required": ["policy_id", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "policy_id": {
+          "$ref": "#/$defs/boundedString"
+        },
+        "version": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
+    },
+    "capabilitySummary": {
+      "type": "object",
+      "required": [
+        "index_languages",
+        "selected_languages",
+        "parser_modes",
+        "coverage_level",
+        "fallback_unit_count",
+        "selected_unit_count",
+        "strong_languages",
+        "index_snapshot_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "index_languages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "selected_languages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "parser_modes": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "coverage_level": {
+          "type": "string",
+          "enum": ["unknown", "full", "mixed", "fallback_only"]
+        },
+        "fallback_unit_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "selected_unit_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "strong_languages": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "index_snapshot_id": {
+          "$ref": "#/$defs/boundedString"
+        }
+      }
     }
   }
 }

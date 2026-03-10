@@ -14,6 +14,10 @@
   "root_path_hash": "4f4df36dd979de0b7c6a5b4f2176fa4c2fbb0b3e9d1ec6f7d2d5d77f6b3722d2",
   "feedback_reason": "Selected units were sufficient to localize the edit target without extra raw code reads.",
   "followup_action": "planned",
+  "confidence_level": "high",
+  "retrieval_issue_codes": ["resolved_target_correct"],
+  "ground_truth_unit_ids": ["src/my/app/order.clj::my.app.order/process-order"],
+  "ground_truth_paths": ["src/my/app/order.clj"],
   "payload": {
     "selected_units_reviewed": 4,
     "followup_reads": 0

@@ -36,6 +36,15 @@
 (def usage-status [:enum "success" "error"])
 (def feedback-outcome [:enum "helpful" "partially_helpful" "not_helpful" "abandoned"])
 (def followup-action [:enum "planned" "drafted" "patched" "discarded"])
+(def retrieval-issue-code
+  [:enum
+   "resolved_target_correct"
+   "missing_authority"
+   "wrong_scope"
+   "too_broad"
+   "too_shallow"
+   "latency_too_high"
+   "confidence_miscalibrated"])
 (def stage-name
   [:enum
    "query_validation"
@@ -89,6 +98,22 @@
    [:reasons coded-item-array]
    [:warnings coded-item-array]
    [:missing_evidence coded-item-array]])
+
+(def retrieval-policy-summary
+  [:map {:closed true}
+   [:policy_id bounded-string]
+   [:version bounded-string]])
+
+(def capability-summary
+  [:map {:closed true}
+   [:index_languages string-array]
+   [:selected_languages string-array]
+   [:parser_modes string-array]
+   [:coverage_level [:enum "unknown" "full" "mixed" "fallback_only"]]
+   [:fallback_unit_count nat-int?]
+   [:selected_unit_count nat-int?]
+   [:strong_languages string-array]
+   [:index_snapshot_id bounded-string]])
 
 (def guardrail-assessment
   [:map {:closed true}
@@ -174,6 +199,8 @@
 (def context-packet
   [:map {:closed true}
    [:schema_version schema-version]
+   [:retrieval_policy {:optional true} retrieval-policy-summary]
+   [:capabilities {:optional true} capability-summary]
    [:query
     [:map {:closed true}
      [:intent bounded-string]
@@ -217,6 +244,8 @@
 (def diagnostics-trace
   [:map {:closed true}
    [:schema_version schema-version]
+   [:retrieval_policy {:optional true} retrieval-policy-summary]
+   [:capabilities {:optional true} capability-summary]
    [:trace
     [:map {:closed true}
      [:trace_id uuid-str]
@@ -347,6 +376,10 @@
    [:root_path_hash {:optional true} root-path-hash]
    [:feedback_reason {:optional true} bounded-string]
    [:followup_action {:optional true} followup-action]
+   [:confidence_level {:optional true} confidence-level]
+   [:retrieval_issue_codes {:optional true} [:vector {:max 12} retrieval-issue-code]]
+   [:ground_truth_unit_ids {:optional true} string-array]
+   [:ground_truth_paths {:optional true} string-array]
    [:payload bounded-payload-map]])
 
 (def example-catalog-entry

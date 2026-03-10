@@ -52,7 +52,11 @@
         _feedback (sci/record-feedback! index {:trace_id (get-in sample-query [:trace :trace_id])
                                                :request_id (get-in sample-query [:trace :request_id])
                                                :feedback_outcome "helpful"
-                                               :followup_action "planned"})
+                                               :followup_action "planned"
+                                               :confidence_level "high"
+                                               :retrieval_issue_codes ["resolved_target_correct"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
         events (usage/emitted-events sink)
         feedback (usage/emitted-feedback sink)
         create-event (first events)
@@ -70,11 +74,14 @@
       (is (= "usage-metrics-test-001" (:request_id resolve-event)))
       (is (= (get-in result [:context_packet :confidence :level]) (:confidence_level resolve-event)))
       (is (pos-int? (:selected_units_count resolve-event)))
-      (is (string? (:root_path_hash resolve-event))))
+      (is (string? (:root_path_hash resolve-event)))
+      (is (= "heuristic_v1" (get-in resolve-event [:payload :policy_id]))))
     (testing "explicit host feedback is recorded separately"
       (is (= 1 (count feedback)))
       (is (= "helpful" (:feedback_outcome (first feedback))))
-      (is (= "session-001" (:session_id (first feedback)))))))
+      (is (= "session-001" (:session_id (first feedback))))
+      (is (= ["resolved_target_correct"] (:retrieval_issue_codes (first feedback))))
+      (is (= ["src/my/app/order.clj"] (:ground_truth_paths (first feedback)))))))
 
 (deftest suppressed-library-metrics-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-usage-metrics-suppress" (make-array java.nio.file.attribute.FileAttribute 0)))

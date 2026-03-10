@@ -371,7 +371,8 @@
           :payload {:index_id (:index_id entry)
                     :warning_count (count (get-in result [:diagnostics_trace :warnings]))
                     :degradation_count (count (get-in result [:diagnostics_trace :degradations]))
-                    :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])}})))))
+                    :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])
+                    :policy_id (get-in result [:diagnostics_trace :retrieval_policy :policy_id])}})))))
 
 (defn- tool-impact-analysis [state args]
   (when-not (map? args)
