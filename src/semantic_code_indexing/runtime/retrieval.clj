@@ -70,6 +70,11 @@
   (let [hay (str/lower-case (str (:signature u) " " (:summary u) " " (:symbol u)))]
     (some #(str/includes? hay %) tokens)))
 
+(defn- dispatch-match? [u tokens]
+  (let [dispatch (some-> (:dispatch_value u) str str/lower-case)]
+    (and (seq dispatch)
+         (some #(str/includes? dispatch %) tokens))))
+
 (defn- module-prefix-match? [u module]
   (let [m (:module u)
         module-str (str module)]
@@ -109,6 +114,7 @@
                            by-span (some #(overlap-span? u %) changed-spans)
                            by-pref-path (contains? preferred-paths (:path u))
                            by-pref-module (some #(module-prefix-match? u %) preferred-modules)
+                           by-dispatch (dispatch-match? u tokens)
                            by-parser-fallback (= "fallback" (:parser_mode u))
                            by-lexical (lexical-match? u tokens)
                            acc1 (cond-> acc
@@ -117,6 +123,7 @@
                                   by-span (add-tier uid :tier1 (rp/weight policy "diff_overlap_direct") (coded "diff_overlap_direct" "Tier1: changed span overlaps this unit."))
                                   by-module (add-tier uid :tier2 (rp/weight policy "target_module_match") (coded "target_module_match" "Tier2: unit module targeted by query."))
                                   by-test (add-tier uid :tier2 (rp/weight policy "target_test_match") (coded "target_test_match" "Tier2: unit appears in explicitly requested tests."))
+                                  by-dispatch (add-tier uid :tier2 (rp/weight policy "dispatch_value_match") (coded "dispatch_value_match" "Tier2: multimethod dispatch value matches the query intent."))
                                   by-pref-path (add-tier uid :tier3 (rp/weight policy "hint_preferred_path") (coded "hint_preferred_path" "Tier3: preferred path hint boosted unit."))
                                   by-pref-module (add-tier uid :tier3 (rp/weight policy "hint_preferred_module") (coded "hint_preferred_module" "Tier3: preferred module hint boosted unit."))
                                   by-lexical (add-tier uid :tier4 (rp/weight policy "lexical_overlap") (coded "lexical_overlap" "Tier4: lexical overlap with query detail."))

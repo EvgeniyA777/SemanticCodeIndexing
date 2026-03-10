@@ -17,7 +17,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Clojure-side contract mirror is implemented with `malli`.
 - MVP runtime is implemented with public API in `semantic-code-indexing.core`.
 - Clojure parser path supports `clj-kondo` primary with regex fallback and optional tree-sitter extraction mode.
-- Clojure fallback parsing now rewrites alias-qualified calls (`order/validate-order` -> `my.app.order/validate-order`), ignores nested defs inside wrapper forms such as `comment`, and links test namespaces back to source namespaces for stronger `related_tests` hints.
+- Clojure fallback parsing now rewrites alias-qualified calls (`order/validate-order` -> `my.app.order/validate-order`), ignores nested defs inside wrapper forms such as `comment`, links test namespaces back to source namespaces for stronger `related_tests` hints, emits dispatch-aware `defmethod` unit identities, can rank the correct multimethod implementation from dispatch hints in the query text, and adds graph-level inherited caller edges for custom macros that structurally inject var calls.
 - Java parser path supports regex mode and optional tree-sitter extraction mode.
 - Elixir/Python parser paths are regex-based with class/module-aware symbol and call normalization.
 - TypeScript parser supports regex mode and optional tree-sitter extraction mode.
@@ -67,7 +67,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 
 ## Next Execution Priorities
 
-1. Continue Clojure semantic-core deepening: namespace/var identity, more precise caller/callee resolution, and macro-aware structural handling beyond top-level fallback parsing.
+1. Continue Clojure semantic-core deepening: richer macro-generated ownership beyond one-hop inherited calls, namespace/var identity beyond `defmethod` dispatch, and more precise caller/callee resolution around generated forms.
 2. After the next Clojure slice, extend governed quality loop with a more explicit policy-management control plane across runtime surfaces and richer protected dataset curation workflows.
 
 ## Update Rule

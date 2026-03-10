@@ -17,7 +17,11 @@
   (write-file! root "test/my/app/order_test.clj"
                "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
   (write-file! root "src/my/app/macros.clj"
-               "(ns my.app.macros)\n\n(comment\n  (defn hidden-helper [order]\n    (:id order)))\n\n(defmacro with-order [order & body]\n  `(let [current-order# ~order]\n     ~@body))\n\n(defn visible-helper [order]\n  (with-order order\n    (:id order)))\n")
+               "(ns my.app.macros\n  (:require [my.app.order :as order]))\n\n(comment\n  (defn hidden-helper [order]\n    (:id order)))\n\n(defmacro with-order [order & body]\n  `(let [current-order# ~order]\n     ~@body))\n\n(defmacro with-validated-order [order & body]\n  `(let [validated-order# (order/validate-order ~order)]\n     ~@body))\n\n(defn visible-helper [order]\n  (with-order order\n    (:id order)))\n")
+  (write-file! root "src/my/app/workflow.clj"
+               "(ns my.app.workflow\n  (:require [my.app.macros :refer [with-validated-order]]))\n\n(defn prepare-order [order]\n  (with-validated-order order\n    {:prepared true}))\n")
+  (write-file! root "src/my/app/shipping.clj"
+               "(ns my.app.shipping)\n\n(defmulti route-order (fn [mode payload] mode))\n\n(defn pickup-stop [payload]\n  (:pickup payload))\n\n(defn delivery-stop [payload]\n  (:delivery payload))\n\n(defmethod route-order :pickup [_ payload]\n  (pickup-stop payload))\n\n(defmethod route-order :delivery [_ payload]\n  (delivery-stop payload))\n\n(defn plan-route [mode payload]\n  (route-order mode payload))\n")
   (write-file! root "src/com/acme/CheckoutService.java"
                "package com.acme;\n\nimport java.util.Objects;\n\npublic class CheckoutService {\n  public String processOrder(String id) {\n    return normalize(id, true);\n  }\n\n  private String normalize(String id) {\n    return normalize(id, false);\n  }\n\n  private String normalize(String id, boolean strict) {\n    String base = Objects.requireNonNull(id).trim();\n    return strict ? base : base.toLowerCase();\n  }\n}\n")
   (write-file! root "lib/my_app/order.ex"
@@ -330,11 +334,79 @@
         symbols (set (map :symbol macro-units))
         with-order-unit (some->> macro-units (filter #(= "my.app.macros/with-order" (:symbol %))) first)
         visible-helper-unit (some->> macro-units (filter #(= "my.app.macros/visible-helper" (:symbol %))) first)]
-    (is (= #{"my.app.macros/with-order" "my.app.macros/visible-helper"} symbols))
+    (is (= #{"my.app.macros/with-order" "my.app.macros/with-validated-order" "my.app.macros/visible-helper"} symbols))
     (is (nil? (some #(= "my.app.macros/hidden-helper" (:symbol %)) macro-units)))
     (is with-order-unit)
     (is visible-helper-unit)
     (is (< (:end_line with-order-unit) (:start_line visible-helper-unit)))))
+
+(deftest clojure-macro-generated-ownership-adds-caller-edge-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-macro-ownership" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        order-units (sci/query-units storage tmp-root {:module "my.app.order" :limit 20})
+        validate-unit-id (some->> order-units (filter #(= "my.app.order/validate-order" (:symbol %))) first :unit_id)
+        callers (sci/query-callers storage tmp-root validate-unit-id {:limit 20})]
+    (is validate-unit-id)
+    (is (some #(= "my.app.order/process-order" (:symbol %)) callers))
+    (is (some #(= "my.app.workflow/prepare-order" (:symbol %)) callers))))
+
+(deftest clojure-defmethod-identity-and-caller-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-defmethod-identity" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        shipping-units (sci/query-units storage tmp-root {:module "my.app.shipping" :limit 20})
+        route-methods (->> shipping-units
+                           (filter #(= "my.app.shipping/route-order" (:symbol %)))
+                           (filter #(= "method" (:kind %)))
+                           vec)
+        pickup-method (some #(when (= ":pickup" (:dispatch_value %)) %) route-methods)
+        delivery-method (some #(when (= ":delivery" (:dispatch_value %)) %) route-methods)
+        pickup-stop-id (some->> shipping-units (filter #(= "my.app.shipping/pickup-stop" (:symbol %))) first :unit_id)
+        delivery-stop-id (some->> shipping-units (filter #(= "my.app.shipping/delivery-stop" (:symbol %))) first :unit_id)
+        pickup-callers (sci/query-callers storage tmp-root pickup-stop-id {:limit 20})
+        delivery-callers (sci/query-callers storage tmp-root delivery-stop-id {:limit 20})]
+    (is (= 2 (count route-methods)))
+    (is (= 2 (count (distinct (map :unit_id route-methods)))))
+    (is pickup-method)
+    (is delivery-method)
+    (is (not= (:unit_id pickup-method) (:unit_id delivery-method)))
+    (is (some #(= (:unit_id pickup-method) (:unit_id %)) pickup-callers))
+    (is (some #(= (:unit_id delivery-method) (:unit_id %)) delivery-callers))
+    (is (not-any? #(= (:unit_id delivery-method) (:unit_id %)) pickup-callers))
+    (is (not-any? #(= (:unit_id pickup-method) (:unit_id %)) delivery-callers))))
+
+(deftest clojure-multimethod-dispatch-query-ranks-correct-defmethod-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-dispatch-ranking" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        index (sci/create-index {:root_path tmp-root :storage storage})
+        shipping-units (sci/query-units storage tmp-root {:module "my.app.shipping" :limit 20})
+        pickup-method (some #(when (= ":pickup" (:dispatch_value %)) %) shipping-units)
+        query {:schema_version "1.0"
+               :intent {:purpose "code_understanding"
+                        :details "Locate the pickup route-order implementation."}
+               :targets {:symbols ["my.app.shipping/route-order"]
+                         :paths ["src/my/app/shipping.clj"]}
+               :constraints {:token_budget 1200
+                             :max_raw_code_level "enclosing_unit"
+                             :freshness "current_snapshot"}
+               :hints {:prefer_definitions_over_callers true}
+               :options {:include_tests false
+                         :include_impact_hints true
+                         :allow_raw_code_escalation false
+                         :favor_compact_packet true
+                         :favor_higher_recall false}
+               :trace {:trace_id "55555555-5555-4555-8555-555555555555"
+                       :request_id "runtime-test-clj-dispatch-001"
+                       :actor_id "test_runner"}}
+        result (sci/resolve-context index query)]
+    (is pickup-method)
+    (is (= (:unit_id pickup-method)
+           (get-in result [:context_packet :relevant_units 0 :unit_id])))
+    (is (= "high" (get-in result [:context_packet :confidence :level])))))
 
 (deftest tree-sitter-parser-path-test
   (let [clj-grammar (System/getenv "SCI_TREE_SITTER_CLOJURE_GRAMMAR_PATH")

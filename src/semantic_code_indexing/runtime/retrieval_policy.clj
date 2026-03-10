@@ -12,6 +12,7 @@
              :diff_overlap_direct 90
              :target_module_match 70
              :target_test_match 50
+             :dispatch_value_match 25
              :hint_preferred_path 15
              :hint_preferred_module 10
              :lexical_overlap 8

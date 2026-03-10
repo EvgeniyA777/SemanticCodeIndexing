@@ -105,7 +105,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - Clojure validation gate implemented (`src/semantic_code_indexing/contracts`)
 - MVP runtime implemented (`src/semantic_code_indexing/core.clj`, `src/semantic_code_indexing/runtime/*`)
 - Clojure retrieval uses `clj-kondo` as primary parser with fallback path
-- Clojure semantic-core now includes alias-aware fallback call resolution, top-level-aware fallback parsing for macro/comment wrappers, and namespace-linked `related_tests` hints for test namespaces
+- Clojure semantic-core now includes alias-aware fallback call resolution, top-level-aware fallback parsing for macro/comment wrappers, namespace-linked `related_tests` hints for test namespaces, dispatch-aware `defmethod` unit identities, dispatch-sensitive multimethod ranking, and graph-level macro-generated ownership for caller/callee edges
 - Elixir, Python, and TypeScript retrieval paths are implemented in the same runtime adapter pipeline
 - multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python, TypeScript
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets

@@ -181,7 +181,7 @@ Both `:context_packet` and `:diagnostics_trace` now include:
 - `:retrieval_policy` - `{ :policy_id ... :version ... }`
 - `:capabilities` - selected-language and parser-coverage summary
 
-For Clojure retrieval, `impact_hints.related_tests` now also links nearby test files via namespace/import relationships, not only direct caller overlap. This keeps `related_tests` useful even when a test namespace exercises a sibling var instead of the exact selected var. The Clojure fallback parser is also top-level-aware, so nested `defn` forms inside wrappers such as `comment` are no longer indexed as real units.
+For Clojure retrieval, `impact_hints.related_tests` now also links nearby test files via namespace/import relationships, not only direct caller overlap. This keeps `related_tests` useful even when a test namespace exercises a sibling var instead of the exact selected var. The Clojure fallback parser is also top-level-aware, so nested `defn` forms inside wrappers such as `comment` are no longer indexed as real units. For multimethods, `defmethod` implementations now keep dispatch-aware unit identities internally, and retrieval can boost the correct implementation when the query text strongly hints at a dispatch case such as `pickup` or `delivery`, without changing the public query symbol shape. Custom macro calls can also contribute graph-level inherited caller edges for the vars they structurally inject, improving caller/callee precision for macro-heavy code.
 
 ## Offline Policy Governance CLI
 

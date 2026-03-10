@@ -197,6 +197,27 @@
           (seq import-filtered) (mapv :unit_id import-filtered)
           :else (mapv :unit_id owner-filtered))))))
 
+(defn- resolve-target-ids [caller token token-index units-by-id files-by-path]
+  (let [target-ids (->> (expand-call-token caller token)
+                        (mapcat #(get token-index % #{}))
+                        distinct
+                        vec)]
+    (narrow-targets caller target-ids token units-by-id files-by-path)))
+
+(defn- macro-unit? [u]
+  (= "defmacro" (:form_operator u)))
+
+(defn- inherited-macro-target-ids [resolved-target-ids token-index units-by-id files-by-path]
+  (->> resolved-target-ids
+       (map #(get units-by-id %))
+       (remove nil?)
+       (filter macro-unit?)
+       (mapcat (fn [macro-unit]
+                 (mapcat #(resolve-target-ids macro-unit % token-index units-by-id files-by-path)
+                         (:calls macro-unit))))
+       distinct
+       vec))
+
 (defn- build-callers-index [units files-by-path]
   (let [token-index (build-call-token-index units)
         units-by-id (into {} (map (juxt :unit_id identity) units))]
@@ -204,17 +225,15 @@
      (fn [acc caller]
        (reduce
         (fn [acc2 token]
-          (let [target-ids (->> (expand-call-token caller token)
-                                (mapcat #(get token-index % #{}))
-                                distinct
-                                vec)
-                narrowed (narrow-targets caller target-ids token units-by-id files-by-path)]
+          (let [direct-targets (resolve-target-ids caller token token-index units-by-id files-by-path)
+                inherited-targets (inherited-macro-target-ids direct-targets token-index units-by-id files-by-path)
+                all-targets (distinct (concat direct-targets inherited-targets))]
             (reduce (fn [a target-id]
                       (if (= target-id (:unit_id caller))
                         a
                         (update a target-id (fnil conj #{}) (:unit_id caller))))
                     acc2
-                    narrowed)))
+                    all-targets)))
         acc
         (:calls caller)))
      {}

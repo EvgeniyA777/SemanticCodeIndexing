@@ -324,12 +324,70 @@
         distinct
         vec)))
 
-(defn- usage-source-keys [usage]
-  (let [from-var (:from-var usage)
-        from-ns (some-> (:from usage) str)]
-    (cond-> #{}
-      from-var (conj (str from-var))
-      (and from-ns from-var) (conj (str from-ns "/" from-var)))))
+(declare short-hash usage->call-token)
+
+(defn- clj-qualified-symbol [ns-name raw-symbol]
+  (let [raw* (str raw-symbol)]
+    (if (and ns-name (not (str/includes? raw* "/")))
+      (str ns-name "/" raw*)
+      raw*)))
+
+(defn- clj-read-form [form-text]
+  (try
+    (binding [*read-eval* false]
+      (read-string form-text))
+    (catch Exception _
+      nil)))
+
+(defn- clj-dispatch-fragment [dispatch-value]
+  (some-> dispatch-value pr-str (str/replace #"\s+" " ") str/trim))
+
+(defn- clj-unit-from-form
+  [{:keys [path ns-name raw-symbol operator kind start-line end-line signature imports calls parser-mode]}
+   form-text]
+  (let [form (clj-read-form form-text)
+        operator* (or operator (some-> form first str))
+        kind* (or kind (clj-kind operator* path))
+        symbol (clj-qualified-symbol ns-name raw-symbol)
+        dispatch-value (when (= "defmethod" operator*)
+                         (some-> form (nth 2 nil) clj-dispatch-fragment))
+        unit-id (if dispatch-value
+                  (str path "::" symbol "$dispatch" (short-hash dispatch-value))
+                  (str path "::" symbol))
+        summary (str kind* " " symbol
+                     (when dispatch-value
+                       (str " dispatch " dispatch-value)))]
+    (cond-> {:unit_id unit-id
+             :kind kind*
+             :symbol symbol
+             :path path
+             :module ns-name
+             :form_operator operator*
+             :start_line start-line
+             :end_line end-line
+             :signature signature
+             :summary summary
+             :docstring_excerpt nil
+             :imports imports
+             :calls calls
+             :parser_mode parser-mode}
+      dispatch-value
+      (assoc :dispatch_value dispatch-value
+             :multimethod_symbol symbol))))
+
+(defn- usage-in-line-range? [usage start-line end-line]
+  (let [row (long (or (:row usage) (:name-row usage) 0))]
+    (and (pos? row)
+         (<= (long start-line) row (long end-line)))))
+
+(defn- clj-kondo-unit-calls [var-usages start-line end-line]
+  (->> var-usages
+       (filter #(usage-in-line-range? % start-line end-line))
+       (keep usage->call-token)
+       (remove #(contains? clj-call-stop %))
+       distinct
+       sort
+       vec))
 
 (defn- parse-clojure-regex [path lines]
   (let [line-count (count lines)
@@ -347,6 +405,7 @@
                             (when-let [[_ kw raw-sym] (re-find clj-def-re line)]
                               {:start-line (inc idx)
                                :kind (clj-kind kw path)
+                               :operator kw
                                :raw-symbol raw-sym
                                :signature (trim-signature line)})))))
         starts (mapv :start-line defs)
@@ -358,24 +417,19 @@
                           (let [start-line (:start-line d)
                                 body-lines (subvec lines (dec start-line) end-line)
                                 body (str/join "\n" body-lines)
-                                symbol (if ns-name
-                                         (if (str/includes? (:raw-symbol d) "/")
-                                           (:raw-symbol d)
-                                           (str ns-name "/" (:raw-symbol d)))
-                                         (:raw-symbol d))]
-                            {:unit_id (str path "::" symbol)
-                             :kind (:kind d)
-                             :symbol symbol
-                             :path path
-                             :module ns-name
-                             :start_line start-line
-                             :end_line end-line
-                             :signature (:signature d)
-                             :summary (str (:kind d) " " symbol)
-                             :docstring_excerpt nil
-                             :imports imports
-                             :calls (extract-clj-calls body alias-map)
-                             :parser_mode "fallback"})))
+                                form-text (str/join "\n" body-lines)]
+                            (clj-unit-from-form {:path path
+                                                 :ns-name ns-name
+                                                 :raw-symbol (:raw-symbol d)
+                                                 :operator (:operator d)
+                                                 :kind (:kind d)
+                                                 :start-line start-line
+                                                 :end-line end-line
+                                                 :signature (:signature d)
+                                                 :imports imports
+                                                 :calls (extract-clj-calls body alias-map)
+                                                 :parser-mode "fallback"}
+                                                form-text))))
                    vec)]
     {:language "clojure"
      :module ns-name
@@ -420,55 +474,44 @@
         {:keys [exit out err]} (sh/sh "clj-kondo" "--lint" abs "--cache" "false" "--config" config "--fail-level" "error")
         parsed (try (edn/read-string out) (catch Exception _ nil))
         analysis (:analysis parsed)
+        fallback (parse-clojure-regex path lines)
         var-defs (->> (:var-definitions analysis) (filter #(same-file? abs (:filename %))) vec)
         ns-usages (->> (:namespace-usages analysis) (filter #(same-file? abs (:filename %))) vec)
         var-usages (->> (:var-usages analysis) (filter #(same-file? abs (:filename %))) vec)
         imports (->> ns-usages (keep :to) (map str) distinct vec)
         test-target-modules (clj-test-target-modules (some-> var-defs first :ns str) imports path)
-        calls-by-var
-        (reduce (fn [acc u]
-                  (if-let [token (usage->call-token u)]
-                    (if (contains? clj-call-stop token)
-                      acc
-                      (reduce (fn [m source-key]
-                                (update m source-key (fnil conj #{}) token))
-                              acc
-                              (usage-source-keys u)))
-                    acc))
-                {}
-                var-usages)
-        units
+        primary-units
         (->> var-defs
              (map (fn [d]
                     (let [ns-name (str (:ns d))
                           nm (str (:name d))
-                          sym (str ns-name "/" nm)
                           kind (kondo-defined-kind (:defined-by d) path)
                           start (max 1 (int (or (:name-row d) (:row d) 1)))
-                          end (max start (int (or (:end-row d) start)))]
-                      {:unit_id (str path "::" sym)
-                       :kind kind
-                       :symbol sym
-                       :path path
-                       :module ns-name
-                       :start_line start
-                       :end_line end
-                       :signature (safe-line lines start)
-                       :summary (str kind " " sym)
-                       :docstring_excerpt nil
-                       :imports imports
-                       :calls (->> (concat (get calls-by-var sym #{})
-                                           (get calls-by-var nm #{}))
-                                   distinct
-                                   sort
-                                   vec)
-                       :parser_mode "full"})))
+                          end (max start (int (or (:end-row d) start)))
+                          form-text (str/join "\n" (subvec lines (dec start) end))]
+                      (clj-unit-from-form {:path path
+                                           :ns-name ns-name
+                                           :raw-symbol nm
+                                           :kind kind
+                                           :start-line start
+                                           :end-line end
+                                           :signature (safe-line lines start)
+                                           :imports imports
+                                           :calls (clj-kondo-unit-calls var-usages start end)
+                                           :parser-mode "full"}
+                                          form-text))))
              vec)
+        existing-unit-ids (set (map :unit_id primary-units))
+        supplemental-units (->> (:units fallback)
+                                (remove #(contains? existing-unit-ids (:unit_id %)))
+                                (map #(assoc % :parser_mode "full"))
+                                vec)
+        units (vec (concat primary-units supplemental-units))
         findings
         (->> (:findings parsed)
-             (filter #(and (same-file? abs (:filename %))
-                           (#{:error :warning} (:level %))))
-             (mapv (fn [f]
+            (filter #(and (same-file? abs (:filename %))
+                          (#{:error :warning} (:level %))))
+            (mapv (fn [f]
                      {:code (str "kondo_" (name (:type f)))
                       :summary (:message f)})))]
     (cond
@@ -482,8 +525,7 @@
        :parser_mode "full"}
 
       parsed
-      (let [fallback (parse-clojure-regex path lines)
-            extra (cond-> [{:code "kondo_no_units" :summary "clj-kondo returned no var definitions for file."}]
+      (let [extra (cond-> [{:code "kondo_no_units" :summary "clj-kondo returned no var definitions for file."}]
                     (seq err) (conj {:code "kondo_stderr"
                                      :summary (subs err 0 (min 220 (count err)))}))]
         (-> fallback
@@ -491,13 +533,12 @@
             (assoc :parser_mode "fallback")))
 
       :else
-      (let [fallback (parse-clojure-regex path lines)]
-        (-> fallback
-            (update :diagnostics into [{:code "kondo_parse_failed"
-                                        :summary "Unable to parse clj-kondo EDN output."}
-                                       {:code "kondo_exit"
-                                        :summary (str "clj-kondo exit=" exit)}])
-            (assoc :parser_mode "fallback"))))))
+      (-> fallback
+          (update :diagnostics into [{:code "kondo_parse_failed"
+                                      :summary "Unable to parse clj-kondo EDN output."}
+                                     {:code "kondo_exit"
+                                      :summary (str "clj-kondo exit=" exit)}])
+          (assoc :parser_mode "fallback")))))
 
 (defn- extract-top-level-list-ranges [ts-lines]
   (let [lists (->> ts-lines (filter #(= "list_lit" (:node-type %))) vec)]
@@ -565,22 +606,18 @@
                           vec)
                 units (->> defs
                            (map (fn [{:keys [start-line end-line operator raw-symbol calls]}]
-                                  (let [symbol (if (and ns-name (not (str/includes? raw-symbol "/")))
-                                                 (str ns-name "/" raw-symbol)
-                                                 raw-symbol)]
-                                    {:unit_id (str path "::" symbol)
-                                     :kind (clj-kind operator path)
-                                     :symbol symbol
-                                     :path path
-                                     :module ns-name
-                                     :start_line start-line
-                                     :end_line end-line
-                                     :signature (safe-line src-lines start-line)
-                                     :summary (str (clj-kind operator path) " " symbol)
-                                     :docstring_excerpt nil
-                                     :imports imports
-                                     :calls calls
-                                     :parser_mode "full"})))
+                                  (let [form-text (str/join "\n" (subvec src-lines (dec start-line) end-line))]
+                                    (clj-unit-from-form {:path path
+                                                         :ns-name ns-name
+                                                         :raw-symbol raw-symbol
+                                                         :operator operator
+                                                         :start-line start-line
+                                                         :end-line end-line
+                                                         :signature (safe-line src-lines start-line)
+                                                         :imports imports
+                                                         :calls calls
+                                                         :parser-mode "full"}
+                                                        form-text))))
                            vec)]
             (if (seq units)
               {:ok? true
