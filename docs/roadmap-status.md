@@ -32,7 +32,7 @@ Legend:
 - `[~]` Phase 3 TypeScript: compatibility and regression coverage exist, but no strategic deepening work
 - `[x]` Capabilities now drive per-language confidence ceilings and guardrails, and governed replay reports `confidence_ceiling_distribution`
 - `[x]` Phase 4 runtime and MCP hardening: snapshots, usage metrics, authz, tenant-aware correlation propagation, index lifecycle metadata, unified machine-readable error taxonomy, and SLO-facing metrics now exist on the main runtime surfaces
-- `[ ]` Phase 5 real self-improvement loop: automatic replay harvesting, query-to-outcome linking, difficult-case harvesting, and calibration reports against real feedback
+- `[~]` Phase 5 real self-improvement loop: replay harvesting from usage events and feedback, query-to-outcome linkage, difficult-case promotion into `protected_case`, calibration reports against real feedback, and weekly review artifacts now exist; the remaining tail is fuller automation and closed-loop operationalization
 
 ## Canonical References
 

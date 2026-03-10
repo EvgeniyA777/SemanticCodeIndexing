@@ -37,6 +37,8 @@ If `SCI_USAGE_METRICS_JDBC_URL` is configured, the server records:
 
 Those MCP usage events now align with the same normalized event shape used by the library and service edges, so downstream reporting can aggregate `library`, `http`, `grpc`, and `mcp` surfaces without custom per-surface adapters.
 
+That same normalized event shape now also feeds Phase 5 replay harvesting, calibration reporting, and weekly review artifacts, so MCP-originated `resolve_context` traces can contribute to automatically generated replay datasets and linked review summaries when query snapshots and feedback are present.
+
 If `SCI_MCP_POLICY_REGISTRY_FILE` is configured, newly created cached indexes inherit that registry and `resolve_context` accepts an optional `retrieval_policy` object for selector-based lookup.
 
 ## Recommended Client Description

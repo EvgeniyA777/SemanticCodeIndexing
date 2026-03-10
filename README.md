@@ -60,6 +60,9 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - Compare baseline vs candidate policy: `clojure -M:eval compare-policies --root . --dataset path/to/dataset.json --baseline-policy-file path/to/baseline.edn --candidate-policy-file path/to/candidate.edn --out "${TMPDIR:-.tmp}/sci-compare.json"`
 - Review all `shadow` policies against the current `active` policy and optionally persist review metadata into the registry: `clojure -M:eval shadow-review --root . --dataset path/to/dataset.json --registry path/to/policy-registry.edn --write-registry --out "${TMPDIR:-.tmp}/sci-shadow-review.json"`
 - Promote a registry-backed candidate policy if protected metrics do not regress: `clojure -M:eval promote-policy --root . --dataset path/to/dataset.json --registry path/to/policy-registry.edn --candidate-policy-id heuristic_v1_candidate --candidate-version 2026-03-11 --dry-run --out "${TMPDIR:-.tmp}/sci-promote.json"`
+- Harvest a replay dataset from recorded usage events and feedback: `clojure -M:eval harvest-replay-dataset --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-harvest.json"`
+- Build a calibration report from recorded usage events and feedback: `clojure -M:eval calibration-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-calibration.json"`
+- Build a weekly review artifact linking query, selected context, feedback, and outcome: `clojure -M:eval weekly-review-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-weekly-review.json"`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out "${TMPDIR:-.tmp}/sci.json"`
 - Run stdio MCP server: `SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" clojure -M:mcp`
 - Enable MCP usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:mcp`
@@ -132,6 +135,7 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - late raw-code escalation stage is implemented and controlled by query options/constraints
 - PostgreSQL persistence adapter stores snapshots plus unit/call-edge graph projections
 - optional usage metrics sinks capture normalized `library`, `http`, `grpc`, and `mcp` usage events plus structured feedback for relevance tracking
+- Phase 5 is now materially underway: `resolve_context` usage events retain query/outcome snapshots, replay datasets can be harvested automatically from usage metrics plus structured feedback, difficult cases become `protected_case`, real-feedback calibration reports are available, and weekly review artifacts can link `query -> selected context -> feedback -> outcome`
 - queryable graph access API is available via storage adapters (`query-units`, `query-callers`, `query-callees`)
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
 - HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file

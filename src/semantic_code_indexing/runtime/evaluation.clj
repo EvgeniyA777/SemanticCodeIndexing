@@ -435,6 +435,10 @@
           "--candidate-policy-file" (recur (assoc m :candidate_policy_path v) rest)
           "--candidate-policy-id" (recur (assoc m :candidate_policy_id v) rest)
           "--candidate-version" (recur (assoc m :candidate_version v) rest)
+          "--usage-metrics-jdbc-url" (recur (assoc m :usage_metrics_jdbc_url v) rest)
+          "--surface" (recur (assoc m :surface v) rest)
+          "--tenant-id" (recur (assoc m :tenant_id v) rest)
+          "--since" (recur (assoc m :since v) rest)
           "--out" (recur (assoc m :out_path v) rest)
           "--write-registry" (recur (assoc m :write_registry true) rest)
           "--dry-run" (recur (assoc m :dry_run true) rest)
@@ -553,6 +557,54 @@
     (print-or-write! out_path result*)
     (System/exit (if (:eligible? (:decision result*)) 0 1))))
 
+(defn- run-harvest-replay-dataset-command [{:keys [usage_metrics_jdbc_url surface tenant_id since out_path]}]
+  (let [jdbc-url (or usage_metrics_jdbc_url (System/getenv "SCI_USAGE_METRICS_JDBC_URL"))]
+    (when-not jdbc-url
+      (println "Usage: clojure -M:eval harvest-replay-dataset --usage-metrics-jdbc-url <jdbc-url> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--out <output.json>]")
+      (System/exit 1))
+    (let [metrics (sci/postgres-usage-metrics {:jdbc-url jdbc-url
+                                               :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                               :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+          result (sci/harvest-replay-dataset metrics
+                                             (cond-> {}
+                                               surface (assoc :surface surface)
+                                               tenant_id (assoc :tenant_id tenant_id)
+                                               since (assoc :since since)))]
+      (print-or-write! out_path result)
+      (System/exit 0))))
+
+(defn- run-calibration-report-command [{:keys [usage_metrics_jdbc_url surface tenant_id since out_path]}]
+  (let [jdbc-url (or usage_metrics_jdbc_url (System/getenv "SCI_USAGE_METRICS_JDBC_URL"))]
+    (when-not jdbc-url
+      (println "Usage: clojure -M:eval calibration-report --usage-metrics-jdbc-url <jdbc-url> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--out <output.json>]")
+      (System/exit 1))
+    (let [metrics (sci/postgres-usage-metrics {:jdbc-url jdbc-url
+                                               :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                               :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+          result (sci/calibration-report metrics
+                                         (cond-> {}
+                                           surface (assoc :surface surface)
+                                           tenant_id (assoc :tenant_id tenant_id)
+                                           since (assoc :since since)))]
+      (print-or-write! out_path result)
+      (System/exit 0))))
+
+(defn- run-weekly-review-report-command [{:keys [usage_metrics_jdbc_url surface tenant_id since out_path]}]
+  (let [jdbc-url (or usage_metrics_jdbc_url (System/getenv "SCI_USAGE_METRICS_JDBC_URL"))]
+    (when-not jdbc-url
+      (println "Usage: clojure -M:eval weekly-review-report --usage-metrics-jdbc-url <jdbc-url> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--out <output.json>]")
+      (System/exit 1))
+    (let [metrics (sci/postgres-usage-metrics {:jdbc-url jdbc-url
+                                               :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                               :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+          result (sci/weekly-review-report metrics
+                                           (cond-> {}
+                                             surface (assoc :surface surface)
+                                             tenant_id (assoc :tenant_id tenant_id)
+                                             since (assoc :since since)))]
+      (print-or-write! out_path result)
+      (System/exit 0))))
+
 (defn -main [& args]
   (let [[command & rest-args] args]
     (case command
@@ -560,4 +612,7 @@
       "compare-policies" (run-compare-policies-command (parse-args rest-args))
       "shadow-review" (run-shadow-review-command (parse-args rest-args))
       "promote-policy" (run-promote-policy-command (parse-args rest-args))
+      "harvest-replay-dataset" (run-harvest-replay-dataset-command (parse-args rest-args))
+      "calibration-report" (run-calibration-report-command (parse-args rest-args))
+      "weekly-review-report" (run-weekly-review-report-command (parse-args rest-args))
       (run-replay-command (parse-args args)))))

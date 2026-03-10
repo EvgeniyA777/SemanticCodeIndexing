@@ -197,7 +197,18 @@
                               :degradation_count (count (:degradations diagnostics))
                               :fallback_units (get-in diagnostics [:performance :parser_summary :fallback_units])
                               :policy_id (get-in diagnostics [:retrieval_policy :policy_id])
-                              :policy_version (get-in diagnostics [:retrieval_policy :version])}})))
+                              :policy_version (get-in diagnostics [:retrieval_policy :version])
+                              :query query
+                              :selected_unit_ids (mapv :unit_id (get-in packet [:relevant_units]))
+                              :selected_paths (->> (get-in packet [:relevant_units])
+                                                   (map :path)
+                                                   distinct
+                                                   vec)
+                              :top_authority_unit_ids (get-in diagnostics [:result :top_authority_targets])
+                              :outcome_summary {:confidence_level (get-in packet [:confidence :level])
+                                                :confidence_score (get-in packet [:confidence :score])
+                                                :result_status (get-in diagnostics [:result :result_status])
+                                                :autonomy_posture (:autonomy_posture guardrails)}}})))
          result)
        (catch Exception e
          (when (should-record-usage? sink opts)
@@ -328,6 +339,42 @@
    (usage/slo-report usage-metrics-sink))
   ([usage-metrics-sink opts]
    (usage/slo-report usage-metrics-sink opts)))
+
+(defn harvest-replay-dataset
+  "Build a replay dataset from recorded usage events and feedback.
+
+  Options:
+  - :surface optional usage surface filter
+  - :tenant_id optional tenant filter
+  - :since optional ISO timestamp lower bound"
+  ([usage-metrics-sink]
+   (usage/harvest-replay-dataset usage-metrics-sink))
+  ([usage-metrics-sink opts]
+   (usage/harvest-replay-dataset usage-metrics-sink opts)))
+
+(defn calibration-report
+  "Aggregate confidence calibration against recorded feedback outcomes.
+
+  Options:
+  - :surface optional usage surface filter
+  - :tenant_id optional tenant filter
+  - :since optional ISO timestamp lower bound"
+  ([usage-metrics-sink]
+   (usage/calibration-report usage-metrics-sink))
+  ([usage-metrics-sink opts]
+   (usage/calibration-report usage-metrics-sink opts)))
+
+(defn weekly-review-report
+  "Build a review-oriented artifact linking query, selected context, feedback, and outcome.
+
+  Options:
+  - :surface optional usage surface filter
+  - :tenant_id optional tenant filter
+  - :since optional ISO timestamp lower bound"
+  ([usage-metrics-sink]
+   (usage/weekly-review-report usage-metrics-sink))
+  ([usage-metrics-sink opts]
+   (usage/weekly-review-report usage-metrics-sink opts)))
 
 (defn record-feedback!
   "Record explicit host feedback for a prior retrieval flow.

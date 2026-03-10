@@ -433,6 +433,8 @@ PostgreSQL usage metrics persist:
 
 When HTTP/gRPC edges are started with `SCI_USAGE_METRICS_JDBC_URL`, those surfaces emit the same normalized usage events as library/MCP, including tenant and correlation fields from headers/metadata plus query `:trace` where applicable.
 
+`resolve-context` usage events now also retain a bounded query/outcome snapshot inside their payload, including the structured query, selected unit/path summaries, top-authority ids, and outcome summary. That snapshot is the foundation for Phase 5 replay harvesting.
+
 Current SLO-facing metrics include:
 
 - `index_latency_ms`
@@ -448,6 +450,106 @@ Optional filters:
 - `:operation`
 - `:tenant_id`
 - `:since`
+
+### Replay harvesting
+
+You can now build a replay dataset directly from usage events plus structured feedback.
+
+Library API:
+
+```clojure
+(sci/harvest-replay-dataset metrics)
+(sci/harvest-replay-dataset metrics {:surface "http"
+                                     :tenant_id "tenant-001"})
+```
+
+CLI:
+
+```bash
+clojure -M:eval harvest-replay-dataset \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --surface http \
+  --tenant-id tenant-001 \
+  --out "${TMPDIR:-.tmp}/sci-harvest.json"
+```
+
+Current harvested dataset behavior:
+
+- only `resolve_context` usage events are harvested
+- the original structured query is preserved under each dataset entry
+- feedback `ground_truth_unit_ids` and `ground_truth_paths` are translated into the existing `expected` replay shape
+- difficult or failed retrievals are automatically marked as `protected_case` when feedback or retrieval telemetry indicates a hard case (`not_helpful`, `abandoned`, major issue codes, degraded result, low confidence, or fallback-heavy retrieval)
+
+### Calibration reports
+
+You can also compute confidence calibration directly against real feedback outcomes.
+
+Library API:
+
+```clojure
+(sci/calibration-report metrics)
+(sci/calibration-report metrics {:surface "mcp"
+                                 :tenant_id "tenant-001"})
+```
+
+CLI:
+
+```bash
+clojure -M:eval calibration-report \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --surface mcp \
+  --tenant-id tenant-001 \
+  --out "${TMPDIR:-.tmp}/sci-calibration.json"
+```
+
+Current report shape includes:
+
+- `:totals.events`
+- `:totals.feedback_records`
+- `:totals.correlated_queries`
+- `:calibration.mean_absolute_error`
+- `:calibration.by_confidence_level`
+
+The current calibration logic correlates `resolve_context` usage events with explicit feedback by `trace_id` + `request_id` (or `session_id` + `task_id` fallback), then compares predicted confidence against observed feedback score bands derived from `helpful`, `partially_helpful`, `not_helpful`, and `abandoned`.
+
+### Weekly review artifacts
+
+You can also build a review-oriented artifact that links the full lifecycle of a retrieval case.
+
+Library API:
+
+```clojure
+(sci/weekly-review-report metrics)
+(sci/weekly-review-report metrics {:surface "grpc"
+                                   :tenant_id "tenant-001"})
+```
+
+CLI:
+
+```bash
+clojure -M:eval weekly-review-report \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --surface grpc \
+  --tenant-id tenant-001 \
+  --out "${TMPDIR:-.tmp}/sci-weekly-review.json"
+```
+
+Current report shape includes:
+
+- `:summary.total_queries`
+- `:summary.correlated_queries`
+- `:summary.protected_cases`
+- `:summary.feedback_outcome_counts`
+- `:calibration`
+- `:entries`
+
+Each entry currently links:
+
+- the original structured `query`
+- `selected_context` (`selected_unit_ids`, `selected_paths`, `top_authority_unit_ids`)
+- explicit `feedback` (`feedback_outcomes`, issue codes, ground truth ids/paths)
+- `outcome_summary`
+- `protected_case`
 
 ## Offline Replay Evaluation
 

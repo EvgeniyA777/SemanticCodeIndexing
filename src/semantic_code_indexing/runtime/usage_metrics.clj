@@ -12,6 +12,8 @@
   (record-feedback! [sink feedback])
   (flush-usage-metrics! [sink]))
 
+(declare parse-iso-instant correlation-key)
+
 (defn- now-iso []
   (str (Instant/now)))
 
@@ -125,6 +127,15 @@
   (if (instance? InMemoryUsageMetrics sink)
     (:feedback @(:state sink))
     []))
+
+(defn- feedback-matches? [feedback {:keys [surface operation tenant_id since]}]
+  (and (if surface (= surface (:surface feedback)) true)
+       (if operation (= operation (:operation feedback)) true)
+       (if tenant_id (= tenant_id (:tenant_id feedback)) true)
+       (if since
+         (not (.isBefore (parse-iso-instant (:occurred_at feedback))
+                         (parse-iso-instant since)))
+         true)))
 
 (defn- parse-json [v]
   (cond
@@ -460,6 +471,52 @@
                    :raw_fetch_level (or (:semantic_usage_events/raw_fetch_level row) (:raw_fetch_level row))
                    :payload (parse-json (or (:semantic_usage_events/payload row) (:payload row)))}))))))
 
+(defn- postgres-feedback [sink opts]
+  (let [ds (:datasource sink)
+        {:keys [surface operation tenant_id since]} opts
+        sql (str "select occurred_at, surface, operation, trace_id, request_id, session_id,
+                         task_id, actor_id, tenant_id, root_path_hash, feedback_outcome,
+                         feedback_reason, followup_action, confidence_level,
+                         retrieval_issue_codes, ground_truth_unit_ids, ground_truth_paths, payload
+                  from semantic_usage_feedback
+                  where 1=1"
+                 (when surface " and surface = ?")
+                 (when operation " and operation = ?")
+                 (when tenant_id " and tenant_id = ?")
+                 (when since " and occurred_at >= cast(? as timestamptz)")
+                 " order by occurred_at asc")
+        params (cond-> [sql]
+                 surface (conj surface)
+                 operation (conj operation)
+                 tenant_id (conj tenant_id)
+                 since (conj since))]
+    (init-usage-metrics! sink)
+    (->> (jdbc/execute! ds params)
+         (mapv (fn [row]
+                 (normalize-feedback
+                  {:occurred_at (str (or (:semantic_usage_feedback/occurred_at row)
+                                         (:occurred_at row)))
+                   :surface (or (:semantic_usage_feedback/surface row) (:surface row))
+                   :operation (or (:semantic_usage_feedback/operation row) (:operation row))
+                   :trace_id (or (:semantic_usage_feedback/trace_id row) (:trace_id row))
+                   :request_id (or (:semantic_usage_feedback/request_id row) (:request_id row))
+                   :session_id (or (:semantic_usage_feedback/session_id row) (:session_id row))
+                   :task_id (or (:semantic_usage_feedback/task_id row) (:task_id row))
+                   :actor_id (or (:semantic_usage_feedback/actor_id row) (:actor_id row))
+                   :tenant_id (or (:semantic_usage_feedback/tenant_id row) (:tenant_id row))
+                   :root_path_hash (or (:semantic_usage_feedback/root_path_hash row) (:root_path_hash row))
+                   :feedback_outcome (or (:semantic_usage_feedback/feedback_outcome row) (:feedback_outcome row))
+                   :feedback_reason (or (:semantic_usage_feedback/feedback_reason row) (:feedback_reason row))
+                   :followup_action (or (:semantic_usage_feedback/followup_action row) (:followup_action row))
+                   :confidence_level (or (:semantic_usage_feedback/confidence_level row) (:confidence_level row))
+                   :retrieval_issue_codes (parse-json (or (:semantic_usage_feedback/retrieval_issue_codes row)
+                                                          (:retrieval_issue_codes row)))
+                   :ground_truth_unit_ids (parse-json (or (:semantic_usage_feedback/ground_truth_unit_ids row)
+                                                          (:ground_truth_unit_ids row)))
+                   :ground_truth_paths (parse-json (or (:semantic_usage_feedback/ground_truth_paths row)
+                                                       (:ground_truth_paths row)))
+                   :payload (parse-json (or (:semantic_usage_feedback/payload row) (:payload row)))}))))))
+
 (defn- sink-events [sink opts]
   (cond
     (instance? InMemoryUsageMetrics sink)
@@ -469,6 +526,18 @@
 
     (instance? PostgresUsageMetrics sink)
     (postgres-events sink opts)
+
+    :else []))
+
+(defn- sink-feedback [sink opts]
+  (cond
+    (instance? InMemoryUsageMetrics sink)
+    (->> (emitted-feedback sink)
+         (filter #(feedback-matches? % opts))
+         vec)
+
+    (instance? PostgresUsageMetrics sink)
+    (postgres-feedback sink opts)
 
     :else []))
 
@@ -511,6 +580,81 @@
        frequencies
        (into (sorted-map))))
 
+(def ^:private calibration-feedback-score
+  {"helpful" 1.0
+   "partially_helpful" 0.5
+   "not_helpful" 0.0
+   "abandoned" 0.0})
+
+(def ^:private confidence-level-score
+  {"high" 0.9
+   "medium" 0.65
+   "low" 0.35})
+
+(defn- predicted-confidence [event]
+  (or (get-in event [:payload :outcome_summary :confidence_score])
+      (get confidence-level-score (:confidence_level event) 0.0)))
+
+(defn- observed-feedback-score [feedback-records]
+  (let [scores (->> feedback-records
+                    (keep #(get calibration-feedback-score (:feedback_outcome %)))
+                    vec)]
+    (if (seq scores)
+      (/ (reduce + 0.0 scores) (double (count scores)))
+      nil)))
+
+(defn- calibration-rows [events feedback]
+  (let [feedback-by-key (reduce (fn [acc record]
+                                  (if-let [k (correlation-key record)]
+                                    (update acc k (fnil conj []) record)
+                                    acc))
+                                {}
+                                feedback)]
+    (->> events
+         (keep (fn [event]
+                 (let [records (get feedback-by-key (correlation-key event) [])
+                       observed (observed-feedback-score records)]
+                   (when (some? observed)
+                     {:confidence_level (:confidence_level event)
+                      :predicted (double (predicted-confidence event))
+                      :observed observed
+                      :feedback_outcomes (->> records (map :feedback_outcome) distinct vec)
+                      :retrieval_issue_codes (->> records (mapcat :retrieval_issue_codes) distinct vec)}))))
+         vec)))
+
+(defn- calibration-summary [rows]
+  (let [rows* (vec rows)
+        total (count rows*)
+        overall-mae (if (seq rows*)
+                      (/ (reduce + 0.0 (map (fn [{:keys [predicted observed]}]
+                                              (Math/abs (- predicted observed)))
+                                            rows*))
+                         (double total))
+                      0.0)
+        by-level (->> rows*
+                      (group-by :confidence_level)
+                      (reduce-kv
+                       (fn [acc level group-rows]
+                         (let [group* (vec group-rows)
+                               count* (count group*)
+                               predicted-mean (/ (reduce + 0.0 (map :predicted group*)) (double count*))
+                               observed-mean (/ (reduce + 0.0 (map :observed group*)) (double count*))
+                               mae (/ (reduce + 0.0
+                                               (map (fn [{:keys [predicted observed]}]
+                                                      (Math/abs (- predicted observed)))
+                                                    group*))
+                                      (double count*))]
+                           (assoc acc level
+                                  {:count count*
+                                   :mean_predicted_confidence predicted-mean
+                                   :observed_feedback_score observed-mean
+                                   :mean_absolute_error mae})))
+                       {})
+                      (into (sorted-map)))]
+    {:total_correlated_queries total
+     :mean_absolute_error overall-mae
+     :by_confidence_level by-level}))
+
 (defn slo-report
   ([sink]
    (slo-report sink {}))
@@ -544,3 +688,175 @@
       :degraded_rate (rate degraded-count (count retrieval-events))
       :fallback_rate (rate fallback-count (count retrieval-events))
       :policy_version_distribution (policy-version-distribution retrieval-events)})))
+
+(defn- correlation-key [record]
+  (cond
+    (and (seq (:trace_id record)) (seq (:request_id record)))
+    [:trace-request (:trace_id record) (:request_id record)]
+
+    (and (seq (:session_id record)) (seq (:task_id record)))
+    [:session-task (:session_id record) (:task_id record)]
+
+    :else nil))
+
+(def ^:private difficult-feedback-outcomes #{"not_helpful" "abandoned"})
+(def ^:private difficult-issue-codes
+  #{"missing_authority" "wrong_scope" "too_broad" "too_shallow" "confidence_miscalibrated"})
+
+(defn- difficult-case? [event feedback-records]
+  (let [feedbacks (vec feedback-records)
+        issue-codes (set (mapcat :retrieval_issue_codes feedbacks))
+        fallback-units (long (or (get-in event [:payload :fallback_units]) 0))]
+    (or (some #(contains? difficult-feedback-outcomes (:feedback_outcome %)) feedbacks)
+        (some difficult-issue-codes issue-codes)
+        (= "low" (:confidence_level event))
+        (= "degraded" (:result_status event))
+        (pos? fallback-units))))
+
+(defn- harvest-expected [feedback-records]
+  (let [feedbacks (vec feedback-records)
+        unit-ids (->> feedbacks (mapcat :ground_truth_unit_ids) distinct vec)
+        paths (->> feedbacks (mapcat :ground_truth_paths) distinct vec)]
+    (cond-> {}
+      (seq unit-ids) (assoc :top_authority_unit_ids unit-ids)
+      (seq paths) (assoc :required_paths paths))))
+
+(defn- harvest-query-entry [event feedback-records]
+  (let [payload (:payload event)
+        query (:query payload)
+        expected (harvest-expected feedback-records)
+        protected? (difficult-case? event feedback-records)]
+    (when (map? query)
+      {:query_id (or (:request_id event) (:event_id event))
+       :protected_case protected?
+       :query query
+       :expected expected
+       :harvest {:surface (:surface event)
+                 :event_id (:event_id event)
+                 :occurred_at (:occurred_at event)
+                 :trace_id (:trace_id event)
+                 :request_id (:request_id event)
+                 :session_id (:session_id event)
+                 :task_id (:task_id event)
+                 :actor_id (:actor_id event)
+                 :tenant_id (:tenant_id event)
+                 :feedback_outcomes (->> feedback-records (map :feedback_outcome) distinct vec)
+                 :retrieval_issue_codes (->> feedback-records (mapcat :retrieval_issue_codes) distinct vec)
+                 :selected_unit_ids (:selected_unit_ids payload)
+                 :selected_paths (:selected_paths payload)
+                 :top_authority_unit_ids (:top_authority_unit_ids payload)
+                 :outcome_summary (:outcome_summary payload)}})))
+
+(defn harvest-replay-dataset
+  ([sink]
+   (harvest-replay-dataset sink {}))
+  ([sink opts]
+   (let [event-opts (assoc opts :operation "resolve_context")
+         events (->> (sink-events sink event-opts)
+                     (filter #(= "success" (:status %)))
+                     vec)
+         feedback (sink-feedback sink event-opts)
+         feedback-by-key (reduce (fn [acc record]
+                                   (if-let [k (correlation-key record)]
+                                     (update acc k (fnil conj []) record)
+                                     acc))
+                                 {}
+                                 feedback)
+         queries (->> events
+                      (keep (fn [event]
+                              (let [feedback-records (get feedback-by-key (correlation-key event) [])]
+                                (harvest-query-entry event feedback-records))))
+                      vec)]
+     {:schema_version "1.0"
+      :generated_at (now-iso)
+      :source_summary {:surface (:surface opts)
+                       :tenant_id (:tenant_id opts)
+                       :since (:since opts)
+                       :total_events (count events)
+                       :total_feedback (count feedback)
+                       :harvested_queries (count queries)
+                       :protected_cases (count (filter :protected_case queries))}
+      :queries queries})))
+
+(defn calibration-report
+  ([sink]
+   (calibration-report sink {}))
+  ([sink opts]
+   (let [event-opts (assoc opts :operation "resolve_context")
+         events (->> (sink-events sink event-opts)
+                     (filter #(= "success" (:status %)))
+                     vec)
+         feedback (sink-feedback sink event-opts)
+         rows (calibration-rows events feedback)]
+     {:scope {:surface (:surface opts)
+              :tenant_id (:tenant_id opts)
+              :since (:since opts)}
+      :totals {:events (count events)
+               :feedback_records (count feedback)
+               :correlated_queries (count rows)}
+      :calibration (calibration-summary rows)})))
+
+(defn- feedback-summary [feedback-records]
+  {:feedback_outcomes (->> feedback-records (map :feedback_outcome) distinct vec)
+   :retrieval_issue_codes (->> feedback-records (mapcat :retrieval_issue_codes) distinct vec)
+   :ground_truth_unit_ids (->> feedback-records (mapcat :ground_truth_unit_ids) distinct vec)
+   :ground_truth_paths (->> feedback-records (mapcat :ground_truth_paths) distinct vec)})
+
+(defn- weekly-review-entry [event feedback-records]
+  (let [payload (:payload event)
+        query (:query payload)
+        feedback* (vec feedback-records)]
+    (when (map? query)
+      {:query_id (or (:request_id event) (:event_id event))
+       :protected_case (difficult-case? event feedback*)
+       :trace {:trace_id (:trace_id event)
+               :request_id (:request_id event)
+               :session_id (:session_id event)
+               :task_id (:task_id event)
+               :actor_id (:actor_id event)
+               :tenant_id (:tenant_id event)}
+       :query query
+       :selected_context {:selected_unit_ids (:selected_unit_ids payload)
+                          :selected_paths (:selected_paths payload)
+                          :top_authority_unit_ids (:top_authority_unit_ids payload)}
+       :feedback (feedback-summary feedback*)
+       :outcome_summary (:outcome_summary payload)})))
+
+(defn weekly-review-report
+  ([sink]
+   (weekly-review-report sink {}))
+  ([sink opts]
+   (let [event-opts (assoc opts :operation "resolve_context")
+         events (->> (sink-events sink event-opts)
+                     (filter #(= "success" (:status %)))
+                     vec)
+         feedback (sink-feedback sink event-opts)
+         feedback-by-key (reduce (fn [acc record]
+                                   (if-let [k (correlation-key record)]
+                                     (update acc k (fnil conj []) record)
+                                     acc))
+                                 {}
+                                 feedback)
+         entries (->> events
+                      (keep (fn [event]
+                              (weekly-review-entry event
+                                                   (get feedback-by-key (correlation-key event) []))))
+                      vec)
+         correlated (count (filter #(seq (get-in % [:feedback :feedback_outcomes])) entries))
+         protected (count (filter :protected_case entries))
+         outcome-counts (->> entries
+                             (mapcat #(get-in % [:feedback :feedback_outcomes]))
+                             frequencies
+                             (into (sorted-map)))
+         calibration (calibration-summary (calibration-rows events feedback))]
+     {:schema_version "1.0"
+      :generated_at (now-iso)
+      :scope {:surface (:surface opts)
+              :tenant_id (:tenant_id opts)
+              :since (:since opts)}
+      :summary {:total_queries (count entries)
+                :correlated_queries correlated
+                :protected_cases protected
+                :feedback_outcome_counts outcome-counts}
+      :calibration calibration
+      :entries entries})))
