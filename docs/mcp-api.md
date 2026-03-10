@@ -5,7 +5,7 @@
 ## Start
 
 ```bash
-SCI_MCP_ALLOWED_ROOTS=/abs/repo-a:/abs/repo-b \
+SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" \
 clojure -M:mcp
 ```
 

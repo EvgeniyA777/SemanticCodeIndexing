@@ -65,7 +65,7 @@
    "Current default:\n"
    "   SCI_MCP_ALLOWED_ROOTS=" cwd " clojure -M:mcp\n"
    "Explicit custom root:\n"
-   "   SCI_MCP_ALLOWED_ROOTS=/abs/path/to/repo clojure -M:mcp\n"
+   "   SCI_MCP_ALLOWED_ROOTS=<repo-root> clojure -M:mcp\n"
    "CLI override:\n"
    "   clojure -M:mcp --allowed-roots " cwd "\n"
    "\n"

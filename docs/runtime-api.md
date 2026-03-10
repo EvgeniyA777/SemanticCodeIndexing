@@ -56,9 +56,9 @@ Tree-sitter extraction path (optional):
                 :java_engine :tree-sitter
                 :typescript_engine :tree-sitter
                 :tree_sitter_enabled true
-                :tree_sitter_grammars {:clojure "/opt/grammars/tree-sitter-clojure"
-                                       :java "/opt/grammars/tree-sitter-java"
-                                       :typescript "/opt/grammars/tree-sitter-typescript/typescript"}}})
+                :tree_sitter_grammars {:clojure ".tree-sitter-grammars/tree-sitter-clojure"
+                                       :java ".tree-sitter-grammars/tree-sitter-java"
+                                       :typescript ".tree-sitter-grammars/tree-sitter-typescript/typescript"}}})
 ```
 
 Bootstrap pinned grammar checkouts under `.tree-sitter-grammars/`:
@@ -216,13 +216,13 @@ Use CLI alias to run query directly from JSON:
 clojure -M:runtime \
   --root . \
   --query contracts/examples/queries/symbol-target.json \
-  --out /tmp/sci.json
+  --out "${TMPDIR:-.tmp}/sci.json"
 ```
 
 Smoke helper:
 
 ```bash
-./scripts/run-mvp-smoke.sh . contracts/examples/queries/symbol-target.json /tmp/sci-smoke.json
+./scripts/run-mvp-smoke.sh . contracts/examples/queries/symbol-target.json "${TMPDIR:-.tmp}/sci-smoke.json"
 ```
 
 ## Minimal HTTP Edge
@@ -282,7 +282,7 @@ Optional host-integrated authz policy:
 
 ```clojure
 {:tenants
- {"tenant-001" {:allowed_roots ["/abs/path/to/repo-a"]
+ {"tenant-001" {:allowed_roots ["<repo-a-root>"]
                 :allowed_path_prefixes ["src/my/app" "test/my/app"]}}}
 ```
 

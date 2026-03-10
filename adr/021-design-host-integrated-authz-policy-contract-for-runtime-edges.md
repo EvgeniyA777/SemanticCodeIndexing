@@ -35,7 +35,7 @@ Introduce a pluggable authorization contract at the HTTP/gRPC edge:
 
 ```clojure
 {:tenants
- {"tenant-001" {:allowed_roots ["/abs/path/to/repo-a"]
+ {"tenant-001" {:allowed_roots ["<repo-a-root>"]
                 :allowed_path_prefixes ["src/my/app" "test/my/app"]}}}
 ```
 
