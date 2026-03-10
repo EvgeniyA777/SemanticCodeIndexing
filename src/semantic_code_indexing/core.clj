@@ -1,5 +1,6 @@
 (ns semantic-code-indexing.core
   (:require [semantic-code-indexing.runtime.index :as idx]
+            [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.retrieval :as retrieval]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.runtime.storage :as storage]
@@ -38,8 +39,7 @@
    :actor_id (get-in query [:trace :actor_id])})
 
 (defn- error-payload [e]
-  {:error_class (.getName (class e))
-   :error_message (.getMessage e)})
+  (errors/usage-error-payload e))
 
 (defn create-index
   "Create a new in-memory index from a repository root.
@@ -82,7 +82,7 @@
                    :payload (merge {:load_latest (boolean (:load_latest opts))
                                     :paths_count (count (:paths opts))}
                                    (error-payload e))})))
-        (throw e)))))
+        (throw (errors/normalize-exception e))))))
 
 (defn update-index
   "Incrementally update index with changed paths.
@@ -121,7 +121,7 @@
                    :root_path_hash (usage/hash-root-path (:root_path index))
                    :payload (merge {:changed_paths_count (count (:changed_paths opts))}
                                    (error-payload e))})))
-        (throw e)))))
+        (throw (errors/normalize-exception e))))))
 
 (defn repo-map
   "Return compact repository map from current index." 
@@ -157,7 +157,7 @@
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload (error-payload e)})))
-         (throw e))))))
+         (throw (errors/normalize-exception e)))))))
 
 (defn resolve-context
   "Resolve context packet, diagnostics trace and stage events for a retrieval query."
@@ -193,7 +193,8 @@
                               :warning_count (count (:warnings diagnostics))
                               :degradation_count (count (:degradations diagnostics))
                               :fallback_units (get-in diagnostics [:performance :parser_summary :fallback_units])
-                              :policy_id (get-in diagnostics [:retrieval_policy :policy_id])}})))
+                              :policy_id (get-in diagnostics [:retrieval_policy :policy_id])
+                              :policy_version (get-in diagnostics [:retrieval_policy :version])}})))
          result)
        (catch Exception e
          (when (should-record-usage? sink opts)
@@ -206,7 +207,7 @@
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload (error-payload e)})))
-         (throw e))))))
+         (throw (errors/normalize-exception e)))))))
 
 (defn impact-analysis
   "Return impact hints for the same retrieval query semantics used by resolve-context."
@@ -243,7 +244,7 @@
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload (error-payload e)})))
-         (throw e))))))
+         (throw (errors/normalize-exception e)))))))
 
 (defn skeletons
   "Return skeletons for selected units/paths.
@@ -281,7 +282,7 @@
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload (error-payload e)})))
-         (throw e))))))
+         (throw (errors/normalize-exception e)))))))
 
 (defn in-memory-storage
   "Create in-memory storage adapter for index snapshots."
@@ -311,6 +312,19 @@
   "Create PostgreSQL-backed usage metrics sink."
   [opts]
   (usage/postgres-usage-metrics opts))
+
+(defn slo-report
+  "Aggregate SLO-facing operational metrics from a usage metrics sink.
+
+  Options:
+  - :surface optional usage surface filter
+  - :operation optional operation filter
+  - :tenant_id optional tenant filter
+  - :since optional ISO timestamp lower bound"
+  ([usage-metrics-sink]
+   (usage/slo-report usage-metrics-sink))
+  ([usage-metrics-sink opts]
+   (usage/slo-report usage-metrics-sink opts)))
 
 (defn record-feedback!
   "Record explicit host feedback for a prior retrieval flow.

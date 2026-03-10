@@ -4,6 +4,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [semantic-code-indexing.core :as sci]
+            [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.runtime.usage-metrics :as usage])
   (:import [java.io ByteArrayOutputStream InputStream OutputStream PushbackInputStream]
@@ -218,6 +219,7 @@
     {:index_id (:index_id entry)
      :snapshot_id (:snapshot_id index)
      :indexed_at (:indexed_at index)
+     :index_lifecycle (:index_lifecycle index)
      :root_path (:root_path entry)
      :file_count (count (:files index))
      :unit_count (count (:units index))
@@ -380,7 +382,9 @@
                     :warning_count (count (get-in result [:diagnostics_trace :warnings]))
                     :degradation_count (count (get-in result [:diagnostics_trace :degradations]))
                     :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])
-                    :policy_id (get-in result [:diagnostics_trace :retrieval_policy :policy_id])}})))))
+                    :fallback_units (get-in result [:diagnostics_trace :performance :parser_summary :fallback_units])
+                    :policy_id (get-in result [:diagnostics_trace :retrieval_policy :policy_id])
+                    :policy_version (get-in result [:diagnostics_trace :retrieval_policy :version])}})))))
 
 (defn- tool-impact-analysis [state args]
   (when-not (map? args)
@@ -485,15 +489,9 @@
    :isError true})
 
 (defn- exception->tool-result [e]
-  (let [data (ex-data e)
-        error-code (case (:type data)
-                     :invalid_request "invalid_request"
-                     :forbidden_root "forbidden_root"
-                     :index_not_found "index_not_found"
-                     "internal_error")
-        message (or (:message data) (.getMessage e) "internal error")
-        details (cond-> {:code error-code}
-                  (:details data) (assoc :details (:details data)))]
+  (let [info (errors/error-info e)
+        message (:message info)
+        details (errors/mcp-error-details e)]
     (tool-error message details)))
 
 (defn- headers-complete? [^bytes bytes]
@@ -664,8 +662,7 @@
                    :status "error"
                    :latency_ms (- (now-ms) started-at)
                    :root_path_hash (some-> (:root_path arguments) usage/hash-root-path)
-                   :payload {:error_class (.getName (class e))
-                             :error_message (.getMessage e)}}))
+                   :payload (errors/usage-error-payload e)}))
           (exception->tool-result e)))
       (do
         (record-mcp-event!
@@ -677,6 +674,7 @@
                     :tool_name tool-name}})
         (tool-error "unknown tool"
                     {:code "unknown_tool"
+                     :category "client"
                      :details {:name tool-name}})))))
 
 (defn- handle-message! [state ^OutputStream output-stream transport-format message]

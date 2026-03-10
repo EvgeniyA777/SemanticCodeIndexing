@@ -172,6 +172,14 @@
        (take 10)
        vec))
 
+(defn- capability-units [selected]
+  (let [focused (->> selected
+                     (filter #(contains? #{"top_authority" "useful_support"} (:rank_band %)))
+                     vec)]
+    (if (seq focused)
+      focused
+      selected)))
+
 (defn- build-impact-hints [index selected]
   (let [selected-ids (set (map :unit_id selected))
         callers (->> selected
@@ -256,23 +264,44 @@
      :warnings (vec (take 10 warnings))
      :missing_evidence (vec (take 10 missing))}))
 
+(defn- apply-capability-ceiling [confidence capabilities policy]
+  (let [current-level (:level confidence "low")
+        ceiling (get capabilities :confidence_ceiling "low")
+        capped-level (rp/min-confidence-level current-level ceiling)
+        capped? (not= capped-level current-level)]
+    (cond-> (assoc confidence
+                   :level capped-level
+                   :score (rp/confidence-score policy capped-level))
+      capped?
+      (-> (update :warnings conj (coded "capability_ceiling" "Language-semantic capability ceiling lowered retrieval confidence."))
+          (update :missing_evidence conj (coded "language_strength_limited" "Selected language support does not justify a higher confidence ceiling."))))))
+
 (defn- build-guardrails [confidence impact query policy capabilities]
   (let [level (:level confidence)
         broad-impact? (> (count (:risky_neighbors impact))
                          (rp/threshold policy :broad_impact_neighbor_threshold))
         raw-level (get-in query [:constraints :max_raw_code_level] "enclosing_unit")
         coverage-level (:coverage_level capabilities)
+        capability-ceiling (:confidence_ceiling capabilities)
+        capability-limited? (not= capability-ceiling "high")
+        freshness (get-in query [:constraints :freshness] "current_snapshot")
+        stale-index? (true? (:index_stale capabilities))
         posture (case level
                   "high" "draft_patch_safe"
                   "medium" "plan_safe"
                   "autonomy_blocked")
-        posture* (if (= coverage-level "fallback_only") "autonomy_blocked" posture)
+        posture* (cond
+                   stale-index? "autonomy_blocked"
+                   (= coverage-level "fallback_only") "autonomy_blocked"
+                   :else posture)
         blocked? (= posture* "autonomy_blocked")]
     {:schema_version "1.0"
      :autonomy_posture posture*
      :blocking_reasons (cond-> []
-                         blocked? (conj (coded "confidence_low" "Confidence level is low for autonomous drafting."))
+                         (and blocked? (= level "low")) (conj (coded "confidence_low" "Confidence level is low for autonomous drafting."))
+                         (and stale-index? (= freshness "current_snapshot")) (conj (coded "stale_index" "Selected index snapshot is stale for current-snapshot freshness requirements."))
                          (= coverage-level "fallback_only") (conj (coded "capability_low" "Selected evidence comes only from fallback parser coverage."))
+                         (and blocked? capability-limited?) (conj (coded "capability_ceiling" "Language-semantic capability ceiling blocks autonomous drafting."))
                          broad-impact? (conj (coded "impact_broad" "Impact surface appears broad and needs review.")))
      :required_next_steps (case posture*
                             "draft_patch_safe" [(coded "run_targeted_tests" "Run nearest tests before any apply path.")]
@@ -286,8 +315,10 @@
                             :allow_apply_without_human_review false
                             :max_raw_code_level raw-level}
      :risk_flags (cond-> []
+                   stale-index? (conj (coded "stale_index" "Selected snapshot is stale and should be reviewed or rebuilt."))
                    broad-impact? (conj (coded "impact_broad" "Riskiest neighbors exceed safe localized threshold."))
                    (= coverage-level "fallback_only") (conj (coded "capability_low" "Fallback-only evidence requires review."))
+                   capability-limited? (conj (coded "capability_ceiling" "Language-semantic capability ceiling limits downstream autonomy."))
                    blocked? (conj (coded "review_gate" "Host override + review required for risky action.")))}))
 
 (defn- build-stage [name status summary counters warnings degradations duration-ms]
@@ -453,7 +484,7 @@
          truncation (cond-> [] (> estimated requested) (conj "budget_restricted"))
          budget {:requested_tokens requested :estimated_tokens estimated :truncation_flags truncation}
          impact (build-impact-hints index selected)
-         capabilities (rp/capability-summary index selected)
+         capabilities (rp/capability-summary index (capability-units selected))
          base-confidence (build-confidence selected query policy)
          raw-fetch (perform-raw-fetch index selected query requested)
          fallback-selected? (some #(= "parser_fallback" (:code %)) (:warnings base-confidence))
@@ -473,8 +504,10 @@
                             (update :reasons conj (coded "raw_fetch_disambiguated" "Raw-code spans reduced ambiguity for low-confidence retrieval.")))
                         confidence-a)
          confidence (-> confidence-b
+                        (apply-capability-ceiling capabilities policy)
                         (update :reasons #(vec (take 10 %)))
-                        (update :warnings #(vec (take 10 %))))
+                        (update :warnings #(vec (take 10 %)))
+                        (update :missing_evidence #(vec (take 10 %))))
          guardrails (build-guardrails confidence impact query policy capabilities)
          focus-paths (->> selected (map :path) distinct (take 20) vec)
          focus-modules (->> selected (map :module) (remove nil?) distinct (take 20) vec)

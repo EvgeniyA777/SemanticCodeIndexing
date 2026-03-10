@@ -4,6 +4,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [semantic-code-indexing.runtime.authz :as authz]
+            [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.core :as sci])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
@@ -47,8 +48,8 @@
       (try
         (f exchange)
         (catch Exception e
-          (write-json! exchange 500 {:error "internal_error"
-                                     :message (.getMessage e)}))))))
+          (let [{:keys [status body]} (errors/http-error-body e)]
+            (write-json! exchange status body)))))))
 
 
 (defn- post-request? [^HttpExchange exchange]
@@ -63,37 +64,27 @@
     (cond
       (and (seq api_key) (not= api_key provided-api-key))
       {:ok? false
-       :status 401
-       :body {:error "unauthorized"
-              :message "missing or invalid x-api-key"}}
+       :error (errors/http-error-body {:type :unauthorized
+                                       :message "missing or invalid x-api-key"})}
 
       (and require_tenant (str/blank? tenant-id))
       {:ok? false
-       :status 400
-       :body {:error "invalid_request"
-              :message "x-tenant-id is required"}}
+       :error (errors/http-error-body {:type :invalid_request
+                                       :message "x-tenant-id is required"})}
 
       :else
       {:ok? true :tenant_id tenant-id})))
 
 (defn- enforce-authorized! [^HttpExchange exchange auth-config]
-  (let [{:keys [ok? status body] :as auth} (authorize-request exchange auth-config)]
+  (let [{:keys [ok? error] :as auth} (authorize-request exchange auth-config)]
     (if ok?
       auth
-      (do (write-json! exchange status body)
+      (do (write-json! exchange (:status error) (:body error))
           nil))))
 
 (defn- authz-denial->http [{:keys [code message]}]
-  (case code
-    :invalid_request {:status 400
-                      :body {:error "invalid_request"
-                             :message (or message "invalid request")}}
-    :internal_error {:status 500
-                     :body {:error "internal_error"
-                            :message (or message "authz policy evaluation failed")}}
-    {:status 403
-     :body {:error "forbidden"
-            :message (or message "request denied by authz policy")}}))
+  (errors/http-error-body {:type code
+                           :message (or message "request denied by authz policy")}))
 
 (defn- enforce-authz! [^HttpExchange exchange auth-config request]
   (let [{:keys [allowed?] :as decision} (authz/evaluate (:authz_check auth-config) request)]
@@ -107,11 +98,15 @@
   (if (= "GET" (request-method exchange))
     (write-json! exchange 200 {:status "ok" :service "semantic-code-indexing-runtime-http"})
     (write-json! exchange 405 {:error "method_not_allowed"
+                               :error_code "method_not_allowed"
+                               :error_category "client"
                                :allowed ["GET"]})))
 
 (defn- handle-create-index [auth-config ^HttpExchange exchange]
   (if-not (post-request? exchange)
     (write-json! exchange 405 {:error "method_not_allowed"
+                               :error_code "method_not_allowed"
+                               :error_category "client"
                                :allowed ["POST"]})
     (when-let [{:keys [tenant_id]} (enforce-authorized! exchange auth-config)]
       (let [payload (read-json-body exchange)
@@ -127,6 +122,7 @@
                                          :policy_registry (:policy_registry auth-config)})]
             (write-json! exchange 200 {:snapshot_id (:snapshot_id index)
                                        :indexed_at (:indexed_at index)
+                                       :index_lifecycle (:index_lifecycle index)
                                        :file_count (count (:files index))
                                        :unit_count (count (:units index))
                                        :repo_map (sci/repo-map index)})))))))
@@ -134,6 +130,8 @@
 (defn- handle-resolve-context [auth-config ^HttpExchange exchange]
   (if-not (post-request? exchange)
     (write-json! exchange 405 {:error "method_not_allowed"
+                               :error_code "method_not_allowed"
+                               :error_category "client"
                                :allowed ["POST"]})
     (when-let [{:keys [tenant_id]} (enforce-authorized! exchange auth-config)]
       (let [payload (read-json-body exchange)
@@ -142,11 +140,13 @@
             query (:query payload)
             retrieval-policy (:retrieval_policy payload)]
         (if-not (map? query)
-          (write-json! exchange 400 {:error "invalid_request"
-                                     :message "query must be an object"})
+          (let [{:keys [status body]} (errors/http-error-body {:type :invalid_request
+                                                               :message "query must be an object"})]
+            (write-json! exchange status body))
           (if (and (some? retrieval-policy) (not (map? retrieval-policy)))
-            (write-json! exchange 400 {:error "invalid_request"
-                                       :message "retrieval_policy must be an object"})
+            (let [{:keys [status body]} (errors/http-error-body {:type :invalid_request
+                                                                 :message "retrieval_policy must be an object"})]
+              (write-json! exchange status body))
           (when (enforce-authz! exchange auth-config {:operation :resolve_context
                                                       :tenant_id tenant_id
                                                       :root_path root-path

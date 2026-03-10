@@ -113,6 +113,12 @@
    [:fallback_unit_count nat-int?]
    [:selected_unit_count nat-int?]
    [:strong_languages string-array]
+   [:selected_language_strengths {:optional true} [:map-of {:max 12} bounded-string confidence-level]]
+   [:confidence_ceiling {:optional true} confidence-level]
+   [:index_age_seconds {:optional true} nat-int?]
+   [:index_stale {:optional true} boolean?]
+   [:snapshot_pinned {:optional true} boolean?]
+   [:index_provenance_source {:optional true} bounded-string]
    [:index_snapshot_id bounded-string]])
 
 (def guardrail-assessment

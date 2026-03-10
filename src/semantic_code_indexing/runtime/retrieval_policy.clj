@@ -38,6 +38,18 @@
 (def ^:private registry-metadata-keys
   [:notes :created_at :updated_at :activated_at :retired_at :shadow_review])
 
+(def ^:private confidence-level-rank
+  {"low" 0
+   "medium" 1
+   "high" 2})
+
+(def ^:private language-strength-profile
+  {"clojure" "high"
+   "elixir" "medium"
+   "java" "medium"
+   "python" "medium"
+   "typescript" "low"})
+
 (defn default-retrieval-policy []
   default-policy)
 
@@ -219,6 +231,18 @@
 (defn confidence-score [policy level]
   (get-in (normalize-policy policy) [:confidence_scores (keyword level)] 0.30))
 
+(defn confidence-level<=? [left right]
+  (<= (get confidence-level-rank (str left) -1)
+      (get confidence-level-rank (str right) -1)))
+
+(defn min-confidence-level
+  ([levels]
+   (reduce min-confidence-level "high" levels))
+  ([left right]
+   (if (confidence-level<=? left right)
+     (str left)
+     (str right))))
+
 (defn raw-fetch-threshold [policy threshold-k]
   (get-in (normalize-policy policy) [:raw_fetch threshold-k]))
 
@@ -239,28 +263,65 @@
       (< fallback total) "mixed"
       :else "fallback_only")))
 
+(defn- unit-language [index unit]
+  (or (:language unit)
+      (get-in index [:files (:path unit) :language])))
+
+(defn- language-strength [language]
+  (get language-strength-profile (str/lower-case (str language)) "low"))
+
+(defn- selected-language-strengths [index units]
+  (let [by-language (->> units
+                         (group-by #(unit-language index %))
+                         (remove (comp nil? key))
+                         (sort-by key))]
+    (into {}
+          (map (fn [[language grouped-units]]
+                 [language
+                  (if (every? #(= "fallback" (:parser_mode %)) grouped-units)
+                    "low"
+                    (language-strength language))]))
+          by-language)))
+
+(defn- confidence-ceiling [coverage-level selected-language-strengths]
+  (let [language-ceiling (if (seq selected-language-strengths)
+                           (min-confidence-level (vals selected-language-strengths))
+                           "low")]
+    (case coverage-level
+      "full" language-ceiling
+      "mixed" (min-confidence-level language-ceiling "medium")
+      "fallback_only" "low"
+      "unknown" "low"
+      language-ceiling)))
+
 (defn capability-summary
   ([index]
    (capability-summary index (idx/all-units index)))
   ([index units]
    (let [units* (vec units)
-         unit-language (fn [u] (or (:language u)
-                                   (get-in index [:files (:path u) :language])))
          index-languages (->> (vals (:files index)) (keep :language) distinct sort vec)
-         selected-languages (->> units* (keep unit-language) distinct sort vec)
+         selected-languages (->> units* (keep #(unit-language index %)) distinct sort vec)
          parser-modes (->> units* (keep :parser_mode) distinct sort vec)
          fallback-unit-count (count (filter #(= "fallback" (:parser_mode %)) units*))
+         coverage (coverage-level units*)
          strong-languages (->> units*
                                (remove #(= "fallback" (:parser_mode %)))
-                               (keep unit-language)
+                               (keep #(unit-language index %))
                                distinct
                                sort
-                               vec)]
+                               vec)
+         strengths (selected-language-strengths index units*)]
      {:index_languages index-languages
       :selected_languages selected-languages
       :parser_modes parser-modes
-      :coverage_level (coverage-level units*)
+      :coverage_level coverage
       :fallback_unit_count fallback-unit-count
       :selected_unit_count (count units*)
       :strong_languages strong-languages
+      :selected_language_strengths strengths
+      :confidence_ceiling (confidence-ceiling coverage strengths)
+      :index_age_seconds (get-in index [:index_lifecycle :age_seconds] 0)
+      :index_stale (boolean (get-in index [:index_lifecycle :stale]))
+      :snapshot_pinned (boolean (get-in index [:index_lifecycle :snapshot_pinned]))
+      :index_provenance_source (get-in index [:index_lifecycle :provenance :source])
       :index_snapshot_id (:snapshot_id index)})))

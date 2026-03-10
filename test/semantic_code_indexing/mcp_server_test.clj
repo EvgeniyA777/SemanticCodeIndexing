@@ -294,6 +294,7 @@
           (is (false? (:cache_hit create-data)))
           (is (string? index-id))
           (is (string? (:snapshot_id create-data)))
+          (is (= "initial_build" (get-in create-data [:index_lifecycle :rebuild_reason])))
           (is (pos-int? (:file_count create-data)))
           (is (pos-int? (:unit_count create-data))))
 
@@ -308,6 +309,7 @@
                 repo-map-data (get-in repo-map-response [:result :structuredContent])]
             (is (= index-id (:index_id repo-map-data)))
             (is (seq (:files repo-map-data)))
+            (is (map? (:index_lifecycle repo-map-data)))
             (is (string? (:summary repo-map-data)))))
 
         (testing "resolve_context returns the expected contract keys"
@@ -348,21 +350,27 @@
                 result (:result repo-map-response)]
             (is (true? (:isError result)))
             (is (= "index_not_found"
-                   (get-in result [:structuredContent :details :code])))))
+                   (get-in result [:structuredContent :details :code])))
+            (is (= "not_found"
+                   (get-in result [:structuredContent :details :category])))))
 
         (testing "root allowlist is enforced"
           (let [forbidden-response (call-tool! handle 11 "create_index" {:root_path forbidden-root})
                 result (:result forbidden-response)]
             (is (true? (:isError result)))
             (is (= "forbidden_root"
-                   (get-in result [:structuredContent :details :code])))))
+                   (get-in result [:structuredContent :details :code])))
+            (is (= "auth"
+                   (get-in result [:structuredContent :details :category])))))
 
         (testing "invalid selectors are surfaced as tool errors"
           (let [bad-selector-response (call-tool! handle 12 "skeletons" {:index_id index-id})
                 result (:result bad-selector-response)]
             (is (true? (:isError result)))
             (is (= "invalid_request"
-                   (get-in result [:structuredContent :details :code]))))))
+                   (get-in result [:structuredContent :details :code])))
+            (is (= "client"
+                   (get-in result [:structuredContent :details :category]))))))
       (finally
         (destroy-process! handle)))))
 

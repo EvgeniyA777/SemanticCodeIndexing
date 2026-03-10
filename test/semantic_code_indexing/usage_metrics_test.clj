@@ -75,7 +75,8 @@
       (is (= (get-in result [:context_packet :confidence :level]) (:confidence_level resolve-event)))
       (is (pos-int? (:selected_units_count resolve-event)))
       (is (string? (:root_path_hash resolve-event)))
-      (is (= "heuristic_v1" (get-in resolve-event [:payload :policy_id]))))
+      (is (= "heuristic_v1" (get-in resolve-event [:payload :policy_id])))
+      (is (= "2026-03-10" (get-in resolve-event [:payload :policy_version]))))
     (testing "explicit host feedback is recorded separately"
       (is (= 1 (count feedback)))
       (is (= "helpful" (:feedback_outcome (first feedback))))
@@ -124,7 +125,48 @@
       (is (= "resolve_context" (:operation resolve-event)))
       (is (= "usage-metrics-test-001" (:request_id resolve-event)))
       (is (= "success" (:status resolve-event)))
-      (is (pos-int? (:selected_units_count resolve-event))))
+      (is (pos-int? (:selected_units_count resolve-event)))
+      (is (= "2026-03-10" (get-in resolve-event [:payload :policy_version]))))
     (testing "tool responses are still successful"
       (is (not (true? (get-in create-response [:structuredContent :isError]))))
       (is (not (true? (get-in cached-response [:structuredContent :isError])))))))
+
+(deftest slo-report-aggregates-operational-metrics-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-usage-metrics-slo" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        allowed-root (.getCanonicalPath (io/file tmp-root))
+        sink (sci/in-memory-usage-metrics)
+        _index (sci/create-index {:root_path tmp-root
+                                  :usage_metrics sink
+                                  :usage_context {:session_id "session-slo"}})
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics sink
+                                 :usage_context {:session_id "session-slo"}})
+        _result (sci/resolve-context index sample-query)
+        state (atom {:allowed-roots [allowed-root]
+                     :max-indexes 4
+                     :session_id "mcp-slo-session"
+                     :usage_metrics sink
+                     :indexes-by-id {}
+                     :cache-key->index-id {}
+                     :client-info {:name "codex-test-client"}})
+        _mcp-create (#'mcp-server/handle-tools-call state {:name "create_index"
+                                                           :arguments {:root_path tmp-root}})
+        _mcp-create-hit (#'mcp-server/handle-tools-call state {:name "create_index"
+                                                               :arguments {:root_path tmp-root}})
+        report (sci/slo-report sink)
+        retrieval-only (sci/slo-report sink {:operation "resolve_context"})]
+    (testing "report exposes the requested SLO-facing metrics"
+      (is (contains? report :index_latency_ms))
+      (is (contains? report :retrieval_latency_ms))
+      (is (contains? report :cache_hit_ratio))
+      (is (contains? report :degraded_rate))
+      (is (contains? report :fallback_rate))
+      (is (= {"heuristic_v1@2026-03-10" 1}
+             (:policy_version_distribution retrieval-only))))
+    (testing "cache-hit ratio observes create_index cache hits"
+      (is (<= 0.0 (:cache_hit_ratio report) 1.0))
+      (is (= 0.5 (:cache_hit_ratio report))))
+    (testing "latency summaries include counts"
+      (is (pos? (get-in report [:index_latency_ms :count])))
+      (is (pos? (get-in retrieval-only [:retrieval_latency_ms :count]))))))

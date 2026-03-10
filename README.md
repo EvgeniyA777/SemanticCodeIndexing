@@ -118,6 +118,10 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets
 - optional tree-sitter extraction path is available for Clojure/Java (grammar-path configured)
 - tiered structural-first ranking and non-compensating confidence model implemented
+- capabilities now emit per-language strength plus a capability-driven `confidence_ceiling`, and guardrails/scorecards account for that ceiling during retrieval evaluation
+- index lifecycle metadata now emits TTL/staleness/provenance signals (`index_lifecycle`, stale pinned snapshots, rebuild reasons) across library/runtime surfaces
+- library/HTTP/gRPC/MCP now share canonical machine-readable error taxonomy fields (`error_code`, `error_category`; gRPC via trailers, MCP via tool-error details)
+- usage metrics now support SLO-facing summaries (`slo-report`) for index latency, retrieval latency, cache hit ratio, degraded rate, fallback rate, and policy version distribution
 - ranking policy is now explicit, versioned, and replayable via `:retrieval_policy`
 - offline policy governance now supports registry lifecycle states (`draft`, `shadow`, `active`, `retired`), fixed replay scorecards, side-by-side policy comparison, and promotion gates
 - shadow-vs-active operational workflow is available via `shadow-review`, which evaluates every `shadow` policy against the current `active` policy and can persist `:shadow_review` metadata back into the registry

@@ -120,6 +120,7 @@
         capabilities (get diagnostics :capabilities)
         confidence-level (:confidence_level evaluation)
         confidence-score (rp/confidence-score policy confidence-level)
+        confidence-ceiling (:confidence_ceiling capabilities)
         degraded? (seq (:degradations diagnostics))
         fallback? (result-fallback? capabilities)]
     {:query_id query-id
@@ -131,7 +132,8 @@
      :fallback fallback?
      :protected_case (boolean protected-case)
      :confidence_level confidence-level
-     :confidence_score confidence-score}))
+     :confidence_score confidence-score
+     :confidence_ceiling confidence-ceiling}))
 
 (defn- protected-results [results]
   (vec (filter :protected_case results)))
@@ -144,6 +146,10 @@
         confidence-passes (count (filter #(get-in % [:evaluation :confidence_match]) results*))
         degraded-count (count (filter :degraded results*))
         fallback-count (count (filter :fallback results*))
+        confidence-ceiling-distribution (->> results*
+                                           (keep :confidence_ceiling)
+                                           frequencies
+                                           (into (sorted-map)))
         calibration-by-level
         (->> results*
              (group-by :confidence_level)
@@ -183,6 +189,7 @@
      :degraded_rate (rate degraded-count total)
      :fallback_rate (rate fallback-count total)
      :pass_rate (rate (count (filter :ok results*)) total)
+     :confidence_ceiling_distribution confidence-ceiling-distribution
      :confidence_calibration {:mean_absolute_error mae
                               :by_level calibration-by-level}}))
 

@@ -157,6 +157,8 @@
       (is (= "heuristic_v1" (get-in diagnostics [:retrieval_policy :policy_id])))
       (is (= "full" (get-in packet [:capabilities :coverage_level])))
       (is (some #{"clojure"} (get-in packet [:capabilities :selected_languages])))
+      (is (= "high" (get-in packet [:capabilities :selected_language_strengths "clojure"])))
+      (is (= "high" (get-in packet [:capabilities :confidence_ceiling])))
       (is (string? (get-in packet [:capabilities :index_snapshot_id]))))))
 
 (deftest clojure-related-tests-link-via-imported-test-namespace-test
@@ -225,13 +227,21 @@
         ts-result (sci/resolve-context index sample-query-typescript)]
     (testing "elixir symbol can be localized"
       (is (some #(= "MyApp.Order/process_order" (:symbol %))
-                (get-in ex-result [:context_packet :relevant_units]))))
+                (get-in ex-result [:context_packet :relevant_units])))
+      (is (= "medium" (get-in ex-result [:context_packet :capabilities :confidence_ceiling])))
+      (is (= "medium" (get-in ex-result [:context_packet :confidence :level]))))
     (testing "python symbol can be localized"
       (is (some #(= "app.orders.OrderService/process_order" (:symbol %))
-                (get-in py-result [:context_packet :relevant_units]))))
+                (get-in py-result [:context_packet :relevant_units])))
+      (is (= "medium" (get-in py-result [:context_packet :capabilities :confidence_ceiling])))
+      (is (= "medium" (get-in py-result [:context_packet :confidence :level]))))
     (testing "typescript symbol can be localized"
       (is (some #(= "src.example.main/processMain" (:symbol %))
-                (get-in ts-result [:context_packet :relevant_units]))))))
+                (get-in ts-result [:context_packet :relevant_units])))
+      (is (= "low" (get-in ts-result [:context_packet :capabilities :confidence_ceiling])))
+      (is (= "low" (get-in ts-result [:context_packet :confidence :level])))
+      (is (some #(= "capability_ceiling" (:code %))
+                (get-in ts-result [:context_packet :confidence :warnings]))))))
 
 (deftest elixir-alias-aware-call-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-alias-test" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -393,6 +403,71 @@
         index-b (sci/create-index {:root_path tmp-root :storage storage :load_latest true})]
     (is (= (:snapshot_id index-a) (:snapshot_id index-b)))
     (is (= (count (:units index-a)) (count (:units index-b))))))
+
+(deftest index-lifecycle-reuse-staleness-and-pinning-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-storage-lifecycle-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        index-a (sci/create-index {:root_path tmp-root :storage storage})]
+    (Thread/sleep 1100)
+    (let [reused (sci/create-index {:root_path tmp-root
+                                    :storage storage
+                                    :load_latest true
+                                    :max_snapshot_age_seconds 3600})
+          rebuilt (sci/create-index {:root_path tmp-root
+                                     :storage storage
+                                     :load_latest true
+                                     :max_snapshot_age_seconds 0})
+          pinned (sci/create-index {:root_path tmp-root
+                                    :storage storage
+                                    :pinned_snapshot_id (:snapshot_id index-a)
+                                    :max_snapshot_age_seconds 0})]
+      (testing "fresh latest snapshot can be reused with lifecycle metadata"
+        (is (= (:snapshot_id index-a) (:snapshot_id reused)))
+        (is (true? (get-in reused [:index_lifecycle :reused_snapshot])))
+        (is (false? (get-in reused [:index_lifecycle :stale])))
+        (is (= "storage_latest" (get-in reused [:index_lifecycle :provenance :source]))))
+      (testing "stale latest snapshot triggers rebuild with provenance"
+        (is (not= (:snapshot_id index-a) (:snapshot_id rebuilt)))
+        (is (= "snapshot_stale" (get-in rebuilt [:index_lifecycle :rebuild_reason])))
+        (is (= (:snapshot_id index-a)
+               (get-in rebuilt [:index_lifecycle :provenance :parent_snapshot_id]))))
+      (testing "pinned snapshot reuses exact snapshot even when stale"
+        (is (= (:snapshot_id index-a) (:snapshot_id pinned)))
+        (is (true? (get-in pinned [:index_lifecycle :snapshot_pinned])))
+        (is (true? (get-in pinned [:index_lifecycle :stale])))
+        (is (= "storage_pinned" (get-in pinned [:index_lifecycle :provenance :source])))
+        (is (= (:index_lifecycle pinned)
+               (:index_lifecycle (sci/repo-map pinned))))))))
+
+(deftest stale-index-freshness-guardrail-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-stale-guardrail-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        initial (sci/create-index {:root_path tmp-root :storage storage})]
+    (Thread/sleep 1100)
+    (let [pinned-stale (sci/create-index {:root_path tmp-root
+                                          :storage storage
+                                          :pinned_snapshot_id (:snapshot_id initial)
+                                          :max_snapshot_age_seconds 0})
+          result (sci/resolve-context pinned-stale sample-query)]
+      (is (true? (get-in result [:context_packet :capabilities :index_stale])))
+      (is (true? (get-in result [:context_packet :capabilities :snapshot_pinned])))
+      (is (= "storage_pinned" (get-in result [:context_packet :capabilities :index_provenance_source])))
+      (is (= "autonomy_blocked" (get-in result [:guardrail_assessment :autonomy_posture])))
+      (is (some #(= "stale_index" (:code %))
+                (get-in result [:guardrail_assessment :blocking_reasons]))))))
+
+(deftest library-surface-emits-normalized-error-taxonomy-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-library-error-taxonomy-test" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (try
+      (sci/create-index {:root_path tmp-root
+                         :pinned_snapshot_id "missing-snapshot"})
+      (is false "expected ex-info")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= :invalid_request (:type (ex-data e))))
+        (is (= "invalid_request" (:error_code (ex-data e))))
+        (is (= "client" (:error_category (ex-data e))))))))
 
 (deftest storage-query-api-regression-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-storage-query-test" (make-array java.nio.file.attribute.FileAttribute 0)))

@@ -21,6 +21,7 @@ message CreateIndexResponse {
   int32 file_count = 3;
   int32 unit_count = 4;
   string repo_map_json = 5;
+  string index_lifecycle_json = 6;
 }
 
 message ResolveContextRequest {

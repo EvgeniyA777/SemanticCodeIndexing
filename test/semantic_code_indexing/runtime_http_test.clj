@@ -73,6 +73,7 @@
                                 {:root_path tmp-root})]
             (is (= 200 (:status resp)))
             (is (string? (get-in resp [:json :snapshot_id])))
+            (is (= "initial_build" (get-in resp [:json :index_lifecycle :rebuild_reason])))
             (is (pos-int? (get-in resp [:json :file_count])))
             (is (pos-int? (get-in resp [:json :unit_count])))))
 
@@ -113,7 +114,11 @@
                                         {:root_path tmp-root
                                          :query "not-an-object"})]
             (is (= 405 (:status method-resp)))
-            (is (= 400 (:status invalid-resp))))))
+            (is (= "method_not_allowed" (get-in method-resp [:json :error_code])))
+            (is (= "client" (get-in method-resp [:json :error_category])))
+            (is (= 400 (:status invalid-resp)))
+            (is (= "invalid_request" (get-in invalid-resp [:json :error_code])))
+            (is (= "client" (get-in invalid-resp [:json :error_category]))))))
       (finally
         (.stop server 0)))))
 
@@ -131,13 +136,15 @@
             _health (wait-health! client base-url)]
         (testing "missing api key -> 401"
           (let [resp (post-json client (str base-url "/v1/index/create") {:root_path tmp-root})]
-            (is (= 401 (:status resp)))))
+            (is (= 401 (:status resp)))
+            (is (= "unauthorized" (get-in resp [:json :error_code])))))
         (testing "api key without tenant -> 400"
           (let [resp (post-json client
                                 (str base-url "/v1/index/create")
                                 {:root_path tmp-root}
                                 {"x-api-key" "secret-token"})]
-            (is (= 400 (:status resp)))))
+            (is (= 400 (:status resp)))
+            (is (= "invalid_request" (get-in resp [:json :error_code])))))
         (testing "api key + tenant -> 200"
           (let [resp (post-json client
                                 (str base-url "/v1/index/create")
@@ -174,7 +181,8 @@
                                 (str base-url "/v1/index/create")
                                 {:root_path tmp-root}
                                 headers)]
-            (is (= 403 (:status resp)))))
+            (is (= 403 (:status resp)))
+            (is (= "forbidden" (get-in resp [:json :error_code])))))
 
         (testing "allowed path prefix passes"
           (let [resp (post-json client
@@ -191,7 +199,8 @@
                                 {:root_path tmp-root
                                  :paths ["test/my/app/order_test.clj"]}
                                 headers)]
-            (is (= 403 (:status resp)))))
+            (is (= 403 (:status resp)))
+            (is (= "forbidden" (get-in resp [:json :error_code])))))
 
         (testing "unknown tenant denied"
           (let [resp (post-json client
@@ -200,7 +209,8 @@
                                  :paths ["src/my/app/order.clj"]}
                                 {"x-api-key" "secret-token"
                                  "x-tenant-id" "tenant-999"})]
-            (is (= 403 (:status resp))))))
+            (is (= 403 (:status resp)))
+            (is (= "forbidden" (get-in resp [:json :error_code]))))))
       (finally
         (.stop server 0)))))
 

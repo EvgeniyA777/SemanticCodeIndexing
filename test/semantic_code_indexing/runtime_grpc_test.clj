@@ -61,6 +61,7 @@
                                (grpc-proto/create-index-request {:root_path tmp-root})
                                grpc-proto/create-index-response->map)]
           (is (string? (:snapshot_id resp)))
+          (is (= "initial_build" (get-in resp [:index_lifecycle :rebuild_reason])))
           (is (pos? (long (:file_count resp))))
           (is (pos? (long (:unit_count resp))))))
 
@@ -104,7 +105,13 @@
           (is false "expected StatusRuntimeException")
           (catch StatusRuntimeException e
             (is (= (.getCode Status/INVALID_ARGUMENT)
-                   (.getCode (.getStatus e)))))))
+                   (.getCode (.getStatus e))))
+            (is (= "invalid_request"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER))))
+            (is (= "client"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-category" Metadata/ASCII_STRING_MARSHALLER)))))))
 
       (finally
         (.shutdownNow channel)
@@ -130,7 +137,10 @@
           (is false "expected StatusRuntimeException")
           (catch StatusRuntimeException e
             (is (= (.getCode Status/UNAUTHENTICATED)
-                   (.getCode (.getStatus e)))))))
+                   (.getCode (.getStatus e))))
+            (is (= "unauthorized"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER)))))))
 
       (testing "api key without tenant -> INVALID_ARGUMENT"
         (try
@@ -142,7 +152,10 @@
           (is false "expected StatusRuntimeException")
           (catch StatusRuntimeException e
             (is (= (.getCode Status/INVALID_ARGUMENT)
-                   (.getCode (.getStatus e)))))))
+                   (.getCode (.getStatus e))))
+            (is (= "invalid_request"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER)))))))
 
       (testing "api key + tenant -> success"
         (let [resp (unary-call channel

@@ -2,6 +2,7 @@
   (:gen-class)
   (:require [clojure.string :as str]
             [semantic-code-indexing.runtime.authz :as authz]
+            [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.grpc-proto :as grpc-proto]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.core :as sci])
@@ -81,8 +82,12 @@
   (.onNext response-observer payload)
   (.onCompleted response-observer))
 
-(defn- fail! [^StreamObserver response-observer ^Status status message]
-  (.onError response-observer (.asRuntimeException (.withDescription status message))))
+(defn- fail! [^StreamObserver response-observer e]
+  (let [status (errors/grpc-status e)
+        description (errors/grpc-description e)
+        trailers (errors/grpc-trailers e)]
+    (.onError response-observer (.asRuntimeException (.withDescription status description)
+                                                     trailers))))
 
 (defn- current-api-key []
   (.get api-key-context (Context/current)))
@@ -105,10 +110,7 @@
       :else nil)))
 
 (defn- authz-code->status [code]
-  (case code
-    :invalid_request Status/INVALID_ARGUMENT
-    :internal_error Status/INTERNAL
-    Status/PERMISSION_DENIED))
+  (errors/grpc-status {:type code}))
 
 (defn- authz-violation [auth-config operation payload]
   (let [{:keys [allowed? code message]}
@@ -119,6 +121,7 @@
                          :paths (:paths payload)})]
     (when-not allowed?
       {:status (authz-code->status code)
+       :type code
        :message (or message "request denied by authz policy")})))
 
 (defn- unary-handler [request->payload response->message f auth-config operation]
@@ -127,18 +130,17 @@
      (invoke [_ request response-observer]
        (try
          (if-let [{:keys [status message]} (auth-violation auth-config)]
-           (fail! response-observer status message)
+           (fail! response-observer {:type (if (= status Status/UNAUTHENTICATED) :unauthorized :invalid_request)
+                                     :message message})
            (let [payload (-> request request->payload normalize-numeric-shapes)]
-             (if-let [{:keys [status message]} (authz-violation auth-config operation payload)]
-               (fail! response-observer status message)
+             (if-let [{:keys [type message]} (authz-violation auth-config operation payload)]
+               (fail! response-observer {:type (or type :forbidden)
+                                         :message message})
                (reply! response-observer (response->message (f payload))))))
          (catch clojure.lang.ExceptionInfo e
-           (let [m (ex-data e)]
-             (if (= :invalid_request (:type m))
-               (fail! response-observer Status/INVALID_ARGUMENT (or (:message m) (.getMessage e)))
-               (fail! response-observer Status/INTERNAL (.getMessage e)))))
+           (fail! response-observer e))
          (catch Exception e
-           (fail! response-observer Status/INTERNAL (.getMessage e))))))))
+           (fail! response-observer e)))))))
 
 (defn- handle-health [_]
   {:status "ok"
@@ -151,6 +153,7 @@
                                  :policy_registry policy-registry})]
     {:snapshot_id (:snapshot_id index)
      :indexed_at (:indexed_at index)
+     :index_lifecycle (:index_lifecycle index)
      :file_count (count (:files index))
      :unit_count (count (:units index))
      :repo_map (sci/repo-map index)}))

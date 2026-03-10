@@ -48,7 +48,12 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Offline policy governance now supports registry lifecycle states (`draft`, `shadow`, `active`, `retired`), replay scorecards, side-by-side policy comparison, and promotion gates via `clojure -M:eval`.
 - Replay datasets can now mark `protected_case` queries, and promotion gates reject candidate policies that introduce newly failed protected cases.
 - Shadow-vs-active operational workflow now exists via `shadow-review`, which evaluates all `shadow` policies against the current `active` registry policy and can persist `:shadow_review` metadata back into the registry.
+- Capabilities are now language-strength-aware: retrieval emits `:selected_language_strengths` plus a derived `:confidence_ceiling`, final confidence is capped by that ceiling after raw-fetch upgrades, guardrails surface `capability_ceiling` signals, and governed replay scorecards include `confidence_ceiling_distribution`.
+- Index lifecycle now emits `:index_lifecycle` metadata with TTL-aware stale detection, snapshot provenance, snapshot pinning on the library/storage path, and rebuild reasons; `resolve-context` surfaces stale snapshot state through capabilities and guardrails via `stale_index`.
+- Error handling is now taxonomy-backed across library, HTTP, gRPC, and MCP: normalized `ExceptionInfo` ex-data carries `:error_code` / `:error_category`, HTTP responses emit the same fields, gRPC emits them in trailers (`x-sci-error-code`, `x-sci-error-category`), and MCP tool errors expose them in `structuredContent.details`.
+- Usage metrics now support SLO-facing rollups through `slo-report`, covering index latency, retrieval latency, cache hit ratio, degraded rate, fallback rate, and policy version distribution for both in-memory and PostgreSQL-backed sinks.
 - Canonical in-repo roadmap status checklist now lives in `docs/roadmap-status.md`, with a dated rationale and status snapshot stored under `notes/`.
+- Product roadmap progress is now effectively through the main Phase 4 slices: governed quality loop, language-priority semantic-core deepening, capabilities/calibration, index lifecycle, unified error taxonomy, and SLO-facing metrics are in place; the main remaining tail is tenant/ops completeness plus Phase 5 self-improvement automation.
 
 ## Hard Invariants
 
@@ -69,15 +74,14 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Persistence graph queries are retrieval-oriented and not yet a full semantic graph query language.
 - Automatic replay dataset harvesting from real usage traces and feedback is not implemented yet.
 - Language-priority roadmap tail remains open after the current Clojure, Elixir, Java, and Python pushes: TypeScript remains regression-only by design, and Elixir/Java/Python still have room for deeper ownership and targeting beyond the new slices.
-- Capabilities are not yet language-strength-aware enough to drive per-language confidence ceilings and guardrails.
-- Runtime hardening still lacks TTL/stale detection, provenance, snapshot pinning policy, unified machine-readable error taxonomy, and a complete SLO-facing operational metrics set.
+- Runtime hardening is largely in place for lifecycle, error taxonomy, and SLO summaries; the remaining tail is mostly deeper tenant/ops completeness rather than missing core governance primitives.
 - Real self-improvement loop is not implemented beyond usage metrics and explicit feedback sinks.
 
 ## Next Execution Priorities
 
-1. Extend capabilities and retrieval calibration so language strength can influence confidence ceilings, guardrails, and governed scorecards.
-2. Implement Phase 4 runtime hardening: index lifecycle policy, unified error taxonomy, and fuller SLO-facing metrics.
-3. Keep TypeScript in no-regression coverage and reserve deeper follow-up passes for Elixir/Java/Python where retrieval quality gaps remain after metrics hardening.
+1. Tighten the remaining operational tail in Phase 4 where needed: tenant-aware limits, trace correlation consistency, and any missing edge-level ops completeness.
+2. Keep TypeScript in no-regression coverage and reserve deeper follow-up passes for Elixir/Java/Python where retrieval quality gaps remain after metrics hardening.
+3. Build the Phase 5 self-improvement loop on top of usage metrics and structured feedback now that runtime hardening primitives are in place.
 
 ## Update Rule
 

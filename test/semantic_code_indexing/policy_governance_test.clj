@@ -57,7 +57,9 @@
       (is (= 1.0 (get-in result [:scorecard :required_path_hit_rate])))
       (is (= 1.0 (get-in result [:scorecard :minimum_confidence_pass_rate])))
       (is (= 0.0 (get-in result [:scorecard :degraded_rate])))
-      (is (contains? (get-in result [:scorecard :confidence_calibration]) :mean_absolute_error)))))
+      (is (= {"high" 1} (get-in result [:scorecard :confidence_ceiling_distribution])))
+      (is (contains? (get-in result [:scorecard :confidence_calibration]) :mean_absolute_error))
+      (is (= "high" (get-in result [:results 0 :confidence_ceiling]))))))
 
 (deftest compare-policies-detects-protected-regression-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-compare" (make-array java.nio.file.attribute.FileAttribute 0)))

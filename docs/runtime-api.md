@@ -35,6 +35,8 @@ Options:
 - `:parser_opts` parser options map (default uses `clj-kondo` for Clojure)
 - `:storage` optional storage adapter
 - `:load_latest` if `true`, attempts to load latest snapshot from storage before rebuilding
+- `:pinned_snapshot_id` optional exact snapshot id to reuse from storage
+- `:max_snapshot_age_seconds` optional TTL for stale detection when reusing a stored snapshot
 
 Example with parser options:
 
@@ -67,6 +69,22 @@ Bootstrap pinned grammar checkouts under `.tree-sitter-grammars/`:
 ./scripts/setup-tree-sitter-grammars.sh
 ```
 
+Returned index maps and `repo-map` outputs now carry `:index_lifecycle`, which includes:
+
+- `:reused_snapshot`
+- `:snapshot_pinned`
+- `:stale`
+- `:age_seconds`
+- `:max_snapshot_age_seconds`
+- `:rebuild_reason`
+- `:provenance`
+
+Current lifecycle behavior:
+
+- `:load_latest true` reuses the newest stored snapshot when it is within TTL
+- if that stored snapshot is older than `:max_snapshot_age_seconds`, the runtime rebuilds and reports `:rebuild_reason "snapshot_stale"`
+- `:pinned_snapshot_id` reuses the exact stored snapshot even if it is stale, and marks it via `:snapshot_pinned true`
+
 ### `update-index`
 
 Incrementally updates index for changed paths.
@@ -81,6 +99,8 @@ Options:
 - `:changed_paths` vector of relative source paths
 - `:parser_opts` parser options map
 - `:storage` optional storage adapter for snapshot persistence
+
+`update-index` now also emits `:index_lifecycle` provenance, including `:parent_snapshot_id` and `:rebuild_reason "changed_paths_update"` for incremental rebuilds.
 
 ### `repo-map`
 
@@ -179,7 +199,7 @@ Example with registry-backed selection:
 Both `:context_packet` and `:diagnostics_trace` now include:
 
 - `:retrieval_policy` - `{ :policy_id ... :version ... }`
-- `:capabilities` - selected-language and parser-coverage summary
+- `:capabilities` - selected-language and parser-coverage summary, including per-language strength and a derived `:confidence_ceiling`
 
 For Clojure retrieval, `impact_hints.related_tests` now also links nearby test files via namespace/import relationships, not only direct caller overlap. This keeps `related_tests` useful even when a test namespace exercises a sibling var instead of the exact selected var. The Clojure fallback parser is also top-level-aware, so nested `defn` forms inside wrappers such as `comment` are no longer indexed as real units. For multimethods, `defmethod` implementations now keep dispatch-aware unit identities internally, and retrieval can boost the correct implementation when the query text strongly hints at a dispatch case such as `pickup` or `delivery`, without changing the public query symbol shape. Custom macro calls can also contribute recursive graph-level inherited caller edges for the vars they structurally inject across syntax-quoted, list-built, and common composed expansion patterns such as `concat`, `apply list`, `into`, and conditional branches, while filtering out ordinary macro implementation helpers that are not part of the generated expansion path.
 
@@ -188,6 +208,23 @@ For Elixir retrieval, the regex adapter now resolves normalized `import` and `us
 For Java retrieval, overload-sensitive unit identities are now complemented by arity-aware caller/callee linking, so calls such as `normalize(id, true)` prefer the `arity=2` method target instead of all same-name overloads. Static-imported methods are also matched back to their owning class more accurately via import-aware ownership filtering.
 
 For Python retrieval, imported symbols from `from ... import ...` and module aliases from `import ... as ...` are now expanded toward the owning module during call linking, `self` / `cls` method calls are rewritten toward class-owned method identities, and Python test modules such as `*_test.py` and `tests/*` can flow into `impact_hints.related_tests`.
+
+The capability layer is now language-strength-aware. Runtime retrieval emits `:selected_language_strengths` and `:confidence_ceiling` inside `:capabilities`, then caps the final confidence level to that ceiling after late raw-fetch upgrades. This means:
+
+- Clojure can still reach `high` when structural evidence is strong
+- Elixir, Java, and Python currently top out at `medium`
+- TypeScript remains compatibility-grade and currently tops out at `low`
+
+Guardrails now also surface `capability_ceiling` risk/blocking signals when language strength prevents a higher-autonomy posture.
+
+The same capability summary now also surfaces index lifecycle state:
+
+- `:index_age_seconds`
+- `:index_stale`
+- `:snapshot_pinned`
+- `:index_provenance_source`
+
+If a query asks for `:freshness "current_snapshot"` and retrieval is running against a stale pinned/reused snapshot, guardrails now emit `stale_index` and block autonomous drafting until the host rebuilds or explicitly allows stale usage.
 
 ## Offline Policy Governance CLI
 
@@ -261,6 +298,8 @@ Fixed scorecard metrics currently emitted for governed replay:
 - `degraded_rate`
 - `fallback_rate`
 - `confidence_calibration.mean_absolute_error`
+
+Governed replay outputs now also include `confidence_ceiling_distribution`, so policy review can see how often retrievals were capability-capped by language strength even when the fixed protected metrics remain unchanged.
 
 Promotion gates currently reject activation when any protected metric regresses versus the baseline policy.
 
@@ -365,6 +404,8 @@ Usage metrics are optional and separate from index persistence.
                              :retrieval_issue_codes ["resolved_target_correct"]
                              :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
                              :ground_truth_paths ["src/my/app/order.clj"]})
+
+(sci/slo-report metrics)
 ```
 
 ### PostgreSQL usage metrics
@@ -387,6 +428,24 @@ PostgreSQL usage metrics persist:
 - raw events in `semantic_usage_events`
 - explicit feedback in `semantic_usage_feedback`
 - daily aggregates in `semantic_usage_daily_rollups`
+
+`sci/slo-report` now provides a compact operational summary over either in-memory or PostgreSQL-backed events.
+
+Current SLO-facing metrics include:
+
+- `index_latency_ms`
+- `retrieval_latency_ms`
+- `cache_hit_ratio`
+- `degraded_rate`
+- `fallback_rate`
+- `policy_version_distribution`
+
+Optional filters:
+
+- `:surface`
+- `:operation`
+- `:tenant_id`
+- `:since`
 
 ## Offline Replay Evaluation
 
@@ -510,6 +569,41 @@ When auth boundary is enabled:
 
 - HTTP expects `x-api-key` and `x-tenant-id` headers for protected endpoints.
 - gRPC expects `x-api-key` and `x-tenant-id` metadata for protected RPC methods.
+
+## Error Taxonomy
+
+Library, HTTP, gRPC, and MCP now share the same canonical taxonomy fields:
+
+- `error_code`
+- `error_category`
+
+Current stable codes include:
+
+- `invalid_request`
+- `invalid_query`
+- `unauthorized`
+- `forbidden`
+- `forbidden_root`
+- `index_not_found`
+- `protocol_error`
+- `internal_contract_error`
+- `invalid_storage_config`
+- `internal_error`
+
+Current categories include:
+
+- `client`
+- `auth`
+- `not_found`
+- `protocol`
+- `internal`
+
+Transport mapping:
+
+- library: public API functions now rethrow normalized `ExceptionInfo` values with `:error_code` and `:error_category` in `ex-data`
+- HTTP: error payloads now emit both legacy `error` and canonical `error_code` / `error_category`
+- gRPC: error status remains transport-native, and canonical taxonomy is attached in trailers via `x-sci-error-code` and `x-sci-error-category`
+- MCP: tool errors now include canonical `details.code` and `details.category`
 
 Optional host-integrated authz policy:
 

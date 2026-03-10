@@ -6,6 +6,7 @@
   (init-storage! [storage])
   (save-index! [storage index])
   (load-latest-index [storage root-path])
+  (load-index-by-snapshot [storage root-path snapshot-id])
   (fetch-units [storage root-path opts])
   (fetch-callers [storage root-path unit-id opts])
   (fetch-callees [storage root-path unit-id opts]))
@@ -14,12 +15,23 @@
   IndexStorage
   (init-storage! [_] true)
   (save-index! [_ index]
-    (swap! state assoc (:root_path index) index)
+    (swap! state update (:root_path index)
+           (fn [entry]
+             {:latest_snapshot_id (:snapshot_id index)
+              :snapshots (assoc (or (:snapshots entry) {})
+                                (:snapshot_id index)
+                                index)}))
     true)
   (load-latest-index [_ root-path]
-    (get @state root-path))
+    (let [entry (get @state root-path)]
+      (get-in entry [:snapshots (:latest_snapshot_id entry)])))
+  (load-index-by-snapshot [_ root-path snapshot-id]
+    (get-in @state [root-path :snapshots snapshot-id]))
   (fetch-units [_ root-path {:keys [snapshot_id module symbol limit] :or {limit 100}}]
-    (let [idx (get @state root-path)]
+    (let [entry (get @state root-path)
+          idx (if snapshot_id
+                (get-in entry [:snapshots snapshot_id])
+                (get-in entry [:snapshots (:latest_snapshot_id entry)]))]
       (if (or (nil? idx)
               (and snapshot_id (not= snapshot_id (:snapshot_id idx))))
         []
@@ -31,7 +43,10 @@
              (take limit)
              vec))))
   (fetch-callers [_ root-path unit-id {:keys [snapshot_id limit] :or {limit 100}}]
-    (let [idx (get @state root-path)]
+    (let [entry (get @state root-path)
+          idx (if snapshot_id
+                (get-in entry [:snapshots snapshot_id])
+                (get-in entry [:snapshots (:latest_snapshot_id entry)]))]
       (if (or (nil? idx)
               (and snapshot_id (not= snapshot_id (:snapshot_id idx))))
         []
@@ -41,7 +56,10 @@
              (take limit)
              vec))))
   (fetch-callees [_ root-path unit-id {:keys [snapshot_id limit] :or {limit 100}}]
-    (let [idx (get @state root-path)]
+    (let [entry (get @state root-path)
+          idx (if snapshot_id
+                (get-in entry [:snapshots snapshot_id])
+                (get-in entry [:snapshots (:latest_snapshot_id entry)]))]
       (if (or (nil? idx)
               (and snapshot_id (not= snapshot_id (:snapshot_id idx))))
         []
@@ -215,6 +233,15 @@
                                            order by id desc
                                            limit 1"
                                           root-path]))]
+      (parse-json (:semantic_index_snapshots/payload row (:payload row)))))
+  (load-index-by-snapshot [_ root-path snapshot-id]
+    (when-let [row (first (jdbc/execute! datasource
+                                         ["select payload
+                                           from semantic_index_snapshots
+                                           where root_path = ?
+                                             and snapshot_id = ?
+                                           limit 1"
+                                          root-path snapshot-id]))]
       (parse-json (:semantic_index_snapshots/payload row (:payload row)))))
   (fetch-units [_ root-path {:keys [snapshot_id module symbol limit] :or {limit 100}}]
     (if-let [sid (resolve-snapshot-id datasource root-path snapshot_id)]

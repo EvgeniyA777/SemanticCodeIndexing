@@ -10,6 +10,21 @@
 (defn- uuid []
   (str (java.util.UUID/randomUUID)))
 
+(defn- parse-instant [value]
+  (when (seq value)
+    (try
+      (java.time.Instant/parse (str value))
+      (catch Exception _ nil))))
+
+(defn- age-seconds [indexed-at]
+  (if-let [instant (parse-instant indexed-at)]
+    (max 0 (long (.getSeconds (java.time.Duration/between instant (java.time.Instant/now)))))
+    0))
+
+(defn- stale? [age-seconds max-snapshot-age-seconds]
+  (and (some? max-snapshot-age-seconds)
+       (> age-seconds (long max-snapshot-age-seconds))))
+
 (defn- relative-path [root file]
   (let [root-path (.toPath (io/file root))
         file-path (.toPath (io/file file))]
@@ -301,27 +316,61 @@
    {}
    files))
 
-(defn- build-index-state [root-path files-data]
-  (let [units (:units files-data)
-        units-by-id (into {} (map (juxt :unit_id identity) units))]
-    {:root_path root-path
-     :snapshot_id (uuid)
-     :indexed_at (now-iso)
-     :files (:files files-data)
-     :diagnostics (:diagnostics files-data)
-     :units units-by-id
-     :unit_order (mapv :unit_id units)
-     :symbol_index (build-symbol-index units)
-     :path_index (index-by :path units)
-     :module_index (index-by :module units)
-     :callers_index (build-callers-index units (:files files-data))
-     :module_dependents (build-module-dependents (:files files-data))
-     :test_target_index (build-test-target-index (:files files-data))}))
+(defn- lifecycle-summary
+  [index {:keys [provenance_source parent_snapshot_id requested_snapshot_id
+                 reused_snapshot snapshot_pinned max_snapshot_age_seconds rebuild_reason]}]
+  (let [age (age-seconds (:indexed_at index))]
+    {:reused_snapshot (boolean reused_snapshot)
+     :snapshot_pinned (boolean snapshot_pinned)
+     :stale (boolean (stale? age max_snapshot_age_seconds))
+     :age_seconds age
+     :max_snapshot_age_seconds max_snapshot_age_seconds
+     :rebuild_reason rebuild_reason
+     :provenance {:source provenance_source
+                  :parent_snapshot_id parent_snapshot_id
+                  :requested_snapshot_id requested_snapshot_id}}))
 
-(defn- maybe-load-latest [storage-adapter root-path load-latest?]
-  (when (and storage-adapter load-latest?)
+(defn- attach-lifecycle [index lifecycle-opts]
+  (assoc index :index_lifecycle (lifecycle-summary index lifecycle-opts)))
+
+(defn- build-index-state
+  ([root-path files-data]
+   (build-index-state root-path files-data {}))
+  ([root-path files-data lifecycle-opts]
+   (let [units (:units files-data)
+         units-by-id (into {} (map (juxt :unit_id identity) units))]
+     (attach-lifecycle
+      {:root_path root-path
+       :snapshot_id (uuid)
+       :indexed_at (now-iso)
+       :files (:files files-data)
+       :diagnostics (:diagnostics files-data)
+       :units units-by-id
+       :unit_order (mapv :unit_id units)
+       :symbol_index (build-symbol-index units)
+       :path_index (index-by :path units)
+       :module_index (index-by :module units)
+       :callers_index (build-callers-index units (:files files-data))
+       :module_dependents (build-module-dependents (:files files-data))
+       :test_target_index (build-test-target-index (:files files-data))}
+      lifecycle-opts))))
+
+(defn- maybe-load-index [storage-adapter root-path {:keys [load_latest pinned_snapshot_id]}]
+  (when storage-adapter
     (storage/init-storage! storage-adapter)
-    (storage/load-latest-index storage-adapter root-path)))
+    (cond
+      (seq pinned_snapshot_id)
+      (or (storage/load-index-by-snapshot storage-adapter root-path pinned_snapshot_id)
+          (throw (ex-info "requested pinned snapshot was not found"
+                          {:type :invalid_request
+                           :message "requested pinned snapshot was not found"
+                           :details {:root_path root-path
+                                     :snapshot_id pinned_snapshot_id}})))
+
+      load_latest
+      (storage/load-latest-index storage-adapter root-path)
+
+      :else nil)))
 
 (defn- maybe-save-index! [storage-adapter index]
   (when storage-adapter
@@ -330,18 +379,56 @@
   index)
 
 (defn create-index
-  [{:keys [root_path paths parser_opts storage load_latest]
+  [{:keys [root_path paths parser_opts storage load_latest pinned_snapshot_id
+           max_snapshot_age_seconds rebuild_reason]
     :or {root_path "."
          parser_opts {:clojure_engine :clj-kondo
                       :tree_sitter_enabled false}
          load_latest false}}]
-  (if-let [latest (maybe-load-latest storage root_path load_latest)]
-    latest
+  (when (and (seq pinned_snapshot_id) (nil? storage))
+    (throw (ex-info "pinned_snapshot_id requires a storage adapter"
+                    {:type :invalid_request
+                     :message "pinned_snapshot_id requires a storage adapter"})))
+  (when (and (seq pinned_snapshot_id) (seq paths))
+    (throw (ex-info "pinned_snapshot_id cannot be combined with paths subset indexing"
+                    {:type :invalid_request
+                     :message "pinned_snapshot_id cannot be combined with paths subset indexing"})))
+  (if-let [loaded (maybe-load-index storage root_path {:load_latest load_latest
+                                                       :pinned_snapshot_id pinned_snapshot_id})]
+    (let [loaded* (attach-lifecycle loaded {:provenance_source (if (seq pinned_snapshot_id)
+                                                                 "storage_pinned"
+                                                                 "storage_latest")
+                                            :requested_snapshot_id pinned_snapshot_id
+                                            :reused_snapshot true
+                                            :snapshot_pinned (boolean (seq pinned_snapshot_id))
+                                            :max_snapshot_age_seconds max_snapshot_age_seconds})
+          stale-loaded? (get-in loaded* [:index_lifecycle :stale])]
+      (if (and stale-loaded? (not (seq pinned_snapshot_id)))
+        (let [discovered (discover-source-files root_path)
+              files-data (parse-files root_path discovered parser_opts)
+              rebuilt (build-index-state root_path
+                                         files-data
+                                         {:provenance_source "fresh_build"
+                                          :parent_snapshot_id (:snapshot_id loaded*)
+                                          :requested_snapshot_id pinned_snapshot_id
+                                          :max_snapshot_age_seconds max_snapshot_age_seconds
+                                          :rebuild_reason "snapshot_stale"})]
+          (maybe-save-index! storage rebuilt))
+        loaded*))
     (let [discovered (if (seq paths)
                        (normalize-paths paths)
                        (discover-source-files root_path))
           files-data (parse-files root_path discovered parser_opts)
-          index (build-index-state root_path files-data)]
+          index (build-index-state root_path
+                                   files-data
+                                   {:provenance_source "fresh_build"
+                                    :requested_snapshot_id pinned_snapshot_id
+                                    :max_snapshot_age_seconds max_snapshot_age_seconds
+                                    :rebuild_reason (or rebuild_reason
+                                                       (cond
+                                                         (seq paths) "paths_subset_requested"
+                                                         load_latest "storage_latest_missing"
+                                                         :else "initial_build"))})]
       (maybe-save-index! storage index))))
 
 (defn- remove-paths-from-index [index paths]
@@ -364,7 +451,8 @@
   (if (empty? changed_paths)
     (create-index {:root_path (:root_path index)
                    :parser_opts parser_opts
-                   :storage storage})
+                   :storage storage
+                   :rebuild_reason "full_rebuild"})
     (let [paths (normalize-paths changed_paths)
           base (remove-paths-from-index index paths)
           parsed (parse-files (:root_path index) paths parser_opts)
@@ -374,7 +462,10 @@
           updated (build-index-state (:root_path index)
                                      {:files merged-files
                                       :units merged-units
-                                      :diagnostics merged-diags})]
+                                      :diagnostics merged-diags}
+                                     {:provenance_source "incremental_update"
+                                      :parent_snapshot_id (:snapshot_id index)
+                                      :rebuild_reason "changed_paths_update"})]
       (maybe-save-index! storage updated))))
 
 (defn unit-by-id [index unit-id]
@@ -410,6 +501,7 @@
                       vec)]
      {:snapshot_id (:snapshot_id index)
       :indexed_at (:indexed_at index)
+      :index_lifecycle (:index_lifecycle index)
       :files files
       :modules modules
       :summary (str "Indexed " (count (:files index)) " files and " (count (:units index)) " units.")})))

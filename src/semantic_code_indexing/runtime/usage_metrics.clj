@@ -126,6 +126,12 @@
     (:feedback @(:state sink))
     []))
 
+(defn- parse-json [v]
+  (cond
+    (nil? v) nil
+    (string? v) (json/read-str v :key-fn keyword)
+    :else (json/read-str (str v) :key-fn keyword)))
+
 (defn- normalize-db-spec [{:keys [db-spec jdbc-url user password]}]
   (cond
     db-spec db-spec
@@ -393,3 +399,148 @@
     (try
       (record-feedback! sink feedback)
       (catch Exception _ false))))
+
+(defn- parse-iso-instant [value]
+  (when (seq (str value))
+    (Instant/parse (str value))))
+
+(defn- event-matches? [event {:keys [surface operation tenant_id since]}]
+  (and (if surface (= surface (:surface event)) true)
+       (if operation (= operation (:operation event)) true)
+       (if tenant_id (= tenant_id (:tenant_id event)) true)
+       (if since
+         (not (.isBefore (parse-iso-instant (:occurred_at event))
+                         (parse-iso-instant since)))
+         true)))
+
+(defn- postgres-events [sink opts]
+  (let [ds (:datasource sink)
+        {:keys [surface operation tenant_id since]} opts
+        sql (str "select occurred_at, surface, operation, status, trace_id, request_id, session_id,
+                         task_id, actor_id, tenant_id, root_path_hash, latency_ms, file_count,
+                         unit_count, selected_units_count, selected_files_count, cache_hit,
+                         confidence_level, autonomy_posture, result_status, raw_fetch_level, payload
+                  from semantic_usage_events
+                  where 1=1"
+                 (when surface " and surface = ?")
+                 (when operation " and operation = ?")
+                 (when tenant_id " and tenant_id = ?")
+                 (when since " and occurred_at >= cast(? as timestamptz)")
+                 " order by occurred_at asc")
+        params (cond-> [sql]
+                 surface (conj surface)
+                 operation (conj operation)
+                 tenant_id (conj tenant_id)
+                 since (conj since))]
+    (init-usage-metrics! sink)
+    (->> (jdbc/execute! ds params)
+         (mapv (fn [row]
+                 (normalize-event
+                  {:occurred_at (str (or (:semantic_usage_events/occurred_at row)
+                                         (:occurred_at row)))
+                   :surface (or (:semantic_usage_events/surface row) (:surface row))
+                   :operation (or (:semantic_usage_events/operation row) (:operation row))
+                   :status (or (:semantic_usage_events/status row) (:status row))
+                   :trace_id (or (:semantic_usage_events/trace_id row) (:trace_id row))
+                   :request_id (or (:semantic_usage_events/request_id row) (:request_id row))
+                   :session_id (or (:semantic_usage_events/session_id row) (:session_id row))
+                   :task_id (or (:semantic_usage_events/task_id row) (:task_id row))
+                   :actor_id (or (:semantic_usage_events/actor_id row) (:actor_id row))
+                   :tenant_id (or (:semantic_usage_events/tenant_id row) (:tenant_id row))
+                   :root_path_hash (or (:semantic_usage_events/root_path_hash row) (:root_path_hash row))
+                   :latency_ms (or (:semantic_usage_events/latency_ms row) (:latency_ms row))
+                   :file_count (or (:semantic_usage_events/file_count row) (:file_count row))
+                   :unit_count (or (:semantic_usage_events/unit_count row) (:unit_count row))
+                   :selected_units_count (or (:semantic_usage_events/selected_units_count row) (:selected_units_count row))
+                   :selected_files_count (or (:semantic_usage_events/selected_files_count row) (:selected_files_count row))
+                   :cache_hit (or (:semantic_usage_events/cache_hit row) (:cache_hit row))
+                   :confidence_level (or (:semantic_usage_events/confidence_level row) (:confidence_level row))
+                   :autonomy_posture (or (:semantic_usage_events/autonomy_posture row) (:autonomy_posture row))
+                   :result_status (or (:semantic_usage_events/result_status row) (:result_status row))
+                   :raw_fetch_level (or (:semantic_usage_events/raw_fetch_level row) (:raw_fetch_level row))
+                   :payload (parse-json (or (:semantic_usage_events/payload row) (:payload row)))}))))))
+
+(defn- sink-events [sink opts]
+  (cond
+    (instance? InMemoryUsageMetrics sink)
+    (->> (emitted-events sink)
+         (filter #(event-matches? % opts))
+         vec)
+
+    (instance? PostgresUsageMetrics sink)
+    (postgres-events sink opts)
+
+    :else []))
+
+(defn- rate [numerator denominator]
+  (if (pos? denominator)
+    (/ (double numerator) (double denominator))
+    0.0))
+
+(defn- percentile [sorted-values p]
+  (when (seq sorted-values)
+    (let [n (count sorted-values)
+          idx (-> (* p (dec n))
+                  Math/ceil
+                  int)]
+      (nth sorted-values idx))))
+
+(defn- latency-summary [events]
+  (let [latencies (->> events
+                       (keep :latency_ms)
+                       (map long)
+                       sort
+                       vec)
+        total (count latencies)]
+    {:count total
+     :mean_ms (if (pos? total)
+                (/ (reduce + 0 latencies) (double total))
+                0.0)
+     :p95_ms (or (percentile latencies 0.95) 0)
+     :max_ms (or (last latencies) 0)}))
+
+(defn- policy-version-distribution [resolve-events]
+  (->> resolve-events
+       (keep (fn [event]
+               (let [payload (:payload event)
+                     policy-id (:policy_id payload)
+                     policy-version (:policy_version payload)]
+                 (when (and (seq (str policy-id))
+                            (seq (str policy-version)))
+                   (str policy-id "@" policy-version)))))
+       frequencies
+       (into (sorted-map))))
+
+(defn slo-report
+  ([sink]
+   (slo-report sink {}))
+  ([sink opts]
+   (let [events (sink-events sink opts)
+         index-events (->> events
+                           (filter #(contains? #{"create_index" "update_index"} (:operation %)))
+                           vec)
+         retrieval-events (->> events
+                               (filter #(= "resolve_context" (:operation %)))
+                               vec)
+         cache-events (->> events
+                           (filter #(and (= "create_index" (:operation %))
+                                         (boolean? (:cache_hit %))))
+                           vec)
+         degraded-count (count (filter #(or (= "degraded" (:result_status %))
+                                            (= "error" (:status %)))
+                                       retrieval-events))
+         fallback-count (count (filter #(pos? (long (or (get-in % [:payload :fallback_units]) 0)))
+                                       retrieval-events))]
+     {:scope {:surface (:surface opts)
+              :operation (:operation opts)
+              :tenant_id (:tenant_id opts)
+              :since (:since opts)}
+      :totals {:events (count events)
+               :index_events (count index-events)
+               :retrieval_events (count retrieval-events)}
+      :index_latency_ms (latency-summary index-events)
+      :retrieval_latency_ms (latency-summary retrieval-events)
+      :cache_hit_ratio (rate (count (filter :cache_hit cache-events)) (count cache-events))
+      :degraded_rate (rate degraded-count (count retrieval-events))
+      :fallback_rate (rate fallback-count (count retrieval-events))
+      :policy_version_distribution (policy-version-distribution retrieval-events)})))

@@ -35,7 +35,8 @@
              {:key :indexed_at :proto-name "indexed_at" :number 2 :type :string}
              {:key :file_count :proto-name "file_count" :number 3 :type :int32}
              {:key :unit_count :proto-name "unit_count" :number 4 :type :int32}
-             {:key :repo_map_json :proto-name "repo_map_json" :number 5 :type :string}]}
+             {:key :repo_map_json :proto-name "repo_map_json" :number 5 :type :string}
+             {:key :index_lifecycle_json :proto-name "index_lifecycle_json" :number 6 :type :string}]}
 
    :resolve-context-request
    {:proto-name "ResolveContextRequest"
@@ -187,19 +188,23 @@
    :parser_opts (json-field "parser_opts_json"
                             (string-field :create-index-request message :parser_opts_json))})
 
-(defn create-index-response [{:keys [snapshot_id indexed_at file_count unit_count repo_map]}]
+(defn create-index-response [{:keys [snapshot_id indexed_at file_count unit_count repo_map index_lifecycle]}]
   (build-message :create-index-response
                  {:snapshot_id snapshot_id
                   :indexed_at indexed_at
                   :file_count (or file_count 0)
                   :unit_count (or unit_count 0)
-                  :repo_map_json (json-string repo_map)}))
+                  :repo_map_json (json-string repo_map)
+                  :index_lifecycle_json (json-string index_lifecycle)}))
 
 (defn create-index-response->map [message]
   {:snapshot_id (string-field :create-index-response message :snapshot_id)
    :indexed_at (string-field :create-index-response message :indexed_at)
    :file_count (int-field :create-index-response message :file_count)
    :unit_count (int-field :create-index-response message :unit_count)
+   :index_lifecycle (or (json-field "index_lifecycle_json"
+                                    (string-field :create-index-response message :index_lifecycle_json))
+                        {})
    :repo_map (or (json-field "repo_map_json"
                              (string-field :create-index-response message :repo_map_json))
                  {})})

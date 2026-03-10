@@ -30,8 +30,8 @@ Legend:
 - `[~]` Phase 3 Java semantic-core: overload-sensitive identity, arity-aware call linking, and static-import/class ownership now exist, but deeper Java ownership/disambiguation work still remains
 - `[~]` Phase 3 Python semantic-core: imported symbol resolution, module-alias handling, class-owned `self` / `cls` method linking, and test-file linkage now exist, but deeper Python ownership/disambiguation work still remains
 - `[~]` Phase 3 TypeScript: compatibility and regression coverage exist, but no strategic deepening work
-- `[ ]` Capabilities extended enough to drive per-language confidence ceilings and guardrails
-- `[~]` Phase 4 runtime and MCP hardening: snapshots, usage metrics, authz, and tenant hooks exist, but TTL, stale detection, provenance, snapshot pinning, rebuild reasons, unified error taxonomy, and full SLO metrics remain
+- `[x]` Capabilities now drive per-language confidence ceilings and guardrails, and governed replay reports `confidence_ceiling_distribution`
+- `[~]` Phase 4 runtime and MCP hardening: snapshots, usage metrics, authz, tenant hooks, index lifecycle metadata, unified machine-readable error taxonomy, and SLO-facing metrics now exist; remaining work is mainly deeper tenant/ops completeness rather than missing core governance primitives
 - `[ ]` Phase 5 real self-improvement loop: automatic replay harvesting, query-to-outcome linking, difficult-case harvesting, and calibration reports against real feedback
 
 ## Canonical References

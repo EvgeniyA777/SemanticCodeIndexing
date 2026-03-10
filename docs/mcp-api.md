@@ -69,10 +69,13 @@ Returns:
 - `index_id` - session-scoped handle for later calls
 - `snapshot_id`
 - `indexed_at`
+- `index_lifecycle`
 - `root_path`
 - `file_count`
 - `unit_count`
 - `cache_hit`
+
+`index_lifecycle` exposes the current snapshot reuse/provenance state for that handle, including whether it was rebuilt, reused, pinned, or considered stale.
 
 ### `repo_map`
 
@@ -106,7 +109,16 @@ Returns the existing runtime retrieval payload plus `index_id`:
 The returned `context_packet` and `diagnostics_trace` now include:
 
 - `retrieval_policy` - versioned ranking policy summary used for this retrieval
-- `capabilities` - parser/language coverage summary for the selected evidence set
+- `capabilities` - parser/language coverage summary for the selected authority/support evidence set, including per-language strength and a derived `confidence_ceiling`
+
+Because MCP uses the same core retrieval runtime as the library and service edges, recent semantic-core improvements also flow through `resolve_context` here:
+
+- Clojure: stronger namespace/test linkage, multimethod targeting, and macro-generated ownership hints
+- Elixir: better `import` / `use` normalization, imported-call expansion, `defdelegate` linkage, and ExUnit `related_tests`
+- Java: arity-aware overload linking plus better static-import/class ownership
+- Python: imported-symbol and module-alias resolution, `self` / `cls` method ownership, and Python test-file linkage
+
+Because the capability summary is now language-strength-aware, MCP `resolve_context` responses may also carry a capability-limited confidence outcome even when symbol resolution is exact. Today that effectively means Clojure can reach `high`, Elixir/Java/Python currently ceiling at `medium`, and TypeScript remains `low`-ceiling compatibility coverage.
 
 ### `impact_analysis`
 
@@ -142,3 +154,4 @@ Returns:
 - `paths` must be relative and must not contain traversal segments such as `..`.
 - Cached indexes are evicted by LRU when the process exceeds `SCI_MCP_MAX_INDEXES`.
 - If an `index_id` is evicted or unknown, the server returns an `index_not_found` tool error and the client should call `create_index` again.
+- MCP tool errors now carry canonical taxonomy fields in `structuredContent.details`: `code` and `category`.
