@@ -339,11 +339,176 @@
     (catch Exception _
       nil)))
 
+(defn- generated-call-form-texts [form-text]
+  (let [text (str form-text)
+        n (count text)
+        opening->closing {\( \) \[ \] \{ \}}
+        whitespace? #(Character/isWhitespace ^char %)]
+    (letfn [(skip-ws [j]
+              (loop [k j]
+                (if (and (< k n) (whitespace? (.charAt text k)))
+                  (recur (inc k))
+                  k)))
+            (read-quoted-form [start]
+              (let [open-ch (.charAt text start)
+                    close-ch (get opening->closing open-ch)]
+                (when close-ch
+                  (loop [j (inc start)
+                         depth 1
+                         in-string2? false
+                         escaped2? false
+                         comment2? false]
+                    (cond
+                      (>= j n) nil
+
+                      comment2?
+                      (recur (inc j) depth in-string2? escaped2? (not= (.charAt text j) \newline))
+
+                      escaped2?
+                      (recur (inc j) depth in-string2? false comment2?)
+
+                      in-string2?
+                      (let [ch2 (.charAt text j)]
+                        (cond
+                          (= ch2 \\) (recur (inc j) depth in-string2? true comment2?)
+                          (= ch2 \") (recur (inc j) depth false false comment2?)
+                          :else (recur (inc j) depth in-string2? false comment2?)))
+
+                      :else
+                      (let [ch2 (.charAt text j)]
+                        (cond
+                          (= ch2 \;) (recur (inc j) depth in-string2? false true)
+                          (= ch2 \") (recur (inc j) depth true false comment2?)
+                          (= ch2 open-ch) (recur (inc j) (inc depth) in-string2? false comment2?)
+                          (= ch2 close-ch) (if (= depth 1)
+                                             {:next-idx (inc j)
+                                              :quoted-form (subs text start (inc j))}
+                                             (recur (inc j) (dec depth) in-string2? false comment2?))
+                          :else (recur (inc j) depth in-string2? false comment2?))))))))]
+      (loop [idx 0
+             in-string? false
+             escaped? false
+             comment? false
+             acc []]
+        (if (>= idx n)
+          acc
+          (let [ch (.charAt text idx)]
+            (cond
+              comment?
+              (recur (inc idx) in-string? escaped? (not= ch \newline) acc)
+
+              escaped?
+              (recur (inc idx) in-string? false comment? acc)
+
+              in-string?
+              (cond
+                (= ch \\) (recur (inc idx) in-string? true comment? acc)
+                (= ch \") (recur (inc idx) false false comment? acc)
+                :else (recur (inc idx) in-string? false comment? acc))
+
+              (= ch \;)
+              (recur (inc idx) in-string? false true acc)
+
+              (= ch \")
+              (recur (inc idx) true false comment? acc)
+
+              (= ch \`)
+              (let [start (skip-ws (inc idx))
+                    quoted (when (< start n) (read-quoted-form start))]
+                (if quoted
+                  (recur (:next-idx quoted) in-string? false comment? (conj acc (:quoted-form quoted)))
+                  (recur (inc idx) in-string? false comment? acc)))
+
+              :else
+              (recur (inc idx) in-string? false comment? acc))))))))
+
+(def ^:private clj-generated-builder-ops
+  #{"list" "clojure.core/list"
+    "list*" "clojure.core/list*"
+    "cons" "clojure.core/cons"})
+
+(def ^:private clj-generated-apply-ops
+  #{"apply" "clojure.core/apply"})
+
+(defn- quoted-call-token [form]
+  (when (and (seq? form)
+             (= 'quote (first form)))
+    (some-> form second str)))
+
+(defn- defmacro-expansion-forms [form]
+  (let [parts (->> (drop 2 form)
+                   (drop-while #(or (string? %)
+                                    (map? %))))]
+    (cond
+      (vector? (first parts))
+      (some->> (rest parts) last vector)
+
+      (and (seq? (first parts))
+           (vector? (ffirst parts)))
+      (->> parts
+           (keep (fn [arity-form]
+                   (some->> (rest arity-form) last))))
+
+      :else
+      [])))
+
+(defn- generated-builder-call-tokens [form]
+  (letfn [(walk [node]
+            (cond
+              (nil? node)
+              []
+
+              (seq? node)
+              (let [items (seq node)
+                    op (some-> items first str)
+                    args (rest items)
+                    builder-token (cond
+                                    (contains? clj-generated-builder-ops op)
+                                    (quoted-call-token (first args))
+
+                                    (contains? clj-generated-apply-ops op)
+                                    (let [builder-op (some-> args first str)]
+                                      (when (contains? clj-generated-builder-ops builder-op)
+                                        (quoted-call-token (second args))))
+
+                                    :else
+                                    nil)]
+                (concat
+                 (when builder-token [builder-token])
+                 (mapcat walk items)))
+
+              (vector? node)
+              (mapcat walk node)
+
+              (map? node)
+              (mapcat walk (concat (keys node) (vals node)))
+
+              (set? node)
+              (mapcat walk node)
+
+              :else
+              []))]
+    (->> (walk form)
+         distinct
+         vec)))
+
+(defn- extract-clj-generated-calls [form-text alias-map]
+  (let [form (clj-read-form form-text)]
+    (->> (generated-call-form-texts form-text)
+         (mapcat #(extract-clj-calls % alias-map))
+         (concat
+          (->> (defmacro-expansion-forms form)
+               (mapcat generated-builder-call-tokens)
+               (mapcat #(expand-clj-call-token % alias-map))
+               (remove clj-call-stop)))
+         distinct
+         vec)))
+
 (defn- clj-dispatch-fragment [dispatch-value]
   (some-> dispatch-value pr-str (str/replace #"\s+" " ") str/trim))
 
 (defn- clj-unit-from-form
-  [{:keys [path ns-name raw-symbol operator kind start-line end-line signature imports calls parser-mode]}
+  [{:keys [path ns-name raw-symbol operator kind start-line end-line signature imports calls parser-mode alias-map]}
    form-text]
   (let [form (clj-read-form form-text)
         operator* (or operator (some-> form first str))
@@ -351,6 +516,8 @@
         symbol (clj-qualified-symbol ns-name raw-symbol)
         dispatch-value (when (= "defmethod" operator*)
                          (some-> form (nth 2 nil) clj-dispatch-fragment))
+        generated-calls (when (= "defmacro" operator*)
+                          (extract-clj-generated-calls form-text alias-map))
         unit-id (if dispatch-value
                   (str path "::" symbol "$dispatch" (short-hash dispatch-value))
                   (str path "::" symbol))
@@ -371,6 +538,8 @@
              :imports imports
              :calls calls
              :parser_mode parser-mode}
+      (seq generated-calls)
+      (assoc :generated_calls generated-calls)
       dispatch-value
       (assoc :dispatch_value dispatch-value
              :multimethod_symbol symbol))))
@@ -428,7 +597,8 @@
                                                  :signature (:signature d)
                                                  :imports imports
                                                  :calls (extract-clj-calls body alias-map)
-                                                 :parser-mode "fallback"}
+                                                 :parser-mode "fallback"
+                                                 :alias-map alias-map}
                                                 form-text))))
                    vec)]
     {:language "clojure"
@@ -498,7 +668,8 @@
                                            :signature (safe-line lines start)
                                            :imports imports
                                            :calls (clj-kondo-unit-calls var-usages start end)
-                                           :parser-mode "full"}
+                                           :parser-mode "full"
+                                           :alias-map (clj-require-alias-map lines)}
                                           form-text))))
              vec)
         existing-unit-ids (set (map :unit_id primary-units))
@@ -616,7 +787,8 @@
                                                          :signature (safe-line src-lines start-line)
                                                          :imports imports
                                                          :calls calls
-                                                         :parser-mode "full"}
+                                                         :parser-mode "full"
+                                                         :alias-map alias-map}
                                                         form-text))))
                            vec)]
             (if (seq units)

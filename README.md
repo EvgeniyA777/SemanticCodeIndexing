@@ -35,6 +35,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 
 - `adr/` - architecture decisions (`ADR-001` .. `ADR-022`)
 - `docs/` - runtime API and operational docs
+- `docs/roadmap-status.md` - canonical in-repo roadmap status checklist
 - `contracts/schemas/` - JSON Schema contracts (external source of truth)
 - `contracts/examples/` - canonical examples for contract families
 - `fixtures/retrieval/` - retrieval fixture corpus (behavior bands)
@@ -75,6 +76,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
 - Runtime API docs: [docs/runtime-api.md](docs/runtime-api.md)
 - MCP docs: [docs/mcp-api.md](docs/mcp-api.md)
+- Roadmap status checklist: [docs/roadmap-status.md](docs/roadmap-status.md)
 
 ## Agent Limit Policy
 
@@ -99,13 +101,15 @@ Current scope is contract architecture plus a working MVP runtime implementation
 
 ## Status
 
+Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-status.md).
+
 - contract layer established (`contracts/schemas`)
 - canonical example set established (`contracts/examples`)
 - seed fixture corpus established (`fixtures/retrieval`)
 - Clojure validation gate implemented (`src/semantic_code_indexing/contracts`)
 - MVP runtime implemented (`src/semantic_code_indexing/core.clj`, `src/semantic_code_indexing/runtime/*`)
 - Clojure retrieval uses `clj-kondo` as primary parser with fallback path
-- Clojure semantic-core now includes alias-aware fallback call resolution, top-level-aware fallback parsing for macro/comment wrappers, namespace-linked `related_tests` hints for test namespaces, dispatch-aware `defmethod` unit identities, dispatch-sensitive multimethod ranking, and graph-level macro-generated ownership for caller/callee edges
+- Clojure semantic-core now includes alias-aware fallback call resolution, top-level-aware fallback parsing for macro/comment wrappers, namespace-linked `related_tests` hints for test namespaces, dispatch-aware `defmethod` unit identities, dispatch-sensitive multimethod ranking, and recursive graph-level macro-generated ownership for syntax-quote, list-built, and common composed macro expansions such as `concat`, `apply list`, `into`, and conditional branches without leaking ordinary macro implementation helpers
 - Elixir, Python, and TypeScript retrieval paths are implemented in the same runtime adapter pipeline
 - multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python, TypeScript
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets

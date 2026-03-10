@@ -207,14 +207,31 @@
 (defn- macro-unit? [u]
   (= "defmacro" (:form_operator u)))
 
+(declare recursive-generated-target-ids)
+
+(defn- recursive-generated-target-ids [macro-unit token-index units-by-id files-by-path seen]
+  (if (or (nil? macro-unit)
+          (not (macro-unit? macro-unit))
+          (contains? seen (:unit_id macro-unit)))
+    []
+    (let [seen* (conj seen (:unit_id macro-unit))]
+      (->> (or (:generated_calls macro-unit) [])
+           (mapcat #(resolve-target-ids macro-unit % token-index units-by-id files-by-path))
+           distinct
+           (mapcat (fn [target-id]
+                     (let [target (get units-by-id target-id)]
+                       (if (macro-unit? target)
+                         (recursive-generated-target-ids target token-index units-by-id files-by-path seen*)
+                         [target-id]))))
+           distinct
+           vec))))
+
 (defn- inherited-macro-target-ids [resolved-target-ids token-index units-by-id files-by-path]
   (->> resolved-target-ids
        (map #(get units-by-id %))
        (remove nil?)
        (filter macro-unit?)
-       (mapcat (fn [macro-unit]
-                 (mapcat #(resolve-target-ids macro-unit % token-index units-by-id files-by-path)
-                         (:calls macro-unit))))
+       (mapcat #(recursive-generated-target-ids % token-index units-by-id files-by-path #{}))
        distinct
        vec))
 

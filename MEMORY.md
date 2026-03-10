@@ -17,7 +17,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Clojure-side contract mirror is implemented with `malli`.
 - MVP runtime is implemented with public API in `semantic-code-indexing.core`.
 - Clojure parser path supports `clj-kondo` primary with regex fallback and optional tree-sitter extraction mode.
-- Clojure fallback parsing now rewrites alias-qualified calls (`order/validate-order` -> `my.app.order/validate-order`), ignores nested defs inside wrapper forms such as `comment`, links test namespaces back to source namespaces for stronger `related_tests` hints, emits dispatch-aware `defmethod` unit identities, can rank the correct multimethod implementation from dispatch hints in the query text, and adds graph-level inherited caller edges for custom macros that structurally inject var calls.
+- Clojure fallback parsing now rewrites alias-qualified calls (`order/validate-order` -> `my.app.order/validate-order`), ignores nested defs inside wrapper forms such as `comment`, links test namespaces back to source namespaces for stronger `related_tests` hints, emits dispatch-aware `defmethod` unit identities, can rank the correct multimethod implementation from dispatch hints in the query text, and adds recursive graph-level inherited caller edges for custom macros across syntax-quote, list-built, and common composed expansions without leaking plain macro helper functions.
 - Java parser path supports regex mode and optional tree-sitter extraction mode.
 - Elixir/Python parser paths are regex-based with class/module-aware symbol and call normalization.
 - TypeScript parser supports regex mode and optional tree-sitter extraction mode.
@@ -45,6 +45,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Offline policy governance now supports registry lifecycle states (`draft`, `shadow`, `active`, `retired`), replay scorecards, side-by-side policy comparison, and promotion gates via `clojure -M:eval`.
 - Replay datasets can now mark `protected_case` queries, and promotion gates reject candidate policies that introduce newly failed protected cases.
 - Shadow-vs-active operational workflow now exists via `shadow-review`, which evaluates all `shadow` policies against the current `active` registry policy and can persist `:shadow_review` metadata back into the registry.
+- Canonical in-repo roadmap status checklist now lives in `docs/roadmap-status.md`, with a dated rationale and status snapshot stored under `notes/`.
 
 ## Hard Invariants
 
@@ -64,11 +65,16 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Tree-sitter path still depends on external CLI availability, though grammar bootstrap is now scripted and pinned.
 - Persistence graph queries are retrieval-oriented and not yet a full semantic graph query language.
 - Automatic replay dataset harvesting from real usage traces and feedback is not implemented yet.
+- Language-priority roadmap tail remains open after the current Clojure push: Elixir needs deeper `import/use` and ownership resolution, Java needs stronger import/class ownership plus overload targeting, and Python remains mostly baseline ownership/import resolution.
+- Capabilities are not yet language-strength-aware enough to drive per-language confidence ceilings and guardrails.
+- Runtime hardening still lacks TTL/stale detection, provenance, snapshot pinning policy, unified machine-readable error taxonomy, and a complete SLO-facing operational metrics set.
+- Real self-improvement loop is not implemented beyond usage metrics and explicit feedback sinks.
 
 ## Next Execution Priorities
 
-1. Continue Clojure semantic-core deepening: richer macro-generated ownership beyond one-hop inherited calls, namespace/var identity beyond `defmethod` dispatch, and more precise caller/callee resolution around generated forms.
-2. After the next Clojure slice, extend governed quality loop with a more explicit policy-management control plane across runtime surfaces and richer protected dataset curation workflows.
+1. Deepen semantic-core for the next roadmap language priority: Elixir first, then Java, then Python, while keeping TypeScript in no-regression coverage.
+2. Extend capabilities and retrieval calibration so language strength can influence confidence ceilings, guardrails, and governed scorecards.
+3. After language-priority work materially improves retrieval quality, implement Phase 4 runtime hardening: index lifecycle policy, unified error taxonomy, and fuller SLO-facing metrics.
 
 ## Update Rule
 
