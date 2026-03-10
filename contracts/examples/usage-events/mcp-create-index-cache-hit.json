@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "event_id": "b2222222-2222-4222-8222-222222222222",
+  "occurred_at": "2026-03-10T18:43:05Z",
+  "surface": "mcp",
+  "operation": "create_index",
+  "status": "success",
+  "session_id": "mcp-session-001",
+  "actor_id": "codex-client",
+  "root_path_hash": "4f4df36dd979de0b7c6a5b4f2176fa4c2fbb0b3e9d1ec6f7d2d5d77f6b3722d2",
+  "latency_ms": 3,
+  "file_count": 18,
+  "unit_count": 64,
+  "cache_hit": true,
+  "payload": {
+    "paths_count": 0,
+    "force_rebuild": false,
+    "snapshot_id": "snap-usage-cache-hit-001"
+  }
+}

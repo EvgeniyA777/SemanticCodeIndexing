@@ -35,6 +35,8 @@ Reference sources:
 - guardrail assessment
 - diagnostics trace
 - retrieval stage event
+- usage event
+- usage feedback
 - override record
 - human review record
 

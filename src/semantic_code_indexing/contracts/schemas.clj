@@ -22,6 +22,20 @@
 
 (def confidence-level [:enum "high" "medium" "low"])
 (def autonomy-posture [:enum "read_safe" "plan_safe" "draft_patch_safe" "autonomy_blocked"])
+(def usage-surface [:enum "library" "mcp" "http" "grpc"])
+(def usage-operation
+  [:enum
+   "server_start"
+   "create_index"
+   "update_index"
+   "repo_map"
+   "resolve_context"
+   "impact_analysis"
+   "skeletons"
+   "cache_eviction"])
+(def usage-status [:enum "success" "error"])
+(def feedback-outcome [:enum "helpful" "partially_helpful" "not_helpful" "abandoned"])
+(def followup-action [:enum "planned" "drafted" "patched" "discarded"])
 (def stage-name
   [:enum
    "query_validation"
@@ -34,6 +48,9 @@
 (def event-status [:enum "started" "completed" "degraded" "failed" "skipped"])
 (def raw-fetch-level [:enum "none" "target_span" "enclosing_unit" "local_neighborhood" "whole_file"])
 (def rank-band [:enum "top_authority" "useful_support" "exploratory" "below_threshold_noise"])
+(def root-path-hash [:re "^[0-9a-f]{64}$"])
+(def payload-value [:or bounded-string boolean? int? float?])
+(def bounded-payload-map [:map-of {:max 16} code-key payload-value])
 (def unit-kind
   [:enum
    "namespace"
@@ -286,6 +303,52 @@
    [:timestamp timestamp]
    [:rationale coded-item]])
 
+(def usage-event
+  [:map {:closed true}
+   [:schema_version schema-version]
+   [:event_id uuid-str]
+   [:occurred_at timestamp]
+   [:surface usage-surface]
+   [:operation usage-operation]
+   [:status usage-status]
+   [:trace_id {:optional true} uuid-str]
+   [:request_id {:optional true} bounded-string]
+   [:session_id {:optional true} bounded-string]
+   [:task_id {:optional true} bounded-string]
+   [:actor_id {:optional true} bounded-string]
+   [:tenant_id {:optional true} bounded-string]
+   [:root_path_hash {:optional true} root-path-hash]
+   [:latency_ms {:optional true} nat-int?]
+   [:file_count {:optional true} nat-int?]
+   [:unit_count {:optional true} nat-int?]
+   [:selected_units_count {:optional true} nat-int?]
+   [:selected_files_count {:optional true} nat-int?]
+   [:cache_hit {:optional true} boolean?]
+   [:confidence_level {:optional true} confidence-level]
+   [:autonomy_posture {:optional true} autonomy-posture]
+   [:result_status {:optional true} [:enum "completed" "degraded" "failed"]]
+   [:raw_fetch_level {:optional true} raw-fetch-level]
+   [:payload bounded-payload-map]])
+
+(def usage-feedback
+  [:map {:closed true}
+   [:schema_version schema-version]
+   [:feedback_id uuid-str]
+   [:occurred_at timestamp]
+   [:surface usage-surface]
+   [:operation usage-operation]
+   [:feedback_outcome feedback-outcome]
+   [:trace_id {:optional true} uuid-str]
+   [:request_id {:optional true} bounded-string]
+   [:session_id {:optional true} bounded-string]
+   [:task_id {:optional true} bounded-string]
+   [:actor_id {:optional true} bounded-string]
+   [:tenant_id {:optional true} bounded-string]
+   [:root_path_hash {:optional true} root-path-hash]
+   [:feedback_reason {:optional true} bounded-string]
+   [:followup_action {:optional true} followup-action]
+   [:payload bounded-payload-map]])
+
 (def example-catalog-entry
   [:map {:closed true}
    [:example_id bounded-string]
@@ -331,6 +394,8 @@
    :example/context-packet context-packet
    :example/diagnostics-trace diagnostics-trace
    :example/stage-event retrieval-stage-event
+   :example/usage-event usage-event
+   :example/usage-feedback usage-feedback
    :example/confidence confidence
    :example/guardrail-assessment guardrail-assessment
    :example/override-record override-record

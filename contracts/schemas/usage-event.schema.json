@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-code-indexing.example/contracts/schemas/usage-event.schema.json",
+  "title": "Usage Event",
+  "description": "Bounded usage telemetry event for library and runtime surfaces.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "occurred_at",
+    "surface",
+    "operation",
+    "status",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "event_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "occurred_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "surface": {
+      "$ref": "common.schema.json#/$defs/usageSurface"
+    },
+    "operation": {
+      "$ref": "common.schema.json#/$defs/usageOperation"
+    },
+    "status": {
+      "$ref": "common.schema.json#/$defs/usageStatus"
+    },
+    "trace_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "task_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "actor_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "tenant_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "root_path_hash": {
+      "$ref": "common.schema.json#/$defs/rootPathHash"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unit_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "selected_units_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "selected_files_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cache_hit": {
+      "type": "boolean"
+    },
+    "confidence_level": {
+      "$ref": "common.schema.json#/$defs/confidenceLevel"
+    },
+    "autonomy_posture": {
+      "$ref": "common.schema.json#/$defs/autonomyPosture"
+    },
+    "result_status": {
+      "type": "string",
+      "enum": ["completed", "degraded", "failed"]
+    },
+    "raw_fetch_level": {
+      "$ref": "common.schema.json#/$defs/rawFetchLevel"
+    },
+    "payload": {
+      "$ref": "common.schema.json#/$defs/boundedPayloadMap"
+    }
+  }
+}

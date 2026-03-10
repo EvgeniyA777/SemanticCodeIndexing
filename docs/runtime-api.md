@@ -198,6 +198,51 @@ PostgreSQL adapter persists:
 - unit projections (`semantic_index_units`)
 - call edge projections (`semantic_index_call_edges`)
 
+## Usage Metrics Sinks
+
+Usage metrics are optional and separate from index persistence.
+
+### In-memory usage metrics
+
+```clojure
+(def metrics (sci/in-memory-usage-metrics))
+
+(def index
+  (sci/create-index
+   {:root_path "."
+    :usage_metrics metrics
+    :usage_context {:session_id "session-001"
+                    :task_id "task-001"
+                    :actor_id "planner-agent"}}))
+
+(sci/resolve-context index query)
+(sci/record-feedback! index {:trace_id "11111111-1111-4111-8111-111111111111"
+                             :request_id "req-example-001"
+                             :feedback_outcome "helpful"
+                             :followup_action "planned"})
+```
+
+### PostgreSQL usage metrics
+
+```clojure
+(def metrics
+  (sci/postgres-usage-metrics
+   {:jdbc-url "jdbc:postgresql://localhost:5432/semantic_index"
+    :user "semantic_user"
+    :password "change-me"}))
+
+(def index
+  (sci/create-index
+   {:root_path "."
+    :usage_metrics metrics}))
+```
+
+PostgreSQL usage metrics persist:
+
+- raw events in `semantic_usage_events`
+- explicit feedback in `semantic_usage_feedback`
+- daily aggregates in `semantic_usage_daily_rollups`
+
 ### `skeletons`
 
 Returns skeletons for specific units or paths.

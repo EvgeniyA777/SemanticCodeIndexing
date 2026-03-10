@@ -13,6 +13,9 @@ Environment:
 
 - `SCI_MCP_ALLOWED_ROOTS` - optional allowlist of canonical repository roots; use the platform path separator (`:` on macOS/Linux, `;` on Windows)
 - `SCI_MCP_MAX_INDEXES` - optional in-memory LRU cache size; default `8`
+- `SCI_USAGE_METRICS_JDBC_URL` - optional PostgreSQL JDBC URL for MCP usage metrics
+- `SCI_USAGE_METRICS_DB_USER` - optional PostgreSQL username for MCP usage metrics
+- `SCI_USAGE_METRICS_DB_PASSWORD` - optional PostgreSQL password for MCP usage metrics
 
 If `SCI_MCP_ALLOWED_ROOTS` is missing, the server defaults the allowlist to the current working directory of the MCP process and prints a warning with:
 
@@ -23,6 +26,13 @@ If `SCI_MCP_ALLOWED_ROOTS` is missing, the server defaults the allowlist to the 
 The server does not prompt interactively for this choice because `stdin`/`stdout` are reserved for MCP transport.
 
 The MCP server exposes only `tools` capability in v1 and keeps cached indexes in-process for the lifetime of the server.
+
+If `SCI_USAGE_METRICS_JDBC_URL` is configured, the server records:
+
+- tool usage events by operation (`create_index`, `repo_map`, `resolve_context`, `impact_analysis`, `skeletons`)
+- cache-hit/cache-miss behavior for `create_index`
+- cache eviction events
+- correlation fields such as `session_id`, `trace_id`, and `request_id` where available
 
 ## Recommended Client Description
 

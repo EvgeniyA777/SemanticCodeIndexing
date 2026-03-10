@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantic-code-indexing.example/contracts/schemas/usage-feedback.schema.json",
+  "title": "Usage Feedback",
+  "description": "Bounded explicit feedback record for correlated usage telemetry flows.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "feedback_id",
+    "occurred_at",
+    "surface",
+    "operation",
+    "feedback_outcome",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "feedback_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "occurred_at": {
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "surface": {
+      "$ref": "common.schema.json#/$defs/usageSurface"
+    },
+    "operation": {
+      "$ref": "common.schema.json#/$defs/usageOperation"
+    },
+    "feedback_outcome": {
+      "$ref": "common.schema.json#/$defs/feedbackOutcome"
+    },
+    "trace_id": {
+      "$ref": "common.schema.json#/$defs/uuid"
+    },
+    "request_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "session_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "task_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "actor_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "tenant_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "root_path_hash": {
+      "$ref": "common.schema.json#/$defs/rootPathHash"
+    },
+    "feedback_reason": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "followup_action": {
+      "$ref": "common.schema.json#/$defs/followupAction"
+    },
+    "payload": {
+      "$ref": "common.schema.json#/$defs/boundedPayloadMap"
+    }
+  }
+}

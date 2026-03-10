@@ -35,6 +35,8 @@
       (str/includes? p "contracts/examples/context-packets/") :example/context-packet
       (str/includes? p "contracts/examples/diagnostics/") :example/diagnostics-trace
       (str/includes? p "contracts/examples/events/") :example/stage-event
+      (str/includes? p "contracts/examples/usage-events/") :example/usage-event
+      (str/includes? p "contracts/examples/usage-feedback/") :example/usage-feedback
       (str/includes? p "contracts/examples/confidence/") :example/confidence
       (str/includes? p "contracts/examples/guardrails/") :example/guardrail-assessment
       (str/ends-with? p "contracts/examples/policy/override-record.json") :example/override-record

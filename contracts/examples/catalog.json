@@ -110,6 +110,33 @@
       "expected_interpretation": "Marks the end of a bounded retrieval flow ready for host consumption."
     },
     {
+      "example_id": "usage_event_library_resolve_context_success_001",
+      "contract_family": "usage_event",
+      "path": "usage-events/library-resolve-context-success.json",
+      "schema": "../schemas/usage-event.schema.json",
+      "adr_refs": ["ADR-023"],
+      "purpose": "Library usage event for a successful resolve-context flow with bounded usefulness summaries.",
+      "expected_interpretation": "Captures retrieval adoption and bounded quality signals without exposing raw queries or raw code."
+    },
+    {
+      "example_id": "usage_event_mcp_create_index_cache_hit_001",
+      "contract_family": "usage_event",
+      "path": "usage-events/mcp-create-index-cache-hit.json",
+      "schema": "../schemas/usage-event.schema.json",
+      "adr_refs": ["ADR-023"],
+      "purpose": "MCP usage event showing a cache-hit index reuse path.",
+      "expected_interpretation": "Tracks MCP-side adoption and cache efficiency with session-scoped correlation."
+    },
+    {
+      "example_id": "usage_feedback_library_helpful_001",
+      "contract_family": "usage_feedback",
+      "path": "usage-feedback/library-helpful-feedback.json",
+      "schema": "../schemas/usage-feedback.schema.json",
+      "adr_refs": ["ADR-023"],
+      "purpose": "Explicit helpfulness feedback linked to a prior library retrieval flow.",
+      "expected_interpretation": "Lets a host report whether retrieval materially helped an agent task without sending full task payloads."
+    },
+    {
       "example_id": "confidence_high_001",
       "contract_family": "confidence",
       "path": "confidence/high.json",

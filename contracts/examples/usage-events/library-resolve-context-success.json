@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "event_id": "b1111111-1111-4111-8111-111111111111",
+  "occurred_at": "2026-03-10T18:42:11Z",
+  "surface": "library",
+  "operation": "resolve_context",
+  "status": "success",
+  "trace_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "request_id": "req-usage-event-001",
+  "session_id": "session-order-debug-001",
+  "task_id": "task-order-debug-001",
+  "actor_id": "planner_agent",
+  "tenant_id": "tenant-001",
+  "root_path_hash": "4f4df36dd979de0b7c6a5b4f2176fa4c2fbb0b3e9d1ec6f7d2d5d77f6b3722d2",
+  "latency_ms": 24,
+  "selected_units_count": 4,
+  "selected_files_count": 2,
+  "confidence_level": "high",
+  "autonomy_posture": "draft_patch_safe",
+  "result_status": "completed",
+  "raw_fetch_level": "none",
+  "payload": {
+    "estimated_tokens": 640,
+    "requested_tokens": 1200,
+    "warning_count": 0,
+    "degradation_count": 0,
+    "fallback_units": 0
+  }
+}

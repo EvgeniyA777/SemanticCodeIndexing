@@ -3,7 +3,8 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [semantic-code-indexing.core :as sci])
+            [semantic-code-indexing.core :as sci]
+            [semantic-code-indexing.runtime.usage-metrics :as usage])
   (:import [java.io ByteArrayOutputStream InputStream OutputStream PushbackInputStream]
            [java.util UUID]))
 
@@ -17,6 +18,27 @@
 
 (defn- now-ms []
   (System/currentTimeMillis))
+
+(defn- tool-usage-context [state]
+  (let [state* @state
+        client-info (:client-info state*)]
+    (cond-> {:surface "mcp"
+             :session_id (:session_id state*)}
+      (:name client-info) (assoc :actor_id (:name client-info))
+      (:tenant_id state*) (assoc :tenant_id (:tenant_id state*)))))
+
+(defn- record-mcp-event! [state event]
+  (when-let [sink (:usage_metrics @state)]
+    (usage/safe-record-event! sink (merge (tool-usage-context state) event))))
+
+(defn- usage-fields-for-query [query]
+  {:trace_id (get-in query [:trace :trace_id])
+   :request_id (get-in query [:trace :request_id])
+   :actor_id (or (get-in query [:trace :actor_id])
+                 (get-in query [:trace :agent_id]))})
+
+(defn- with-usage-event [payload event-fields]
+  (with-meta payload (merge (meta payload) {:usage_event_fields event-fields})))
 
 (defn- log! [& xs]
   (binding [*out* *err*]
@@ -217,20 +239,29 @@
              cache-index))
 
 (defn- evict-excess! [state]
-  (swap! state
-         (fn [current]
-           (let [entries (vals (:indexes-by-id current))
-                 excess (- (count entries) (:max-indexes current))]
-             (if (pos? excess)
-               (let [evicted-ids (->> entries
-                                      (sort-by :last_accessed_at)
-                                      (take excess)
-                                      (map :index_id)
-                                      set)]
-                 (-> current
-                     (update :indexes-by-id #(apply dissoc % evicted-ids))
-                     (update :cache-key->index-id remove-evicted-cache-keys evicted-ids)))
-               current)))))
+  (let [evicted (atom [])]
+    (swap! state
+           (fn [current]
+             (let [entries (vals (:indexes-by-id current))
+                   excess (- (count entries) (:max-indexes current))]
+               (if (pos? excess)
+                 (let [evicted-entries (->> entries
+                                            (sort-by :last_accessed_at)
+                                            (take excess)
+                                            vec)
+                       evicted-ids (set (map :index_id evicted-entries))]
+                   (reset! evicted evicted-entries)
+                   (-> current
+                       (update :indexes-by-id #(apply dissoc % evicted-ids))
+                       (update :cache-key->index-id remove-evicted-cache-keys evicted-ids)))
+                 current))))
+    (when (seq @evicted)
+      (record-mcp-event!
+       state
+       {:operation "cache_eviction"
+        :status "success"
+        :payload {:evicted_index_count (count @evicted)
+                  :evicted_index_ids (mapv :index_id @evicted)}}))))
 
 (defn- store-index! [state cache-key-value root-path paths parser-opts index]
   (let [ts (now-ms)
@@ -271,12 +302,31 @@
         cache-key-value (cache-key root-path paths parser-opts)]
     (if-let [entry (when-not force-rebuild
                      (find-cached-entry state cache-key-value))]
-      (index-summary entry true)
+      (with-usage-event
+        (index-summary entry true)
+        {:root_path_hash (usage/hash-root-path root-path)
+         :file_count (count (get-in entry [:index :files]))
+         :unit_count (count (get-in entry [:index :units]))
+         :cache_hit true
+         :payload {:force_rebuild force-rebuild
+                   :paths_count (count paths)
+                   :snapshot_id (get-in entry [:index :snapshot_id])}})
       (let [index (sci/create-index {:root_path root-path
                                      :paths paths
-                                     :parser_opts parser-opts})
+                                     :parser_opts parser-opts
+                                     :usage_metrics (:usage_metrics @state)
+                                     :usage_context (tool-usage-context state)
+                                     :suppress_usage_metrics true})
             entry (store-index! state cache-key-value root-path paths parser-opts index)]
-        (index-summary entry false)))))
+        (with-usage-event
+          (index-summary entry false)
+          {:root_path_hash (usage/hash-root-path root-path)
+           :file_count (count (get-in entry [:index :files]))
+           :unit_count (count (get-in entry [:index :units]))
+           :cache_hit false
+           :payload {:force_rebuild force-rebuild
+                     :paths_count (count paths)
+                     :snapshot_id (get-in entry [:index :snapshot_id])}})))))
 
 (defn- tool-repo-map [state args]
   (when-not (map? args)
@@ -288,9 +338,15 @@
                (some? max-files) (assoc :max_files max-files)
                (some? max-modules) (assoc :max_modules max-modules))
         result (if (seq opts)
-                 (sci/repo-map (:index entry) opts)
-                 (sci/repo-map (:index entry)))]
-    (assoc result :index_id (:index_id entry))))
+                 (sci/repo-map (:index entry) (merge opts {:suppress_usage_metrics true}))
+                 (sci/repo-map (:index entry) {:suppress_usage_metrics true}))]
+    (with-usage-event
+      (assoc result :index_id (:index_id entry))
+      {:root_path_hash (usage/hash-root-path (:root_path entry))
+       :payload {:index_id (:index_id entry)
+                 :snapshot_id (:snapshot_id result)
+                 :file_count (count (:files result))
+                 :module_count (count (:modules result))}})))
 
 (defn- tool-resolve-context [state args]
   (when-not (map? args)
@@ -299,8 +355,23 @@
         query (ensure-map-or-nil (:query args) "query")]
     (when-not query
       (invalid-request "query is required"))
-    (assoc (sci/resolve-context (:index entry) query)
-           :index_id (:index_id entry))))
+    (let [result (assoc (sci/resolve-context (:index entry) query {:suppress_usage_metrics true})
+                        :index_id (:index_id entry))]
+      (with-usage-event
+        result
+        (merge
+         (usage-fields-for-query query)
+         {:root_path_hash (usage/hash-root-path (:root_path entry))
+          :selected_units_count (count (get-in result [:context_packet :relevant_units]))
+          :selected_files_count (get-in result [:diagnostics_trace :result :selected_files_count])
+          :confidence_level (get-in result [:context_packet :confidence :level])
+          :autonomy_posture (get-in result [:guardrail_assessment :autonomy_posture])
+          :result_status (get-in result [:diagnostics_trace :result :result_status])
+          :raw_fetch_level (get-in result [:diagnostics_trace :result :raw_fetch_level_reached])
+          :payload {:index_id (:index_id entry)
+                    :warning_count (count (get-in result [:diagnostics_trace :warnings]))
+                    :degradation_count (count (get-in result [:diagnostics_trace :degradations]))
+                    :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])}})))))
 
 (defn- tool-impact-analysis [state args]
   (when-not (map? args)
@@ -309,8 +380,18 @@
         query (ensure-map-or-nil (:query args) "query")]
     (when-not query
       (invalid-request "query is required"))
-    {:index_id (:index_id entry)
-     :impact_hints (sci/impact-analysis (:index entry) query)}))
+    (let [impact-hints (sci/impact-analysis (:index entry) query {:suppress_usage_metrics true})]
+      (with-usage-event
+        {:index_id (:index_id entry)
+         :impact_hints impact-hints}
+        (merge
+         (usage-fields-for-query query)
+         {:root_path_hash (usage/hash-root-path (:root_path entry))
+          :payload {:index_id (:index_id entry)
+                    :callers_count (count (:callers impact-hints))
+                    :dependents_count (count (:dependents impact-hints))
+                    :related_tests_count (count (:related_tests impact-hints))
+                    :risky_neighbors_count (count (:risky_neighbors impact-hints))}})))))
 
 (defn- tool-skeletons [state args]
   (when-not (map? args)
@@ -320,8 +401,15 @@
                   :unit_ids (normalize-unit-ids (:unit_ids args))}]
     (when-not (or (seq (:paths selector)) (seq (:unit_ids selector)))
       (invalid-request "skeletons requires paths or unit_ids"))
-    {:index_id (:index_id entry)
-     :skeletons (sci/skeletons (:index entry) selector)}))
+    (let [skeletons (sci/skeletons (:index entry) selector {:suppress_usage_metrics true})]
+      (with-usage-event
+        {:index_id (:index_id entry)
+         :skeletons skeletons}
+        {:root_path_hash (usage/hash-root-path (:root_path entry))
+         :payload {:index_id (:index_id entry)
+                   :skeleton_count (count skeletons)
+                   :path_count (count (:paths selector))
+                   :unit_id_count (count (:unit_ids selector))}}))))
 
 (def ^:private tool-definitions
   [{:name "create_index"
@@ -542,18 +630,44 @@
   (when-not (map? params)
     (invalid-request "tools/call params must be an object"))
   (let [tool-name (ensure-string (:name params) "name")
-        arguments (or (:arguments params) {})]
+        arguments (or (:arguments params) {})
+        started-at (now-ms)]
     (when-not (map? arguments)
       (invalid-request "tools/call arguments must be an object"))
     (if-let [handler (get tool-handlers tool-name)]
       (try
-        (tool-success (handler state arguments))
+        (let [payload (handler state arguments)
+              event-fields (:usage_event_fields (meta payload))]
+          (record-mcp-event!
+           state
+           (merge event-fields
+                  {:operation tool-name
+                   :status "success"
+                   :latency_ms (- (now-ms) started-at)}))
+          (tool-success payload))
         (catch Exception e
           (log! "mcp_tool_error" tool-name (.getMessage e))
+          (record-mcp-event!
+           state
+           (merge (usage-fields-for-query (:query arguments))
+                  {:operation tool-name
+                   :status "error"
+                   :latency_ms (- (now-ms) started-at)
+                   :root_path_hash (some-> (:root_path arguments) usage/hash-root-path)
+                   :payload {:error_class (.getName (class e))
+                             :error_message (.getMessage e)}}))
           (exception->tool-result e)))
-      (tool-error "unknown tool"
-                  {:code "unknown_tool"
-                   :details {:name tool-name}}))))
+      (do
+        (record-mcp-event!
+         state
+         {:operation tool-name
+          :status "error"
+          :latency_ms (- (now-ms) started-at)
+          :payload {:error_code "unknown_tool"
+                    :tool_name tool-name}})
+        (tool-error "unknown tool"
+                    {:code "unknown_tool"
+                     :details {:name tool-name}})))))
 
 (defn- handle-message! [state ^OutputStream output-stream transport-format message]
   (let [id (:id message)
@@ -565,11 +679,13 @@
     (when (= "2.0" (:jsonrpc message))
       (case method
         "initialize"
-        (send-message! output-stream transport-format
-                       (jsonrpc-success id {:protocolVersion (negotiate-protocol-version message)
-                                            :capabilities {:tools {}}
-                                            :serverInfo {:name server-name
-                                                         :version server-version}}))
+        (do
+          (swap! state assoc :client-info (get-in message [:params :clientInfo]))
+          (send-message! output-stream transport-format
+                         (jsonrpc-success id {:protocolVersion (negotiate-protocol-version message)
+                                              :capabilities {:tools {}}
+                                              :serverInfo {:name server-name
+                                                           :version server-version}})))
 
         "notifications/initialized"
         (swap! state assoc :initialized? true)
@@ -589,12 +705,14 @@
         (when (contains? message :id)
           (send-message! output-stream transport-format (jsonrpc-error id -32601 (str "method not found: " method))))))))
 
-(defn start-server-loop! [{:keys [allowed-roots max-indexes]
+(defn start-server-loop! [{:keys [allowed-roots max-indexes usage_metrics]
                            :or {max-indexes default-max-indexes}}]
   (let [state (atom {:initialized? false
                      :transport-format nil
                      :allowed-roots allowed-roots
                      :max-indexes max-indexes
+                     :session_id (str (UUID/randomUUID))
+                     :usage_metrics usage_metrics
                      :indexes-by-id {}
                      :cache-key->index-id {}})
         input-stream (PushbackInputStream. System/in 8)
@@ -626,8 +744,19 @@
         allowed-roots (resolve-allowed-roots allowed_roots)
         max-indexes (or max_indexes
                         (some-> (System/getenv "SCI_MCP_MAX_INDEXES") parse-long)
-                        default-max-indexes)]
+                        default-max-indexes)
+        usage-metrics (when-let [jdbc-url (System/getenv "SCI_USAGE_METRICS_JDBC_URL")]
+                        (sci/postgres-usage-metrics {:jdbc-url jdbc-url
+                                                     :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                                     :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")}))]
     (log! "semantic_code_indexing_mcp_started" {:allowed_roots allowed-roots
                                                 :max_indexes max-indexes})
+    (when usage-metrics
+      (usage/safe-record-event! usage-metrics {:surface "mcp"
+                                               :operation "server_start"
+                                               :status "success"
+                                               :payload {:allowed_root_count (count allowed-roots)
+                                                         :max_indexes max-indexes}}))
     (start-server-loop! {:allowed-roots allowed-roots
-                         :max-indexes max-indexes})))
+                         :max-indexes max-indexes
+                         :usage_metrics usage-metrics})))

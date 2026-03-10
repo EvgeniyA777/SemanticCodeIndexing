@@ -82,6 +82,35 @@
       "type": "string",
       "enum": ["read_safe", "plan_safe", "draft_patch_safe", "autonomy_blocked"]
     },
+    "usageSurface": {
+      "type": "string",
+      "enum": ["library", "mcp", "http", "grpc"]
+    },
+    "usageOperation": {
+      "type": "string",
+      "enum": [
+        "server_start",
+        "create_index",
+        "update_index",
+        "repo_map",
+        "resolve_context",
+        "impact_analysis",
+        "skeletons",
+        "cache_eviction"
+      ]
+    },
+    "usageStatus": {
+      "type": "string",
+      "enum": ["success", "error"]
+    },
+    "feedbackOutcome": {
+      "type": "string",
+      "enum": ["helpful", "partially_helpful", "not_helpful", "abandoned"]
+    },
+    "followupAction": {
+      "type": "string",
+      "enum": ["planned", "drafted", "patched", "discarded"]
+    },
     "stageName": {
       "type": "string",
       "enum": [
@@ -174,6 +203,37 @@
         "type": ["integer", "number"]
       },
       "maxProperties": 12,
+      "default": {}
+    },
+    "rootPathHash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "boundedPayloadValue": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/boundedString"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "boundedPayloadMap": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/code"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/boundedPayloadValue"
+      },
+      "maxProperties": 16,
       "default": {}
     }
   }

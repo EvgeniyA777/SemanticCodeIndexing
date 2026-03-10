@@ -18,6 +18,7 @@ The project defines how a host system should request code context, how retrieval
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `impact-analysis`, `skeletons`
 - includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript` and emits diagnostics/guardrails outputs
 - supports optional persistence adapters (`in-memory`, `PostgreSQL`) with snapshot + graph projection storage for PostgreSQL
+- supports optional usage metrics adapters (`in-memory`, `PostgreSQL`) for library and MCP adoption/usefulness telemetry
 - includes retrieval benchmark suite aligned with fixture corpus (`ADR-014`)
 
 ## What This Project Does Not Do (Yet)
@@ -53,6 +54,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out "${TMPDIR:-.tmp}/sci.json"`
 - Run stdio MCP server: `SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" clojure -M:mcp`
+- Enable MCP usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:mcp`
 - If `SCI_MCP_ALLOWED_ROOTS` is missing, the MCP server now defaults the allowlist to the current `cwd` and prints a warning with explicit override examples; it does not prompt interactively because MCP uses stdio transport
 - Run minimal HTTP edge: `clojure -M:runtime-http --host 127.0.0.1 --port 8787`
 - Run minimal gRPC edge: `clojure -M:runtime-grpc --host 127.0.0.1 --port 8789`
@@ -101,6 +103,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - tiered structural-first ranking and non-compensating confidence model implemented
 - late raw-code escalation stage is implemented and controlled by query options/constraints
 - PostgreSQL persistence adapter stores snapshots plus unit/call-edge graph projections
+- optional usage metrics sinks capture `library` and `mcp` usage events plus explicit feedback for helpfulness tracking
 - queryable graph access API is available via storage adapters (`query-units`, `query-callers`, `query-callees`)
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
 - HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file
