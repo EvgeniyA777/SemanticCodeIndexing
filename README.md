@@ -36,6 +36,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - `contracts/examples/` - canonical examples for contract families
 - `fixtures/retrieval/` - retrieval fixture corpus (behavior bands)
 - `src/semantic_code_indexing/contracts/` - Clojure `malli` mirror and validator CLI
+- `src/semantic_code_indexing/mcp/` - stdio MCP server over the core library API
 - `scripts/` - local validation entrypoints
 
 ## Contract Validation
@@ -51,14 +52,18 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - Validate language onboarding checklist and gates: `./scripts/validate-language-onboarding.sh <language>` (`--skip-gates` for fast checks)
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out /tmp/sci.json`
+- Run stdio MCP server: `SCI_MCP_ALLOWED_ROOTS=/abs/repo-a:/abs/repo-b clojure -M:mcp`
+- If `SCI_MCP_ALLOWED_ROOTS` is missing, the MCP server now defaults the allowlist to the current `cwd` and prints a warning with explicit override examples; it does not prompt interactively because MCP uses stdio transport
 - Run minimal HTTP edge: `clojure -M:runtime-http --host 127.0.0.1 --port 8787`
 - Run minimal gRPC edge: `clojure -M:runtime-grpc --host 127.0.0.1 --port 8789`
 - Optional service auth boundary flags: `--api-key <token> --require-tenant` (or env `SCI_RUNTIME_API_KEY`, `SCI_RUNTIME_REQUIRE_TENANT=true`)
 - Optional host-integrated authz policy file: `--authz-policy-file /path/to/authz-policy.edn` (or env `SCI_RUNTIME_AUTHZ_POLICY_FILE`)
+- MCP server optionally accepts `SCI_MCP_ALLOWED_ROOTS`; if omitted, it defaults to the process `cwd`. `SCI_MCP_MAX_INDEXES` defaults to `8`.
 - gRPC edge currently uses typed protobuf `google.protobuf.Struct` payloads for unary methods.
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
 - Runtime API docs: [docs/runtime-api.md](docs/runtime-api.md)
+- MCP docs: [docs/mcp-api.md](docs/mcp-api.md)
 
 ## Agent Limit Policy
 
@@ -99,6 +104,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - queryable graph access API is available via storage adapters (`query-units`, `query-callers`, `query-callees`)
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
 - HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file
+- stdio MCP edge is available for portable local tool-based integration with session-scoped index caching
 
 ## License
 
