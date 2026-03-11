@@ -27,7 +27,8 @@
    {:proto-name "CreateIndexRequest"
     :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
              {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
-             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}]}
+             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
+             {:key :language_policy_json :proto-name "language_policy_json" :number 4 :type :string}]}
 
    :create-index-response
    {:proto-name "CreateIndexResponse"
@@ -44,35 +45,38 @@
              {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
              {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
              {:key :query_json :proto-name "query_json" :number 4 :type :string}
-             {:key :retrieval_policy_json :proto-name "retrieval_policy_json" :number 5 :type :string}]}
+             {:key :retrieval_policy_json :proto-name "retrieval_policy_json" :number 5 :type :string}
+             {:key :language_policy_json :proto-name "language_policy_json" :number 6 :type :string}]}
 
    :resolve-context-response
    {:proto-name "ResolveContextResponse"
     :fields [{:key :selection_result_json :proto-name "selection_result_json" :number 1 :type :string}]}
 
    :expand-context-request
-   {:proto-name "ExpandContextRequest"
-    :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
-             {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
-             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
-             {:key :selection_id :proto-name "selection_id" :number 4 :type :string}
-             {:key :snapshot_id :proto-name "snapshot_id" :number 5 :type :string}
-             {:key :unit_ids :proto-name "unit_ids" :number 6 :type :string :repeated? true}
-             {:key :include_impact_hints :proto-name "include_impact_hints" :number 7 :type :string}]}
+    {:proto-name "ExpandContextRequest"
+     :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
+              {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
+              {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
+              {:key :selection_id :proto-name "selection_id" :number 4 :type :string}
+              {:key :snapshot_id :proto-name "snapshot_id" :number 5 :type :string}
+              {:key :unit_ids :proto-name "unit_ids" :number 6 :type :string :repeated? true}
+              {:key :include_impact_hints :proto-name "include_impact_hints" :number 7 :type :string}
+              {:key :language_policy_json :proto-name "language_policy_json" :number 8 :type :string}]}
 
    :expand-context-response
    {:proto-name "ExpandContextResponse"
     :fields [{:key :expansion_result_json :proto-name "expansion_result_json" :number 1 :type :string}]}
 
    :fetch-context-detail-request
-   {:proto-name "FetchContextDetailRequest"
-    :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
-             {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
-             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
-             {:key :selection_id :proto-name "selection_id" :number 4 :type :string}
-             {:key :snapshot_id :proto-name "snapshot_id" :number 5 :type :string}
-             {:key :unit_ids :proto-name "unit_ids" :number 6 :type :string :repeated? true}
-             {:key :detail_level :proto-name "detail_level" :number 7 :type :string}]}
+    {:proto-name "FetchContextDetailRequest"
+     :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
+              {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
+              {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
+              {:key :selection_id :proto-name "selection_id" :number 4 :type :string}
+              {:key :snapshot_id :proto-name "snapshot_id" :number 5 :type :string}
+              {:key :unit_ids :proto-name "unit_ids" :number 6 :type :string :repeated? true}
+              {:key :detail_level :proto-name "detail_level" :number 7 :type :string}
+              {:key :language_policy_json :proto-name "language_policy_json" :number 8 :type :string}]}
 
    :fetch-context-detail-response
    {:proto-name "FetchContextDetailResponse"
@@ -201,17 +205,20 @@
   {:status (string-field :health-response message :status)
    :service (string-field :health-response message :service)})
 
-(defn create-index-request [{:keys [root_path paths parser_opts]}]
+(defn create-index-request [{:keys [root_path paths parser_opts language_policy]}]
   (build-message :create-index-request
                  {:root_path root_path
                   :paths (or paths [])
-                  :parser_opts_json (json-string parser_opts)}))
+                  :parser_opts_json (json-string parser_opts)
+                  :language_policy_json (json-string language_policy)}))
 
 (defn create-index-request->map [message]
   {:root_path (not-empty (string-field :create-index-request message :root_path))
    :paths (not-empty (repeated-string-field :create-index-request message :paths))
    :parser_opts (json-field "parser_opts_json"
-                            (string-field :create-index-request message :parser_opts_json))})
+                            (string-field :create-index-request message :parser_opts_json))
+   :language_policy (json-field "language_policy_json"
+                                (string-field :create-index-request message :language_policy_json))})
 
 (defn create-index-response [{:keys [snapshot_id indexed_at file_count unit_count repo_map index_lifecycle]}]
   (build-message :create-index-response
@@ -234,13 +241,14 @@
                              (string-field :create-index-response message :repo_map_json))
                  {})})
 
-(defn resolve-context-request [{:keys [root_path paths parser_opts query retrieval_policy]}]
+(defn resolve-context-request [{:keys [root_path paths parser_opts query retrieval_policy language_policy]}]
   (build-message :resolve-context-request
                  {:root_path root_path
                   :paths (or paths [])
                   :parser_opts_json (json-string parser_opts)
                   :query_json (json-string query)
-                  :retrieval_policy_json (json-string retrieval_policy)}))
+                  :retrieval_policy_json (json-string retrieval_policy)
+                  :language_policy_json (json-string language_policy)}))
 
 (defn resolve-context-request->map [message]
   {:root_path (not-empty (string-field :resolve-context-request message :root_path))
@@ -250,7 +258,9 @@
    :query (json-field "query_json"
                       (string-field :resolve-context-request message :query_json))
    :retrieval_policy (json-field "retrieval_policy_json"
-                                 (string-field :resolve-context-request message :retrieval_policy_json))})
+                                 (string-field :resolve-context-request message :retrieval_policy_json))
+   :language_policy (json-field "language_policy_json"
+                                (string-field :resolve-context-request message :language_policy_json))})
 
 (defn resolve-context-response [{:keys [selection_result] :as payload}]
   (build-message :resolve-context-response
@@ -261,7 +271,7 @@
                   (string-field :resolve-context-response message :selection_result_json))
       {}))
 
-(defn expand-context-request [{:keys [root_path paths parser_opts selection_id snapshot_id unit_ids include_impact_hints]}]
+(defn expand-context-request [{:keys [root_path paths parser_opts selection_id snapshot_id unit_ids include_impact_hints language_policy]}]
   (build-message :expand-context-request
                  {:root_path root_path
                   :paths (or paths [])
@@ -269,7 +279,8 @@
                   :selection_id selection_id
                   :snapshot_id snapshot_id
                   :unit_ids (or unit_ids [])
-                  :include_impact_hints (when (some? include_impact_hints) (str include_impact_hints))}))
+                  :include_impact_hints (when (some? include_impact_hints) (str include_impact_hints))
+                  :language_policy_json (json-string language_policy)}))
 
 (defn expand-context-request->map [message]
   {:root_path (not-empty (string-field :expand-context-request message :root_path))
@@ -281,7 +292,9 @@
    :unit_ids (not-empty (repeated-string-field :expand-context-request message :unit_ids))
    :include_impact_hints (let [raw (some-> (string-field :expand-context-request message :include_impact_hints) not-empty)]
                            (when raw
-                             (= "true" raw)))})
+                             (= "true" raw)))
+   :language_policy (json-field "language_policy_json"
+                                (string-field :expand-context-request message :language_policy_json))})
 
 (defn expand-context-response [{:keys [expansion_result] :as payload}]
   (build-message :expand-context-response
@@ -292,7 +305,7 @@
                   (string-field :expand-context-response message :expansion_result_json))
       {}))
 
-(defn fetch-context-detail-request [{:keys [root_path paths parser_opts selection_id snapshot_id unit_ids detail_level]}]
+(defn fetch-context-detail-request [{:keys [root_path paths parser_opts selection_id snapshot_id unit_ids detail_level language_policy]}]
   (build-message :fetch-context-detail-request
                  {:root_path root_path
                   :paths (or paths [])
@@ -300,7 +313,8 @@
                   :selection_id selection_id
                   :snapshot_id snapshot_id
                   :unit_ids (or unit_ids [])
-                  :detail_level detail_level}))
+                  :detail_level detail_level
+                  :language_policy_json (json-string language_policy)}))
 
 (defn fetch-context-detail-request->map [message]
   {:root_path (not-empty (string-field :fetch-context-detail-request message :root_path))
@@ -310,7 +324,9 @@
    :selection_id (not-empty (string-field :fetch-context-detail-request message :selection_id))
    :snapshot_id (not-empty (string-field :fetch-context-detail-request message :snapshot_id))
    :unit_ids (not-empty (repeated-string-field :fetch-context-detail-request message :unit_ids))
-   :detail_level (not-empty (string-field :fetch-context-detail-request message :detail_level))})
+   :detail_level (not-empty (string-field :fetch-context-detail-request message :detail_level))
+   :language_policy (json-field "language_policy_json"
+                                (string-field :fetch-context-detail-request message :language_policy_json))})
 
 (defn fetch-context-detail-response [{:keys [detail_result] :as payload}]
   (build-message :fetch-context-detail-response

@@ -13,6 +13,7 @@ message CreateIndexRequest {
   string root_path = 1;
   repeated string paths = 2;
   string parser_opts_json = 3;
+  string language_policy_json = 4;
 }
 
 message CreateIndexResponse {
@@ -30,6 +31,7 @@ message ResolveContextRequest {
   string parser_opts_json = 3;
   string query_json = 4;
   string retrieval_policy_json = 5;
+  string language_policy_json = 6;
 }
 
 message ResolveContextResponse {
@@ -44,6 +46,7 @@ message ExpandContextRequest {
   string snapshot_id = 5;
   repeated string unit_ids = 6;
   string include_impact_hints = 7;
+  string language_policy_json = 8;
 }
 
 message ExpandContextResponse {
@@ -58,6 +61,7 @@ message FetchContextDetailRequest {
   string snapshot_id = 5;
   repeated string unit_ids = 6;
   string detail_level = 7;
+  string language_policy_json = 8;
 }
 
 message FetchContextDetailResponse {

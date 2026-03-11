@@ -1,9 +1,11 @@
 (ns semantic-code-indexing.runtime.grpc
   (:gen-class)
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [semantic-code-indexing.runtime.authz :as authz]
             [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.grpc-proto :as grpc-proto]
+            [semantic-code-indexing.runtime.project-context :as project-context]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.core :as sci])
   (:import [io.grpc MethodDescriptor MethodDescriptor$Marshaller MethodDescriptor$MethodType
@@ -29,8 +31,13 @@
           "--api-key" (recur (assoc m :api_key (or v "")) rest)
           "--authz-policy-file" (recur (assoc m :authz_policy_file (or v "")) rest)
           "--policy-registry-file" (recur (assoc m :policy_registry_file (or v "")) rest)
+          "--language-policy-file" (recur (assoc m :language_policy_file (or v "")) rest)
           "--require-tenant" (recur (assoc m :require_tenant true) (cons v rest))
           (recur m rest))))))
+
+(defn- load-language-policy [path]
+  (when (seq path)
+    (-> path slurp edn/read-string)))
 
 (defn- unary-method [method-name request-type response-type]
   (-> (MethodDescriptor/newBuilder)
@@ -212,21 +219,26 @@
   {:status "ok"
    :service "semantic-code-indexing-runtime-grpc"})
 
-(defn- handle-create-index [policy-registry usage-metrics selection-cache payload]
-  (let [index (sci/create-index {:root_path (or (:root_path payload) ".")
-                                 :paths (:paths payload)
-                                 :parser_opts (:parser_opts payload)
-                                 :usage_metrics usage-metrics
-                                 :usage_context (merge {:surface "grpc"}
-                                                       (current-request-correlation))
-                                 :selection_cache selection-cache
-                                 :policy_registry policy-registry})]
+(declare build-project-index project-context-summary)
+
+(defn- handle-create-index [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+  (let [entry (project-context/refresh-project-index! project-registry
+                                                      (or (:root_path payload) ".")
+                                                      #(build-project-index policy-registry
+                                                                            usage-metrics
+                                                                            selection-cache
+                                                                            server-language-policy
+                                                                            payload
+                                                                            (current-request-correlation)
+                                                                            false))
+        index (:index entry)]
     {:snapshot_id (:snapshot_id index)
      :indexed_at (:indexed_at index)
      :index_lifecycle (:index_lifecycle index)
      :file_count (count (:files index))
      :unit_count (count (:units index))
-     :repo_map (sci/repo-map index)}))
+     :repo_map (sci/repo-map index)
+     :project_context (project-context-summary entry)}))
 
 (defn- query-trace-correlation [query]
   (let [trace (get query :trace {})]
@@ -234,7 +246,31 @@
       (or (:actor_id trace) (:agent_id trace))
       (assoc :actor_id (or (:actor_id trace) (:agent_id trace))))))
 
-(defn- handle-resolve-context [policy-registry usage-metrics selection-cache payload]
+(defn- project-context-summary [entry]
+  (select-keys entry [:root_path
+                      :snapshot_id
+                      :detected_languages
+                      :active_languages
+                      :supported_languages
+                      :language_fingerprint
+                      :activation_state
+                      :selection_hint
+                      :manual_language_selection]))
+
+(defn- build-project-index [policy-registry usage-metrics selection-cache server-language-policy payload correlation suppress-usage?]
+  (let [effective-language-policy (project-context/merge-language-policy server-language-policy
+                                                                         (:language_policy payload))]
+    (sci/create-index {:root_path (or (:root_path payload) ".")
+                       :paths (:paths payload)
+                       :parser_opts (:parser_opts payload)
+                       :usage_metrics usage-metrics
+                       :usage_context (merge {:surface "grpc"} correlation)
+                       :selection_cache selection-cache
+                       :suppress_usage_metrics suppress-usage?
+                       :policy_registry policy-registry
+                       :language_policy effective-language-policy})))
+
+(defn- handle-resolve-context [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
   (let [query (:query payload)
         retrieval-policy (:retrieval_policy payload)
         correlation (merge (current-request-correlation)
@@ -247,44 +283,60 @@
       (throw (ex-info "retrieval_policy must be an object"
                       {:type :invalid_request
                        :message "retrieval_policy must be an object"})))
-    (let [index (sci/create-index {:root_path (or (:root_path payload) ".")
-                                   :paths (:paths payload)
-                                   :parser_opts (:parser_opts payload)
-                                   :usage_metrics usage-metrics
-                                   :usage_context (merge {:surface "grpc"} correlation)
-                                   :selection_cache selection-cache
-                                   :suppress_usage_metrics true
-                                   :policy_registry policy-registry})]
-      (sci/resolve-context index query {:retrieval_policy retrieval-policy
-                                        :policy_registry policy-registry}))))
+    (let [root-path (or (:root_path payload) ".")
+          entry (project-context/ensure-project-index! project-registry
+                                                       root-path
+                                                       {:paths (:paths payload)
+                                                        :query query}
+                                                       #(build-project-index policy-registry
+                                                                             usage-metrics
+                                                                             selection-cache
+                                                                             server-language-policy
+                                                                             payload
+                                                                             correlation
+                                                                             true))
+          index (:index entry)]
+      (assoc (sci/resolve-context index query {:retrieval_policy retrieval-policy
+                                               :policy_registry policy-registry})
+             :project_context (project-context-summary entry)))))
 
-(defn- handle-expand-context [policy-registry usage-metrics selection-cache payload]
-  (let [index (sci/create-index {:root_path (or (:root_path payload) ".")
-                                 :paths (:paths payload)
-                                 :parser_opts (:parser_opts payload)
-                                 :usage_metrics usage-metrics
-                                 :usage_context (merge {:surface "grpc"} (current-request-correlation))
-                                 :selection_cache selection-cache
-                                 :suppress_usage_metrics true
-                                 :policy_registry policy-registry})]
-    (sci/expand-context index (select-keys payload [:selection_id :snapshot_id :unit_ids :include_impact_hints]))))
+(defn- handle-expand-context [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+  (let [entry (project-context/ensure-project-index! project-registry
+                                                     (or (:root_path payload) ".")
+                                                     {:paths (:paths payload)}
+                                                     #(build-project-index policy-registry
+                                                                           usage-metrics
+                                                                           selection-cache
+                                                                           server-language-policy
+                                                                           payload
+                                                                           (merge {:surface "grpc"} (current-request-correlation))
+                                                                           true))
+        index (:index entry)]
+    (assoc (sci/expand-context index (select-keys payload [:selection_id :snapshot_id :unit_ids :include_impact_hints]))
+           :project_context (project-context-summary entry))))
 
-(defn- handle-fetch-context-detail [policy-registry usage-metrics selection-cache payload]
-  (let [index (sci/create-index {:root_path (or (:root_path payload) ".")
-                                 :paths (:paths payload)
-                                 :parser_opts (:parser_opts payload)
-                                 :usage_metrics usage-metrics
-                                 :usage_context (merge {:surface "grpc"} (current-request-correlation))
-                                 :selection_cache selection-cache
-                                 :suppress_usage_metrics true
-                                 :policy_registry policy-registry})]
-    (sci/fetch-context-detail index (select-keys payload [:selection_id :snapshot_id :unit_ids :detail_level]))))
+(defn- handle-fetch-context-detail [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+  (let [entry (project-context/ensure-project-index! project-registry
+                                                     (or (:root_path payload) ".")
+                                                     {:paths (:paths payload)}
+                                                     #(build-project-index policy-registry
+                                                                           usage-metrics
+                                                                           selection-cache
+                                                                           server-language-policy
+                                                                           payload
+                                                                           (merge {:surface "grpc"} (current-request-correlation))
+                                                                           true))
+        index (:index entry)]
+    (assoc (sci/fetch-context-detail index (select-keys payload [:selection_id :snapshot_id :unit_ids :detail_level]))
+           :project_context (project-context-summary entry))))
 
-(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache]}]
+(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
+                            project_registry language_policy]}]
   (let [auth-config {:api_key api_key
                      :require_tenant require_tenant
                      :authz_check authz_check}
         selection-cache (or selection_cache (atom {:max_entries 128}))
+        project-registry (or project_registry (project-context/project-registry))
         service (-> (ServerServiceDefinition/builder service-name)
                     (.addMethod health-method (unary-handler (constantly {})
                                                              grpc-proto/health-response
@@ -293,22 +345,22 @@
                                                              nil))
                     (.addMethod create-index-method (unary-handler grpc-proto/create-index-request->map
                                                                    grpc-proto/create-index-response
-                                                                   (partial handle-create-index policy_registry usage_metrics selection-cache)
+                                                                   (partial handle-create-index policy_registry usage_metrics selection-cache project-registry language_policy)
                                                                    auth-config
                                                                    :create_index))
                     (.addMethod resolve-context-method (unary-handler grpc-proto/resolve-context-request->map
                                                                       grpc-proto/resolve-context-response
-                                                                      (partial handle-resolve-context policy_registry usage_metrics selection-cache)
+                                                                      (partial handle-resolve-context policy_registry usage_metrics selection-cache project-registry language_policy)
                                                                       auth-config
                                                                       :resolve_context))
                     (.addMethod expand-context-method (unary-handler grpc-proto/expand-context-request->map
                                                                      grpc-proto/expand-context-response
-                                                                     (partial handle-expand-context policy_registry usage_metrics selection-cache)
+                                                                     (partial handle-expand-context policy_registry usage_metrics selection-cache project-registry language_policy)
                                                                      auth-config
                                                                      :expand_context))
                     (.addMethod fetch-context-detail-method (unary-handler grpc-proto/fetch-context-detail-request->map
                                                                            grpc-proto/fetch-context-detail-response
-                                                                           (partial handle-fetch-context-detail policy_registry usage_metrics selection-cache)
+                                                                           (partial handle-fetch-context-detail policy_registry usage_metrics selection-cache project-registry language_policy)
                                                                            auth-config
                                                                            :fetch_context_detail))
                     (.build))
@@ -322,11 +374,12 @@
      :host host}))
 
 (defn -main [& args]
-  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file]} (parse-args args)
+  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file language_policy_file]} (parse-args args)
         api-key* (or (not-empty api_key) (System/getenv "SCI_RUNTIME_API_KEY"))
         require-tenant* (or require_tenant (parse-bool (System/getenv "SCI_RUNTIME_REQUIRE_TENANT")))
         authz-policy-file* (or (not-empty authz_policy_file) (System/getenv "SCI_RUNTIME_AUTHZ_POLICY_FILE"))
         policy-registry-file* (or (not-empty policy_registry_file) (System/getenv "SCI_RUNTIME_POLICY_REGISTRY_FILE"))
+        language-policy-file* (or (not-empty language_policy_file) (System/getenv "SCI_RUNTIME_LANGUAGE_POLICY_FILE"))
         usage-metrics* (when-let [jdbc-url (System/getenv "SCI_USAGE_METRICS_JDBC_URL")]
                          (sci/postgres-usage-metrics {:jdbc-url jdbc-url
                                                       :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
@@ -335,12 +388,14 @@
                        (authz/load-policy-authorizer authz-policy-file*))
         policy-registry* (when (seq policy-registry-file*)
                            (rp/load-registry policy-registry-file*))
+        language-policy* (load-language-policy language-policy-file*)
         {:keys [server port]} (start-server {:host host
                                              :port port
                                              :api_key api-key*
                                              :require_tenant require-tenant*
                                              :authz_check authz-check*
                                              :policy_registry policy-registry*
+                                             :language_policy language-policy*
                                              :usage_metrics usage-metrics*})]
     (println (str "runtime_grpc_server_started host=" host " port=" port))
     (flush)

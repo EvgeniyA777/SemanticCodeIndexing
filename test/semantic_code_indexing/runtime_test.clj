@@ -1707,6 +1707,32 @@
     (is (= "elixir" (:language ex-parsed)))
     (is (= "python" (:language py-parsed)))))
 
+(deftest create-index-no-supported-languages-guidance-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-no-lang" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "README.md" "# empty")
+        ex (try
+             (sci/create-index {:root_path tmp-root})
+             nil
+             (catch clojure.lang.ExceptionInfo e e))]
+    (is ex)
+    (is (= :no_supported_languages_found (:type (ex-data ex))))
+    (is (= "awaiting_language_selection" (get-in (ex-data ex) [:details :activation_state])))
+    (is (= ["clojure" "java" "elixir" "python" "typescript"]
+           (get-in (ex-data ex) [:details :supported_languages])))
+    (is (string? (get-in (ex-data ex) [:details :selection_hint])))))
+
+(deftest create-index-manual-core-language-selection-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-manual-language" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "README.md" "# bootstrap")
+        index (sci/create-index {:root_path tmp-root
+                                 :language_policy {:allow_languages ["python"]}})]
+    (is (= ["python"] (:active_languages index)))
+    (is (= [] (:detected_languages index)))
+    (is (= "manual_language_selection" (get-in index [:index_lifecycle :rebuild_reason])))
+    (is (true? (:manual_language_selection index)))
+    (is (= "ready" (:activation_state index)))
+    (is (empty? (:files index)))))
+
 (deftest postgres-storage-roundtrip-test
   (if-let [jdbc-url (System/getenv "SCI_TEST_POSTGRES_URL")]
     (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-pg-storage-test" (make-array java.nio.file.attribute.FileAttribute 0)))

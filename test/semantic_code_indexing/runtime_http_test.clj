@@ -205,6 +205,61 @@
       (finally
         (.stop server 0)))))
 
+(deftest runtime-http-language-activation-guidance-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-http-no-lang" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "README.md" "# none")
+        server (runtime-http/start-server {:host "127.0.0.1" :port 0})]
+    (try
+      (let [port (-> server .getAddress .getPort)
+            base-url (str "http://127.0.0.1:" port)
+            client (HttpClient/newHttpClient)
+            _health (wait-health! client base-url)
+            resp (post-json client
+                            (str base-url "/v1/index/create")
+                            {:root_path tmp-root})]
+        (is (= 400 (:status resp)))
+        (is (= "no_supported_languages_found" (get-in resp [:json :error_code])))
+        (is (= "awaiting_language_selection" (get-in resp [:json :details :activation_state])))
+        (is (= ["clojure" "java" "elixir" "python" "typescript"]
+               (get-in resp [:json :details :supported_languages]))))
+      (finally
+        (.stop server 0)))))
+
+(deftest runtime-http-language-refresh-required-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-http-refresh" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "app/main.py" "def run(value):\n    return value\n")
+        server (runtime-http/start-server {:host "127.0.0.1" :port 0})]
+    (try
+      (let [port (-> server .getAddress .getPort)
+            base-url (str "http://127.0.0.1:" port)
+            client (HttpClient/newHttpClient)
+            _health (wait-health! client base-url)
+            create-resp (post-json client
+                                   (str base-url "/v1/index/create")
+                                   {:root_path tmp-root})
+            _ts (write-file! tmp-root "src/example/main.ts"
+                             "export function runTs(value: string): string {\n  return value;\n}\n")
+            resolve-resp (post-json client
+                                    (str base-url "/v1/retrieval/resolve-context")
+                                    {:root_path tmp-root
+                                     :query {:api_version "1.0"
+                                             :schema_version "1.0"
+                                             :intent {:purpose "code_understanding"
+                                                      :details "Locate TS function."}
+                                             :targets {:paths ["src/example/main.ts"]}
+                                             :constraints {:token_budget 400
+                                                           :max_raw_code_level "signature_only"
+                                                           :freshness "current_snapshot"}
+                                             :hints {}
+                                             :options {}
+                                             :trace {:request_id "runtime-http-refresh-001"}}})]
+        (is (= 200 (:status create-resp)))
+        (is (= 409 (:status resolve-resp)))
+        (is (= "language_refresh_required" (get-in resolve-resp [:json :error_code])))
+        (is (= ["typescript"] (get-in resolve-resp [:json :details :inactive_languages]))))
+      (finally
+        (.stop server 0)))))
+
 (deftest runtime-http-authz-policy-contract-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-http-policy-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-http-sample-repo! tmp-root)

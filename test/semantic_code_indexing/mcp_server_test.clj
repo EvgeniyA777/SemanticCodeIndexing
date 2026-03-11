@@ -487,6 +487,51 @@
       (finally
         (destroy-process! handle)))))
 
+(deftest runtime-mcp-no-language-guidance-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-no-lang" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "README.md" "# none")
+        handle (start-mcp-process! tmp-root)]
+    (try
+      (initialize! handle)
+      (let [create-response (call-tool! handle 71 "create_index" {:root_path tmp-root})
+            result (:result create-response)]
+        (is (true? (:isError result)))
+        (is (= "no_supported_languages_found"
+               (get-in result [:structuredContent :details :code])))
+        (is (= "awaiting_language_selection"
+               (get-in result [:structuredContent :details :details :activation_state]))))
+      (finally
+        (destroy-process! handle)))))
+
+(deftest runtime-mcp-language-refresh-required-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-refresh" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "app/main.py" "def run(value):\n    return value\n")
+        handle (start-mcp-process! tmp-root)]
+    (try
+      (initialize! handle)
+      (let [create-response (call-tool! handle 81 "create_index" {:root_path tmp-root})
+            create-data (get-in create-response [:result :structuredContent])
+            _ts (write-file! tmp-root "src/example/main.ts"
+                             "export function runTs(value: string): string {\n  return value;\n}\n")
+            resolve-response (call-tool! handle 82 "resolve_context" {:index_id (:index_id create-data)
+                                                                      :query {:api_version "1.0"
+                                                                              :schema_version "1.0"
+                                                                              :intent {:purpose "code_understanding"
+                                                                                       :details "Locate TS function."}
+                                                                              :targets {:paths ["src/example/main.ts"]}
+                                                                              :constraints {:token_budget 400
+                                                                                            :max_raw_code_level "signature_only"
+                                                                                            :freshness "current_snapshot"}
+                                                                              :hints {}
+                                                                              :options {}
+                                                                              :trace {:request_id "mcp-refresh-001"}}})
+            result (:result resolve-response)]
+        (is (true? (:isError result)))
+        (is (= "language_refresh_required"
+               (get-in result [:structuredContent :details :code]))))
+      (finally
+        (destroy-process! handle)))))
+
 (deftest resolve-allowed-roots-defaults-to-cwd-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-cwd-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         canonical-tmp-root (.getCanonicalPath (io/file tmp-root))

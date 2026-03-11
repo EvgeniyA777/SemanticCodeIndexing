@@ -2,6 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [semantic-code-indexing.runtime.adapters :as adapters]
+            [semantic-code-indexing.runtime.language-activation :as activation]
             [semantic-code-indexing.runtime.storage :as storage]))
 
 (defn- now-iso []
@@ -405,17 +406,20 @@
 
 (defn- lifecycle-summary
   [index {:keys [provenance_source parent_snapshot_id requested_snapshot_id
-                 reused_snapshot snapshot_pinned max_snapshot_age_seconds rebuild_reason]}]
+                 reused_snapshot snapshot_pinned max_snapshot_age_seconds rebuild_reason
+                 activation_metadata]}]
   (let [age (age-seconds (:indexed_at index))]
-    {:reused_snapshot (boolean reused_snapshot)
-     :snapshot_pinned (boolean snapshot_pinned)
-     :stale (boolean (stale? age max_snapshot_age_seconds))
-     :age_seconds age
-     :max_snapshot_age_seconds max_snapshot_age_seconds
-     :rebuild_reason rebuild_reason
-     :provenance {:source provenance_source
-                  :parent_snapshot_id parent_snapshot_id
-                  :requested_snapshot_id requested_snapshot_id}}))
+    (merge
+     {:reused_snapshot (boolean reused_snapshot)
+      :snapshot_pinned (boolean snapshot_pinned)
+      :stale (boolean (stale? age max_snapshot_age_seconds))
+      :age_seconds age
+      :max_snapshot_age_seconds max_snapshot_age_seconds
+      :rebuild_reason rebuild_reason
+      :provenance {:source provenance_source
+                   :parent_snapshot_id parent_snapshot_id
+                   :requested_snapshot_id requested_snapshot_id}}
+     activation_metadata)))
 
 (defn- attach-lifecycle [index lifecycle-opts]
   (assoc index :index_lifecycle (lifecycle-summary index lifecycle-opts)))
@@ -425,7 +429,8 @@
    (build-index-state root-path files-data {}))
   ([root-path files-data lifecycle-opts]
    (let [units (:units files-data)
-         units-by-id (into {} (map (juxt :unit_id identity) units))]
+         units-by-id (into {} (map (juxt :unit_id identity) units))
+         activation-metadata (:activation_metadata lifecycle-opts)]
      (attach-lifecycle
       {:root_path root-path
        :snapshot_id (uuid)
@@ -439,7 +444,14 @@
        :module_index (index-by :module units)
        :callers_index (build-callers-index units (:files files-data))
        :module_dependents (build-module-dependents (:files files-data))
-       :test_target_index (build-test-target-index (:files files-data))}
+       :test_target_index (build-test-target-index (:files files-data))
+       :detected_languages (:detected_languages activation-metadata)
+       :active_languages (:active_languages activation-metadata)
+       :language_fingerprint (:language_fingerprint activation-metadata)
+       :activation_state (:activation_state activation-metadata)
+       :supported_languages (:supported_languages activation-metadata)
+       :selection_hint (:selection_hint activation-metadata)
+       :manual_language_selection (:manual_language_selection activation-metadata)}
       lifecycle-opts))))
 
 (defn- maybe-load-index [storage-adapter root-path {:keys [load_latest pinned_snapshot_id]}]
@@ -465,9 +477,15 @@
     (storage/save-index! storage-adapter index))
   index)
 
+(defn- filtered-paths [paths active-languages]
+  (let [active-set (set active-languages)]
+    (->> paths
+         (filter #(contains? active-set (adapters/language-by-path %)))
+         vec)))
+
 (defn create-index
   [{:keys [root_path paths parser_opts storage load_latest pinned_snapshot_id
-           max_snapshot_age_seconds rebuild_reason]
+           max_snapshot_age_seconds rebuild_reason language_policy]
     :or {root_path "."
          parser_opts {:clojure_engine :clj-kondo
                       :tree_sitter_enabled false}
@@ -480,43 +498,68 @@
     (throw (ex-info "pinned_snapshot_id cannot be combined with paths subset indexing"
                     {:type :invalid_request
                      :message "pinned_snapshot_id cannot be combined with paths subset indexing"})))
-  (if-let [loaded (maybe-load-index storage root_path {:load_latest load_latest
-                                                       :pinned_snapshot_id pinned_snapshot_id})]
-    (let [loaded* (attach-lifecycle loaded {:provenance_source (if (seq pinned_snapshot_id)
-                                                                 "storage_pinned"
-                                                                 "storage_latest")
+  (let [discovery (activation/discover-languages root_path)
+        activation-state (activation/resolve-activation discovery language_policy)
+        activation-metadata (activation/activation-metadata discovery activation-state)
+        no-supported? (and (empty? (:detected_languages activation-state))
+                           (empty? (:active_languages activation-state)))]
+    (when no-supported?
+      (throw (ex-info "no supported languages were detected for this project"
+                      {:type :no_supported_languages_found
+                       :message "no supported languages were detected for this project"
+                       :details (activation/no-supported-languages-details discovery activation-state)})))
+    (if-let [loaded (maybe-load-index storage root_path {:load_latest load_latest
+                                                         :pinned_snapshot_id pinned_snapshot_id})]
+      (let [loaded-activation (merge activation-metadata
+                                     (select-keys loaded
+                                                  [:detected_languages
+                                                   :active_languages
+                                                   :language_fingerprint
+                                                   :activation_state
+                                                   :supported_languages
+                                                   :selection_hint
+                                                   :manual_language_selection]))
+            loaded* (attach-lifecycle loaded {:provenance_source (if (seq pinned_snapshot_id)
+                                                                   "storage_pinned"
+                                                                   "storage_latest")
+                                              :requested_snapshot_id pinned_snapshot_id
+                                              :reused_snapshot true
+                                              :snapshot_pinned (boolean (seq pinned_snapshot_id))
+                                              :max_snapshot_age_seconds max_snapshot_age_seconds
+                                              :activation_metadata loaded-activation})
+            stale-loaded? (get-in loaded* [:index_lifecycle :stale])]
+        (if (and stale-loaded? (not (seq pinned_snapshot_id)))
+          (let [discovered (if (seq paths)
+                             (filtered-paths (normalize-paths paths) (:active_languages activation-state))
+                             (activation/active-source-paths discovery activation-state))
+                files-data (parse-files root_path discovered parser_opts)
+                rebuilt (build-index-state root_path
+                                           files-data
+                                           {:provenance_source "fresh_build"
+                                            :parent_snapshot_id (:snapshot_id loaded*)
                                             :requested_snapshot_id pinned_snapshot_id
-                                            :reused_snapshot true
-                                            :snapshot_pinned (boolean (seq pinned_snapshot_id))
-                                            :max_snapshot_age_seconds max_snapshot_age_seconds})
-          stale-loaded? (get-in loaded* [:index_lifecycle :stale])]
-      (if (and stale-loaded? (not (seq pinned_snapshot_id)))
-        (let [discovered (discover-source-files root_path)
-              files-data (parse-files root_path discovered parser_opts)
-              rebuilt (build-index-state root_path
-                                         files-data
-                                         {:provenance_source "fresh_build"
-                                          :parent_snapshot_id (:snapshot_id loaded*)
-                                          :requested_snapshot_id pinned_snapshot_id
-                                          :max_snapshot_age_seconds max_snapshot_age_seconds
-                                          :rebuild_reason "snapshot_stale"})]
-          (maybe-save-index! storage rebuilt))
-        loaded*))
-    (let [discovered (if (seq paths)
-                       (normalize-paths paths)
-                       (discover-source-files root_path))
-          files-data (parse-files root_path discovered parser_opts)
-          index (build-index-state root_path
-                                   files-data
-                                   {:provenance_source "fresh_build"
-                                    :requested_snapshot_id pinned_snapshot_id
-                                    :max_snapshot_age_seconds max_snapshot_age_seconds
-                                    :rebuild_reason (or rebuild_reason
-                                                       (cond
-                                                         (seq paths) "paths_subset_requested"
-                                                         load_latest "storage_latest_missing"
-                                                         :else "initial_build"))})]
-      (maybe-save-index! storage index))))
+                                            :max_snapshot_age_seconds max_snapshot_age_seconds
+                                            :activation_metadata activation-metadata
+                                            :rebuild_reason "snapshot_stale"})]
+            (maybe-save-index! storage rebuilt))
+          loaded*))
+      (let [discovered (if (seq paths)
+                         (filtered-paths (normalize-paths paths) (:active_languages activation-state))
+                         (activation/active-source-paths discovery activation-state))
+            files-data (parse-files root_path discovered parser_opts)
+            index (build-index-state root_path
+                                     files-data
+                                     {:provenance_source "fresh_build"
+                                      :requested_snapshot_id pinned_snapshot_id
+                                      :max_snapshot_age_seconds max_snapshot_age_seconds
+                                      :activation_metadata activation-metadata
+                                      :rebuild_reason (or rebuild_reason
+                                                          (cond
+                                                            (:manual_language_selection activation-state) "manual_language_selection"
+                                                            (seq paths) "paths_subset_requested"
+                                                            load_latest "storage_latest_missing"
+                                                            :else "initial_build"))})]
+        (maybe-save-index! storage index)))))
 
 (defn- remove-paths-from-index [index paths]
   (let [path-set (set paths)

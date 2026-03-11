@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [semantic-code-indexing.core :as sci]
             [semantic-code-indexing.runtime.errors :as errors]
+            [semantic-code-indexing.runtime.language-activation :as activation]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.runtime.usage-metrics :as usage])
   (:import [java.io ByteArrayOutputStream InputStream OutputStream PushbackInputStream]
@@ -178,6 +179,11 @@
   (let [opts (ensure-map-or-nil parser-opts "parser_opts")]
     (if (nil? opts) default-parser-opts opts)))
 
+(defn- normalize-language-policy [language-policy]
+  (let [policy (ensure-map-or-nil language-policy "language_policy")]
+    (when policy
+      (activation/normalize-language-policy policy))))
+
 (defn- sort-data [value]
   (cond
     (map? value)
@@ -193,10 +199,11 @@
 
     :else value))
 
-(defn- cache-key [root-path paths parser-opts]
+(defn- cache-key [root-path paths parser-opts language-policy]
   (pr-str (sort-data {:root_path root-path
                       :paths paths
-                      :parser_opts parser-opts})))
+                      :parser_opts parser-opts
+                      :language_policy language-policy})))
 
 (defn- path-within-root? [root-path candidate]
   (let [root (.toPath (io/file root-path))
@@ -225,6 +232,11 @@
      :root_path (:root_path entry)
      :file_count (count (:files index))
      :unit_count (count (:units index))
+     :detected_languages (:detected_languages index)
+     :active_languages (:active_languages index)
+     :language_fingerprint (:language_fingerprint index)
+     :activation_state (:activation_state index)
+     :selection_hint (:selection_hint index)
      :cache_hit cache-hit?}))
 
 (defn- touch-index! [state index-id]
@@ -269,7 +281,7 @@
         :payload {:evicted_index_count (count @evicted)
                   :evicted_index_ids (mapv :index_id @evicted)}}))))
 
-(defn- store-index! [state cache-key-value root-path paths parser-opts index]
+(defn- store-index! [state cache-key-value root-path paths parser-opts language-policy index]
   (let [ts (now-ms)
         index-id (str (UUID/randomUUID))
         entry {:index_id index-id
@@ -277,6 +289,7 @@
                :root_path root-path
                :paths paths
                :parser_opts parser-opts
+               :language_policy language-policy
                :index index
                :created_at ts
                :last_accessed_at ts}]
@@ -304,8 +317,9 @@
   (let [root-path (validate-root-path! state (or (:root_path args) "."))
         paths (normalize-paths (:paths args))
         parser-opts (normalize-parser-opts (:parser_opts args))
+        language-policy (normalize-language-policy (:language_policy args))
         force-rebuild (boolean (ensure-boolean-or-nil (:force_rebuild args) "force_rebuild"))
-        cache-key-value (cache-key root-path paths parser-opts)]
+        cache-key-value (cache-key root-path paths parser-opts language-policy)]
     (if-let [entry (when-not force-rebuild
                      (find-cached-entry state cache-key-value))]
       (with-usage-event
@@ -320,12 +334,13 @@
       (let [index (sci/create-index {:root_path root-path
                                      :paths paths
                                      :parser_opts parser-opts
+                                     :language_policy language-policy
                                      :policy_registry (:policy_registry @state)
                                      :usage_metrics (:usage_metrics @state)
                                      :usage_context (tool-usage-context state)
                                      :selection_cache (:selection_cache @state)
                                      :suppress_usage_metrics true})
-            entry (store-index! state cache-key-value root-path paths parser-opts index)]
+            entry (store-index! state cache-key-value root-path paths parser-opts language-policy index)]
         (with-usage-event
           (index-summary entry false)
           {:root_path_hash (usage/hash-root-path root-path)
@@ -364,12 +379,22 @@
         retrieval-policy (ensure-map-or-nil (:retrieval_policy args) "retrieval_policy")]
     (when-not query
       (invalid-request "query is required"))
+    (activation/ensure-request-languages-active!
+     {:active_languages (get-in entry [:index :active_languages])
+      :supported_languages (get-in entry [:index :supported_languages])}
+     {:query query})
     (let [result (assoc (sci/resolve-context (:index entry)
                                              query
                                              {:suppress_usage_metrics true
                                               :retrieval_policy retrieval-policy
                                               :policy_registry (:policy_registry @state)})
-                        :index_id (:index_id entry))
+                        :index_id (:index_id entry)
+                        :project_context {:detected_languages (get-in entry [:index :detected_languages])
+                                          :active_languages (get-in entry [:index :active_languages])
+                                          :supported_languages (get-in entry [:index :supported_languages])
+                                          :language_fingerprint (get-in entry [:index :language_fingerprint])
+                                          :activation_state (get-in entry [:index :activation_state])
+                                          :selection_hint (get-in entry [:index :selection_hint])})
           result-meta (meta result)]
       (with-usage-event
         result
@@ -403,7 +428,13 @@
                                            :unit_ids unit-ids
                                            :include_impact_hints include-impact-hints}
                                           {:suppress_usage_metrics true})
-                      :index_id (:index_id entry))]
+                      :index_id (:index_id entry)
+                      :project_context {:detected_languages (get-in entry [:index :detected_languages])
+                                        :active_languages (get-in entry [:index :active_languages])
+                                        :supported_languages (get-in entry [:index :supported_languages])
+                                        :language_fingerprint (get-in entry [:index :language_fingerprint])
+                                        :activation_state (get-in entry [:index :activation_state])
+                                        :selection_hint (get-in entry [:index :selection_hint])})]
     (with-usage-event
       result
       {:root_path_hash (usage/hash-root-path (:root_path entry))
@@ -429,7 +460,13 @@
                                                  :unit_ids unit-ids
                                                  :detail_level detail-level}
                                                 {:suppress_usage_metrics true})
-                      :index_id (:index_id entry))]
+                      :index_id (:index_id entry)
+                      :project_context {:detected_languages (get-in entry [:index :detected_languages])
+                                        :active_languages (get-in entry [:index :active_languages])
+                                        :supported_languages (get-in entry [:index :supported_languages])
+                                        :language_fingerprint (get-in entry [:index :language_fingerprint])
+                                        :activation_state (get-in entry [:index :activation_state])
+                                        :selection_hint (get-in entry [:index :selection_hint])})]
     (with-usage-event
       result
       {:root_path_hash (usage/hash-root-path (:root_path entry))
@@ -491,6 +528,7 @@
                   :properties {"root_path" {:type "string"}
                                "paths" {:type "array" :items {:type "string"}}
                                "parser_opts" {:type "object"}
+                               "language_policy" {:type "object"}
                                "force_rebuild" {:type "boolean"}}
                   :required ["root_path"]
                   :additionalProperties false}}

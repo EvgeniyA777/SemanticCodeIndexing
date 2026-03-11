@@ -1,10 +1,12 @@
 (ns semantic-code-indexing.runtime.http
   (:gen-class)
   (:require [clojure.data.json :as json]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [semantic-code-indexing.runtime.authz :as authz]
             [semantic-code-indexing.runtime.errors :as errors]
+            [semantic-code-indexing.runtime.project-context :as project-context]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
             [semantic-code-indexing.core :as sci])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
@@ -24,8 +26,13 @@
           "--api-key" (recur (assoc m :api_key (or v "")) rest)
           "--authz-policy-file" (recur (assoc m :authz_policy_file (or v "")) rest)
           "--policy-registry-file" (recur (assoc m :policy_registry_file (or v "")) rest)
+          "--language-policy-file" (recur (assoc m :language_policy_file (or v "")) rest)
           "--require-tenant" (recur (assoc m :require_tenant true) (cons v rest))
           (recur m rest))))))
+
+(defn- load-language-policy [path]
+  (when (seq path)
+    (-> path slurp edn/read-string)))
 
 (defn- request-method [^HttpExchange exchange]
   (.toUpperCase (.getRequestMethod exchange)))
@@ -144,6 +151,57 @@
   (errors/http-error-body {:type code
                            :message (or message "request denied by authz policy")}))
 
+(defn- project-context-summary [entry]
+  (select-keys entry [:root_path
+                      :snapshot_id
+                      :detected_languages
+                      :active_languages
+                      :supported_languages
+                      :language_fingerprint
+                      :activation_state
+                      :selection_hint
+                      :manual_language_selection]))
+
+(defn- build-project-index [auth-config root-path paths parser-opts tenant-id correlation language-policy suppress-usage?]
+  (let [effective-language-policy (project-context/merge-language-policy (:language_policy auth-config)
+                                                                         language-policy)]
+    (sci/create-index {:root_path root-path
+                       :paths paths
+                       :parser_opts parser-opts
+                       :usage_metrics (:usage_metrics auth-config)
+                       :usage_context (merge {:surface "http"
+                                              :tenant_id tenant-id}
+                                             correlation)
+                       :selection_cache (:selection_cache auth-config)
+                       :suppress_usage_metrics suppress-usage?
+                       :policy_registry (:policy_registry auth-config)
+                       :language_policy effective-language-policy})))
+
+(defn- refresh-project-entry! [auth-config root-path paths parser-opts tenant-id correlation language-policy]
+  (project-context/refresh-project-index! (:project_registry auth-config)
+                                          root-path
+                                          #(build-project-index auth-config
+                                                                root-path
+                                                                paths
+                                                                parser-opts
+                                                                tenant-id
+                                                                correlation
+                                                                language-policy
+                                                                false)))
+
+(defn- ensure-project-entry! [auth-config root-path paths parser-opts tenant-id correlation language-policy request]
+  (project-context/ensure-project-index! (:project_registry auth-config)
+                                         root-path
+                                         request
+                                         #(build-project-index auth-config
+                                                               root-path
+                                                               paths
+                                                               parser-opts
+                                                               tenant-id
+                                                               correlation
+                                                               language-policy
+                                                               true)))
+
 (defn- enforce-authz! [^HttpExchange exchange auth-config request]
   (let [{:keys [allowed?] :as decision} (authz/evaluate (:authz_check auth-config) request)]
     (if allowed?
@@ -172,6 +230,7 @@
         (let [payload (read-json-body exchange)
               root-path (or (:root_path payload) ".")
               paths (:paths payload)
+              language-policy (:language_policy payload)
               correlation (remember-correlation! exchange
                                                  (assoc (request-correlation exchange)
                                                         :tenant_id tenant_id))]
@@ -179,20 +238,21 @@
                                                       :tenant_id tenant_id
                                                       :root_path root-path
                                                       :paths paths})
-            (let [index (sci/create-index {:root_path root-path
-                                           :paths paths
-                                           :parser_opts (:parser_opts payload)
-                                           :usage_metrics (:usage_metrics auth-config)
-                                           :usage_context (merge {:surface "http"
-                                                                  :tenant_id tenant_id}
-                                                                 correlation)
-                                           :policy_registry (:policy_registry auth-config)})]
+            (let [entry (refresh-project-entry! auth-config
+                                                root-path
+                                                paths
+                                                (:parser_opts payload)
+                                                tenant_id
+                                                correlation
+                                                language-policy)
+                  index (:index entry)]
               (write-json! exchange 200 {:snapshot_id (:snapshot_id index)
                                          :indexed_at (:indexed_at index)
                                          :index_lifecycle (:index_lifecycle index)
                                          :file_count (count (:files index))
                                          :unit_count (count (:units index))
-                                         :repo_map (sci/repo-map index)}
+                                         :repo_map (sci/repo-map index)
+                                         :project_context (project-context-summary entry)}
                            (response-correlation-header-map exchange)))))))))
 
 (defn- handle-resolve-context [auth-config ^HttpExchange exchange]
@@ -209,6 +269,7 @@
               paths (:paths payload)
               query (:query payload)
               retrieval-policy (:retrieval_policy payload)
+              language-policy (:language_policy payload)
               correlation (remember-correlation! exchange
                                                  (assoc (merge-query-correlation (request-correlation exchange) query)
                                                         :tenant_id tenant_id))]
@@ -224,22 +285,24 @@
                                                           :tenant_id tenant_id
                                                           :root_path root-path
                                                           :paths paths})
-                (let [index (sci/create-index {:root_path root-path
-                                               :paths paths
-                                               :parser_opts (:parser_opts payload)
-                                               :usage_metrics (:usage_metrics auth-config)
-                                               :usage_context (merge {:surface "http"
-                                                                      :tenant_id tenant_id}
-                                                                     correlation)
-                                               :selection_cache (:selection_cache auth-config)
-                                               :suppress_usage_metrics true
-                                               :policy_registry (:policy_registry auth-config)})
+                (let [entry (ensure-project-entry! auth-config
+                                                   root-path
+                                                   paths
+                                                   (:parser_opts payload)
+                                                   tenant_id
+                                                   correlation
+                                                   language-policy
+                                                   {:paths paths
+                                                    :query query})
+                      index (:index entry)
                       result (sci/resolve-context index
                                                   query
                                                   {:retrieval_policy retrieval-policy
                                                    :policy_registry (:policy_registry auth-config)})]
-                  (write-json! exchange 200 result (merge api-version-header
-                                                          (response-correlation-header-map exchange))))))))))))
+                  (write-json! exchange 200
+                               (assoc result :project_context (project-context-summary entry))
+                               (merge api-version-header
+                                      (response-correlation-header-map exchange))))))))))))
 
 (defn- handle-expand-context [auth-config ^HttpExchange exchange]
   (if-not (post-request? exchange)
@@ -254,6 +317,7 @@
               root-path (or (:root_path payload) ".")
               paths (:paths payload)
               selector (select-keys payload [:selection_id :snapshot_id :unit_ids :include_impact_hints])
+              language-policy (:language_policy payload)
               correlation (remember-correlation! exchange
                                                  (assoc (request-correlation exchange) :tenant_id tenant_id))]
           (when (enforce-authz! exchange auth-config
@@ -261,18 +325,18 @@
                                  :tenant_id tenant_id
                                  :root_path root-path
                                  :paths paths})
-            (let [index (sci/create-index {:root_path root-path
-                                           :paths paths
-                                           :parser_opts (:parser_opts payload)
-                                           :usage_metrics (:usage_metrics auth-config)
-                                           :usage_context (merge {:surface "http"
-                                                                  :tenant_id tenant_id}
-                                                                 correlation)
-                                           :selection_cache (:selection_cache auth-config)
-                                           :suppress_usage_metrics true
-                                           :policy_registry (:policy_registry auth-config)})
+            (let [entry (ensure-project-entry! auth-config
+                                               root-path
+                                               paths
+                                               (:parser_opts payload)
+                                               tenant_id
+                                               correlation
+                                               language-policy
+                                               {:paths paths})
+                  index (:index entry)
                   result (sci/expand-context index selector)]
-              (write-json! exchange 200 result
+              (write-json! exchange 200
+                           (assoc result :project_context (project-context-summary entry))
                            (merge api-version-header
                                   (response-correlation-header-map exchange))))))))))
 
@@ -289,6 +353,7 @@
               root-path (or (:root_path payload) ".")
               paths (:paths payload)
               selector (select-keys payload [:selection_id :snapshot_id :unit_ids :detail_level])
+              language-policy (:language_policy payload)
               correlation (remember-correlation! exchange
                                                  (assoc (request-correlation exchange) :tenant_id tenant_id))]
           (when (enforce-authz! exchange auth-config
@@ -296,59 +361,50 @@
                                  :tenant_id tenant_id
                                  :root_path root-path
                                  :paths paths})
-            (let [index (sci/create-index {:root_path root-path
-                                           :paths paths
-                                           :parser_opts (:parser_opts payload)
-                                           :usage_metrics (:usage_metrics auth-config)
-                                           :usage_context (merge {:surface "http"
-                                                                  :tenant_id tenant_id}
-                                                                 correlation)
-                                           :selection_cache (:selection_cache auth-config)
-                                           :suppress_usage_metrics true
-                                           :policy_registry (:policy_registry auth-config)})
+            (let [entry (ensure-project-entry! auth-config
+                                               root-path
+                                               paths
+                                               (:parser_opts payload)
+                                               tenant_id
+                                               correlation
+                                               language-policy
+                                               {:paths paths})
+                  index (:index entry)
                   result (sci/fetch-context-detail index selector)]
-              (write-json! exchange 200 result
+              (write-json! exchange 200
+                           (assoc result :project_context (project-context-summary entry))
                            (merge api-version-header
                                   (response-correlation-header-map exchange))))))))))
 
-(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache]}]
+(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
+                            project_registry language_policy]}]
   (let [server (HttpServer/create (InetSocketAddress. ^String host (int port)) 0)
-        selection-cache (or selection_cache (atom {:max_entries 128}))]
+        selection-cache (or selection_cache (atom {:max_entries 128}))
+        project-registry (or project_registry (project-context/project-registry))
+        auth-config {:api_key api_key
+                     :require_tenant require_tenant
+                     :authz_check authz_check
+                     :policy_registry policy_registry
+                     :usage_metrics usage_metrics
+                     :selection_cache selection-cache
+                     :project_registry project-registry
+                     :language_policy language_policy}]
     (.createContext server "/health" (with-handler handle-health))
-    (.createContext server "/v1/index/create" (with-handler (partial handle-create-index {:api_key api_key
-                                                                                          :require_tenant require_tenant
-                                                                                          :authz_check authz_check
-                                                                                          :policy_registry policy_registry
-                                                                                          :usage_metrics usage_metrics
-                                                                                          :selection_cache selection-cache})))
-    (.createContext server "/v1/retrieval/resolve-context" (with-handler (partial handle-resolve-context {:api_key api_key
-                                                                                                          :require_tenant require_tenant
-                                                                                                          :authz_check authz_check
-                                                                                                          :policy_registry policy_registry
-                                                                                                          :usage_metrics usage_metrics
-                                                                                                          :selection_cache selection-cache})))
-    (.createContext server "/v1/retrieval/expand-context" (with-handler (partial handle-expand-context {:api_key api_key
-                                                                                                        :require_tenant require_tenant
-                                                                                                        :authz_check authz_check
-                                                                                                        :policy_registry policy_registry
-                                                                                                        :usage_metrics usage_metrics
-                                                                                                        :selection_cache selection-cache})))
-    (.createContext server "/v1/retrieval/fetch-context-detail" (with-handler (partial handle-fetch-context-detail {:api_key api_key
-                                                                                                                    :require_tenant require_tenant
-                                                                                                                    :authz_check authz_check
-                                                                                                                    :policy_registry policy_registry
-                                                                                                                    :usage_metrics usage_metrics
-                                                                                                                    :selection_cache selection-cache})))
+    (.createContext server "/v1/index/create" (with-handler (partial handle-create-index auth-config)))
+    (.createContext server "/v1/retrieval/resolve-context" (with-handler (partial handle-resolve-context auth-config)))
+    (.createContext server "/v1/retrieval/expand-context" (with-handler (partial handle-expand-context auth-config)))
+    (.createContext server "/v1/retrieval/fetch-context-detail" (with-handler (partial handle-fetch-context-detail auth-config)))
     (.setExecutor server nil)
     (.start server)
     server))
 
 (defn -main [& args]
-  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file]} (parse-args args)
+  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file language_policy_file]} (parse-args args)
         api-key* (or (not-empty api_key) (System/getenv "SCI_RUNTIME_API_KEY"))
         require-tenant* (or require_tenant (parse-bool (System/getenv "SCI_RUNTIME_REQUIRE_TENANT")))
         authz-policy-file* (or (not-empty authz_policy_file) (System/getenv "SCI_RUNTIME_AUTHZ_POLICY_FILE"))
         policy-registry-file* (or (not-empty policy_registry_file) (System/getenv "SCI_RUNTIME_POLICY_REGISTRY_FILE"))
+        language-policy-file* (or (not-empty language_policy_file) (System/getenv "SCI_RUNTIME_LANGUAGE_POLICY_FILE"))
         usage-metrics* (when-let [jdbc-url (System/getenv "SCI_USAGE_METRICS_JDBC_URL")]
                          (sci/postgres-usage-metrics {:jdbc-url jdbc-url
                                                       :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
@@ -357,12 +413,14 @@
                        (authz/load-policy-authorizer authz-policy-file*))
         policy-registry* (when (seq policy-registry-file*)
                            (rp/load-registry policy-registry-file*))
+        language-policy* (load-language-policy language-policy-file*)
         _server (start-server {:host host
                                :port port
                                :api_key api-key*
                                :require_tenant require-tenant*
                                :authz_check authz-check*
                                :policy_registry policy-registry*
+                               :language_policy language-policy*
                                :usage_metrics usage-metrics*})]
     (println (str "runtime_http_server_started host=" host " port=" port))
     (flush)

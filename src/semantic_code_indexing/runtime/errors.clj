@@ -54,6 +54,22 @@
                             :error_category "client"
                             :http_status 400
                             :grpc_status Status/INVALID_ARGUMENT}
+   :no_supported_languages_found {:error_code "no_supported_languages_found"
+                                  :error_category "client"
+                                  :http_status 400
+                                  :grpc_status Status/INVALID_ARGUMENT}
+   :language_refresh_required {:error_code "language_refresh_required"
+                               :error_category "conflict"
+                               :http_status 409
+                               :grpc_status Status/FAILED_PRECONDITION}
+   :language_activation_in_progress {:error_code "language_activation_in_progress"
+                                     :error_category "conflict"
+                                     :http_status 409
+                                     :grpc_status Status/FAILED_PRECONDITION}
+   :language_policy_blocked {:error_code "language_policy_blocked"
+                             :error_category "client"
+                             :http_status 400
+                             :grpc_status Status/INVALID_ARGUMENT}
    :internal_error {:error_code "internal_error"
                     :error_category "internal"
                     :http_status 500

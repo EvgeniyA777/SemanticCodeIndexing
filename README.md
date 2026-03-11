@@ -88,6 +88,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Optional service auth boundary flags: `--api-key <token> --require-tenant` (or env `SCI_RUNTIME_API_KEY`, `SCI_RUNTIME_REQUIRE_TENANT=true`)
 - Optional host-integrated authz policy file: `--authz-policy-file /path/to/authz-policy.edn` (or env `SCI_RUNTIME_AUTHZ_POLICY_FILE`)
 - Optional runtime policy registry file for HTTP/gRPC: `--policy-registry-file /path/to/policy-registry.edn` (or env `SCI_RUNTIME_POLICY_REGISTRY_FILE`)
+- Optional language activation policy file for HTTP/gRPC: `--language-policy-file /path/to/language-policy.edn` (or env `SCI_RUNTIME_LANGUAGE_POLICY_FILE`)
 - MCP server optionally accepts `SCI_MCP_ALLOWED_ROOTS`; if omitted, it defaults to the process `cwd`. `SCI_MCP_MAX_INDEXES` defaults to `8`.
 - MCP optionally accepts `SCI_MCP_POLICY_REGISTRY_FILE` for active-policy defaults and selector-based `resolve_context` lookup.
 - gRPC edge now uses dedicated runtime protobuf request/response messages for unary methods.
@@ -148,6 +149,7 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - capabilities now emit per-language strength plus a capability-driven `confidence_ceiling`, and guardrails/scorecards account for that ceiling during retrieval evaluation
 - index lifecycle metadata now emits TTL/staleness/provenance signals (`index_lifecycle`, stale pinned snapshots, rebuild reasons) across library/runtime surfaces
 - library/HTTP/gRPC/MCP now share canonical machine-readable error taxonomy fields (`error_code`, `error_category`; gRPC via trailers, MCP via tool-error details)
+- library/HTTP/gRPC/MCP now also share `Language Lane Activation`: first-pass language discovery happens before indexing, unsupported repos return structured core-language guidance, service edges keep per-project activation state, and explicit refresh is required before a newly added language lane becomes active
 - usage metrics now support SLO-facing summaries (`slo-report`) for index latency, retrieval latency, cache hit ratio, degraded rate, fallback rate, and policy version distribution
 - ranking policy is now explicit, versioned, and replayable via `:retrieval_policy`
 - offline policy governance now supports registry lifecycle states (`draft`, `shadow`, `active`, `retired`), fixed replay scorecards, side-by-side policy comparison, promotion gates, and registry-backed governance tiers for `auto_promotable`, `manual_approval_required`, and `blocked` candidates, including direct `promote-policy` enforcement plus explicit manual approval for reviewed restricted-tier candidates
@@ -163,6 +165,7 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - fixture-driven retrieval benchmarks are integrated into local and CI gates
 - HTTP/gRPC edges now support tenant-aware host authz checks via pluggable `authz_check` contract or EDN policy file
 - HTTP/gRPC now also propagate tenant and correlation context consistently: `x-trace-id`, `x-request-id`, `x-session-id`, `x-task-id`, and `x-actor-id` flow into usage events; HTTP echoes them back as `x-sci-*` response headers and gRPC attaches them on error trailers
+- HTTP/gRPC keep isolated project contexts per `root_path`, support optional server-level `language_policy`, and return `project_context` activation metadata alongside create/retrieval responses
 - stdio MCP edge is available for portable local tool-based integration with session-scoped index caching
 
 ## License

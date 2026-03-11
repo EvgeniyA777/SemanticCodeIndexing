@@ -75,6 +75,7 @@ Inputs:
 - `root_path` - repository root to index
 - `paths` - optional relative subset of source paths
 - `parser_opts` - optional parser configuration map
+- `language_policy` - optional activation policy map with `allow_languages`, `disable_languages`, and `prewarm_languages`
 - `force_rebuild` - optional boolean; when `true`, bypasses cache reuse
 
 Returns:
@@ -87,8 +88,20 @@ Returns:
 - `file_count`
 - `unit_count`
 - `cache_hit`
+- `detected_languages`
+- `active_languages`
+- `language_fingerprint`
+- `activation_state`
+- `selection_hint`
 
 `index_lifecycle` exposes the current snapshot reuse/provenance state for that handle, including whether it was rebuilt, reused, pinned, or considered stale.
+
+Language activation behavior for MCP:
+
+- `create_index` runs a cheap supported-language discovery pass before indexing
+- if no supported source language is detected, the tool returns `no_supported_languages_found` with structured guidance so the client can ask the user for a core language
+- empty or early-stage repos can be bootstrapped explicitly with `language_policy.allow_languages`, for example `{ "allow_languages": ["python"] }`
+- later retrieval requests do not auto-activate newly added supported languages; the client must call `create_index` again to refresh activation
 
 ### `repo_map`
 
@@ -123,6 +136,7 @@ Returns:
 - `budget_summary`
 - `focus`
 - `next_step`
+- `project_context`
 
 `next_step` tells the client whether it should stay compact, expand the structural view, or fetch rich detail.
 
@@ -158,6 +172,7 @@ Returns:
 - `budget_summary`
 - `skeletons`
 - optional `impact_hints`
+- `project_context`
 
 ### `fetch_context_detail`
 
@@ -182,6 +197,7 @@ Returns:
 - `guardrail_assessment`
 - `diagnostics_trace`
 - `stage_events`
+- `project_context`
 
 The returned `context_packet` and `diagnostics_trace` include:
 
@@ -226,3 +242,5 @@ Returns:
 - If a retained selection artifact is missing or evicted, the server returns `selection_not_found` or `selection_evicted`.
 - `resolve_context` defaults missing `api_version` to `"1.0"` and rejects unsupported values with `unsupported_api_version`.
 - MCP tool errors now carry canonical taxonomy fields in `structuredContent.details`: `code` and `category`.
+- `no_supported_languages_found` errors also carry `supported_languages`, `selection_hint`, and optional `recommended_core_language` in `structuredContent.details.details`.
+- `language_refresh_required` indicates that the request references a supported language outside the current active lane set; the client should rerun `create_index`.

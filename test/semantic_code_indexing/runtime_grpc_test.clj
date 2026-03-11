@@ -216,6 +216,73 @@
         (.shutdownNow channel)
         (.shutdownNow server)))))
 
+(deftest runtime-grpc-language-activation-guidance-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-grpc-no-lang" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "README.md" "# none")
+        {:keys [server port]} (runtime-grpc/start-server {:host "127.0.0.1" :port 0})
+        channel (-> (ManagedChannelBuilder/forAddress "127.0.0.1" (int port))
+                    (.usePlaintext)
+                    (.build))]
+    (try
+      (try
+        (unary-call channel
+                    runtime-grpc/create-index-method
+                    (grpc-proto/create-index-request {:root_path tmp-root})
+                    grpc-proto/create-index-response->map)
+        (is false "expected StatusRuntimeException")
+        (catch StatusRuntimeException e
+          (is (= (.getCode Status/INVALID_ARGUMENT)
+                 (.getCode (.getStatus e))))
+          (is (= "no_supported_languages_found"
+                 (.get (.getTrailers e)
+                       (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER))))))
+      (finally
+        (.shutdownNow channel)
+        (.shutdownNow server)))))
+
+(deftest runtime-grpc-language-refresh-required-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-grpc-refresh" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "app/main.py" "def run(value):\n    return value\n")
+        {:keys [server port]} (runtime-grpc/start-server {:host "127.0.0.1" :port 0})
+        channel (-> (ManagedChannelBuilder/forAddress "127.0.0.1" (int port))
+                    (.usePlaintext)
+                    (.build))]
+    (try
+      (let [create-resp (unary-call channel
+                                    runtime-grpc/create-index-method
+                                    (grpc-proto/create-index-request {:root_path tmp-root})
+                                    grpc-proto/create-index-response->map)]
+        (is (string? (:snapshot_id create-resp)))
+        (write-file! tmp-root "src/example/main.ts"
+                     "export function runTs(value: string): string {\n  return value;\n}\n")
+        (try
+          (unary-call channel
+                      runtime-grpc/resolve-context-method
+                      (grpc-proto/resolve-context-request
+                       {:root_path tmp-root
+                        :query {:api_version "1.0"
+                                :schema_version "1.0"
+                                :intent {:purpose "code_understanding"
+                                         :details "Locate TS function."}
+                                :targets {:paths ["src/example/main.ts"]}
+                                :constraints {:token_budget 400
+                                              :max_raw_code_level "signature_only"
+                                              :freshness "current_snapshot"}
+                                :hints {}
+                                :options {}
+                                :trace {:request_id "runtime-grpc-refresh-001"}}})
+                      grpc-proto/resolve-context-response->map)
+          (is false "expected StatusRuntimeException")
+          (catch StatusRuntimeException e
+            (is (= (.getCode Status/FAILED_PRECONDITION)
+                   (.getCode (.getStatus e))))
+            (is (= "language_refresh_required"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER)))))))
+      (finally
+        (.shutdownNow channel)
+        (.shutdownNow server)))))
+
 (deftest runtime-grpc-authz-policy-contract-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-grpc-policy-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-grpc-sample-repo! tmp-root)

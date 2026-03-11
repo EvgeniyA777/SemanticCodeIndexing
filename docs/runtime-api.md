@@ -33,6 +33,7 @@ Options:
 - `:root_path` string, default `"."`
 - `:paths` vector of relative source paths (optional subset indexing)
 - `:parser_opts` parser options map (default uses `clj-kondo` for Clojure)
+- `:language_policy` optional activation policy map with `:allow_languages`, `:disable_languages`, and `:prewarm_languages`
 - `:storage` optional storage adapter
 - `:load_latest` if `true`, attempts to load latest snapshot from storage before rebuilding
 - `:pinned_snapshot_id` optional exact snapshot id to reuse from storage
@@ -84,6 +85,23 @@ Current lifecycle behavior:
 - `:load_latest true` reuses the newest stored snapshot when it is within TTL
 - if that stored snapshot is older than `:max_snapshot_age_seconds`, the runtime rebuilds and reports `:rebuild_reason "snapshot_stale"`
 - `:pinned_snapshot_id` reuses the exact stored snapshot even if it is stale, and marks it via `:snapshot_pinned true`
+
+Current language activation behavior:
+
+- `create-index` runs a cheap supported-language discovery pass before parsing/indexing
+- if no supported source language is detected, the runtime raises `:no_supported_languages_found` with structured guidance and a `:selection_hint`
+- callers may bootstrap an empty or early-stage repo explicitly with `:language_policy {:allow_languages ["python"]}` or another supported core lane
+- newly added supported languages are not activated implicitly during retrieval; callers must run an explicit refresh/create step to activate the new lane
+
+Returned indexes now also carry additive activation metadata:
+
+- `:detected_languages`
+- `:active_languages`
+- `:language_fingerprint`
+- `:activation_state`
+- `:supported_languages`
+- `:selection_hint`
+- `:manual_language_selection`
 
 ### `update-index`
 
@@ -239,6 +257,8 @@ Example follow-up:
 ```
 
 Selection artifacts are snapshot-bound. Reusing a `selection_id` with the wrong `:snapshot_id` fails with `snapshot_mismatch`. Missing or evicted selections fail with `selection_not_found` or `selection_evicted`.
+
+If a request targets paths from a supported language that is not active in the current project context, retrieval surfaces fail with `language_refresh_required` instead of silently activating the new lane.
 
 ### `expand-context`
 
@@ -957,6 +977,12 @@ Optional runtime policy registry:
 clojure -M:runtime-http --policy-registry-file /path/to/policy-registry.edn
 ```
 
+Optional language activation policy:
+
+```bash
+clojure -M:runtime-http --language-policy-file /path/to/language-policy.edn
+```
+
 Optional usage metrics persistence:
 
 ```bash
@@ -967,8 +993,10 @@ clojure -M:runtime-http --host 127.0.0.1 --port 8787
 Endpoints:
 
 - `GET /health`
-- `POST /v1/index/create` with JSON body: `root_path`, optional `paths`, optional `parser_opts`
-- `POST /v1/retrieval/resolve-context` with JSON body: `root_path`, optional `paths`, optional `parser_opts`, required `query`, optional `retrieval_policy`
+- `POST /v1/index/create` with JSON body: `root_path`, optional `paths`, optional `parser_opts`, optional `language_policy`
+- `POST /v1/retrieval/resolve-context` with JSON body: `root_path`, optional `paths`, optional `parser_opts`, required `query`, optional `retrieval_policy`, optional `language_policy`
+
+HTTP create/retrieval responses now also include additive `project_context` metadata summarizing the current per-root activation state.
 
 ## Minimal gRPC Edge
 
@@ -988,6 +1016,12 @@ Optional runtime policy registry:
 
 ```bash
 clojure -M:runtime-grpc --policy-registry-file /path/to/policy-registry.edn
+```
+
+Optional language activation policy:
+
+```bash
+clojure -M:runtime-grpc --language-policy-file /path/to/language-policy.edn
 ```
 
 Optional usage metrics persistence:
@@ -1010,13 +1044,14 @@ Proto schema source: `proto/semantic_code_indexing/runtime/grpc/v1/runtime.proto
 Current gRPC transport uses dedicated runtime protobuf envelope messages while preserving HTTP/library semantics:
 
 - request scalar fields stay typed (`root_path`, `paths`, counters)
-- complex nested runtime payloads are carried in explicit `*_json` string fields during this migration step
+- complex nested runtime payloads are carried in explicit `*_json` string fields during this migration step, including optional `language_policy_json`
 - the server currently materializes these messages from protobuf descriptors at runtime rather than generated Java classes
 
 When auth boundary is enabled:
 
 - HTTP expects `x-api-key` and `x-tenant-id` headers for protected endpoints.
 - gRPC expects `x-api-key` and `x-tenant-id` metadata for protected RPC methods.
+- HTTP and gRPC both accept an optional server-level language activation policy via `--language-policy-file` or `SCI_RUNTIME_LANGUAGE_POLICY_FILE`.
 
 Operational correlation:
 
@@ -1040,6 +1075,10 @@ Current stable codes include:
 - `forbidden`
 - `forbidden_root`
 - `index_not_found`
+- `no_supported_languages_found`
+- `language_refresh_required`
+- `language_activation_in_progress`
+- `language_policy_blocked`
 - `protocol_error`
 - `internal_contract_error`
 - `invalid_storage_config`
@@ -1059,6 +1098,12 @@ Transport mapping:
 - HTTP: error payloads now emit both legacy `error` and canonical `error_code` / `error_category`
 - gRPC: error status remains transport-native, and canonical taxonomy is attached in trailers via `x-sci-error-code` and `x-sci-error-category`
 - MCP: tool errors now include canonical `details.code` and `details.category`
+
+For the language-activation flow specifically:
+
+- `no_supported_languages_found` returns structured guidance and `supported_languages` so clients can prompt for a core lane
+- `language_refresh_required` indicates that a newly referenced supported language is not active in the current project context
+- `language_activation_in_progress` is returned when another activation/refresh is already rebuilding the same `root_path`
 
 Optional host-integrated authz policy:
 
