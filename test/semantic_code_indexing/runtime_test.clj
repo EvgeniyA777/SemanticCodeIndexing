@@ -5,6 +5,10 @@
             [malli.core :as m]
             [semantic-code-indexing.contracts.schemas :as contracts]
             [semantic-code-indexing.core :as sci]
+            [semantic-code-indexing.runtime.languages.clojure :as clj-language]
+            [semantic-code-indexing.runtime.languages.elixir :as ex-language]
+            [semantic-code-indexing.runtime.languages.java :as java-language]
+            [semantic-code-indexing.runtime.languages.python :as py-language]
             [semantic-code-indexing.runtime.languages.typescript :as ts-language]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]))
 
@@ -1667,6 +1671,41 @@
     (is base-id)
     (is (some #(= "com.acme.DeepNormalizer#processSuper" (:symbol %)) callers))
     (is (some #(= "com.acme.DeepNormalizer#processInherited" (:symbol %)) callers))))
+
+(deftest language-entry-modules-smoke-test
+  (let [clj-parsed (clj-language/parse-file "." "src/example/core.clj"
+                                            ["(ns example.core)"
+                                             "(defn run [] 1)"]
+                                            {:clojure_engine :regex})
+        java-parsed (java-language/parse-file "." "src/example/Main.java"
+                                              ["package example;"
+                                               "public class Main {"
+                                               "  public String run() {"
+                                               "    return normalize();"
+                                               "  }"
+                                               "  private String normalize() {"
+                                               "    return \"ok\";"
+                                               "  }"
+                                               "}"]
+                                              {:java_engine :regex})
+        ex-parsed (ex-language/parse-file "." "lib/example.ex"
+                                          ["defmodule Example do"
+                                           "  def run(value) do"
+                                           "    normalize(value)"
+                                           "  end"
+                                           "end"]
+                                          {})
+        py-parsed (py-language/parse-file "." "app/example.py"
+                                          ["def run(value):"
+                                           "    return normalize(value)"
+                                           ""
+                                           "def normalize(value):"
+                                           "    return value"]
+                                          {})]
+    (is (= "clojure" (:language clj-parsed)))
+    (is (= "java" (:language java-parsed)))
+    (is (= "elixir" (:language ex-parsed)))
+    (is (= "python" (:language py-parsed)))))
 
 (deftest postgres-storage-roundtrip-test
   (if-let [jdbc-url (System/getenv "SCI_TEST_POSTGRES_URL")]

@@ -1110,6 +1110,7 @@ Transport mapping for authz denials:
 - Elixir semantic-core now treats pipeline calls and local captures as arity-aware callers and keeps `__MODULE__.Nested.foo(...)` linked to nested local-module targets instead of flattening them into imported collisions.
 - TypeScript semantic-core now emits object-literal methods, class field arrow methods, default-export alias indirection, and direct re-export alias units through the dedicated TypeScript language module, with regex/tree-sitter parity for those advanced surfaces while still treating the overall language lane as conservative `low`-ceiling coverage.
 - Parsed files and units now also carry additive `semantic_pipeline` metadata, which is the internal anchor for the new semantic stabilization tranche; this does not change the public retrieval schema roots.
+- Language-specific parser entrypoints now live under `semantic-code-indexing.runtime.languages.*`, while `semantic-code-indexing.runtime.adapters/parse-file` remains the canonical facade used by index creation.
 - Java, Elixir, and Python parsers are lightweight regex-based in MVP; TypeScript is regex-first with an optional tree-sitter path.
 - `tree-sitter` extraction is implemented for Clojure, Java, and TypeScript when corresponding grammar paths are configured.
 - If tree-sitter is requested but unavailable/misconfigured, runtime falls back with diagnostics (`tree_sitter_*` codes).

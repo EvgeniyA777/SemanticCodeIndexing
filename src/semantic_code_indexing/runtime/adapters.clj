@@ -1392,10 +1392,10 @@
                :reason {:code "tree_sitter_no_units"
                         :summary "tree-sitter did not extract Clojure units."}})))))))
 
-(defn- parse-clojure [root-path path lines {:keys [clojure_engine tree_sitter_enabled]
-                                            :or {clojure_engine :clj-kondo
-                                                 tree_sitter_enabled false}
-                                            :as parser-opts}]
+(defn parse-clojure-file [root-path path lines {:keys [clojure_engine tree_sitter_enabled]
+                                                :or {clojure_engine :clj-kondo
+                                                     tree_sitter_enabled false}
+                                                :as parser-opts}]
   (let [engine (or clojure_engine :clj-kondo)
         parsed (case engine
                  :regex (parse-clojure-regex path lines)
@@ -1821,9 +1821,9 @@
                :reason {:code "tree_sitter_no_units"
                         :summary "tree-sitter did not extract Java units."}})))))))
 
-(defn- parse-java [root-path path lines {:keys [java_engine tree_sitter_enabled]
-                                         :or {java_engine :regex}
-                                         :as parser-opts}]
+(defn parse-java-file [root-path path lines {:keys [java_engine tree_sitter_enabled]
+                                             :or {java_engine :regex}
+                                             :as parser-opts}]
   (let [engine (if (true? tree_sitter_enabled) :tree-sitter java_engine)
         parsed (if (= engine :tree-sitter)
                  (let [{:keys [ok? result reason]} (parse-java-tree-sitter root-path path lines parser-opts)]
@@ -2108,7 +2108,7 @@
            vec)
       [])))
 
-(defn- parse-elixir [path lines]
+(defn parse-elixir-file [path lines]
   (let [line-count (count lines)
         module-name (some (fn [line] (some-> (re-find ex-module-re line) second)) lines)
         alias-map (ex-alias-map lines)
@@ -2434,7 +2434,7 @@
          vec)
     []))
 
-(defn- parse-python [path lines]
+(defn parse-python-file [path lines]
   (let [line-count (count lines)
         module (py-module-name path)
         {:keys [imports module-aliases symbol-aliases]} (py-import-state module lines)
@@ -3084,12 +3084,12 @@
    (let [abs (io/file root-path file-path)
          language (language-by-path file-path)]
      (try
-       (let [lines (slurp-lines abs)]
+         (let [lines (slurp-lines abs)]
          (->> (case language
-                "clojure" (parse-clojure root-path file-path lines parser-opts)
-                "java" (parse-java root-path file-path lines parser-opts)
-                "elixir" (parse-elixir file-path lines)
-                "python" (parse-python file-path lines)
+                "clojure" (parse-clojure-file root-path file-path lines parser-opts)
+                "java" (parse-java-file root-path file-path lines parser-opts)
+                "elixir" (parse-elixir-file file-path lines)
+                "python" (parse-python-file file-path lines)
                 "typescript" (ts-language/parse-file root-path file-path lines parser-opts)
                 (fallback-unit file-path lines language "unsupported_language"))
               (semantic-ir/finalize-parsed-file file-path language)))
