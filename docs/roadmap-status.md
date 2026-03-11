@@ -49,8 +49,15 @@ The roadmap through Phase 5 is now effectively delivered for the current scope.
 
 The post-roadmap semantic tranche in [docs/post-roadmap-semantic-deepening-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/post-roadmap-semantic-deepening-plan.md) is now also complete.
 
-The next near-term focus is the semantic stabilization tranche captured in [docs/semantic-stabilization-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/semantic-stabilization-plan.md):
+The semantic stabilization tranche captured in [docs/semantic-stabilization-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/semantic-stabilization-plan.md) is now delivered for the current scope:
 
-- split the current semantic adapter hotspot into thinner internal language modules
-- introduce a normalized internal semantic IR between extraction and resolver narrowing
-- stabilize TypeScript first as the Shadow IR/parity lane, then tighten Java superclass ancestry and Python immediate-scope local suppression before the later interprocedural/dataflow tranche
+- internal semantic IR now exists between extraction and resolver narrowing
+- TypeScript now runs through its dedicated language module with advanced-surface regex/tree-sitter parity
+- Java superclass ancestry and Python immediate-scope local suppression are tightened for graph correctness
+- all supported languages now have dedicated entry namespaces under `runtime/languages/*`, while `runtime/adapters` remains the canonical facade
+
+The next near-term focus is now beyond this delivered stabilization slice:
+
+- deeper shared-helper extraction out of the remaining adapter hotspot
+- interprocedural/dataflow-sensitive semantic resolution
+- continued benchmark/replay-driven validation as deeper semantic layers land
