@@ -1046,3 +1046,63 @@
     (testing "pending queue exposes the operator action for the governance skip"
       (is (= "choose_best_candidate_from_ranking"
              (get-in report [:pending_queue 0 :required_action]))))))
+
+(deftest scheduled-phase5-cycle-retains-orchestration-artifact-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-scheduled-phase5-cycle" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "10101010-1010-4010-8010-101010101010"
+                             :request_id "scheduled-phase5-cycle-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-a (assoc active-policy :policy_id "heuristic_v1_shadow_phase5_a" :version "2026-04-04")
+        shadow-b (assoc active-policy :policy_id "heuristic_v1_shadow_phase5_b" :version "2026-04-05")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-a {:state "shadow"})
+                             (rp/registry-entry shadow-b {:state "shadow"})]}
+        cycle (evaluation/scheduled-phase5-cycle {:root_path tmp-root
+                                                  :usage_metrics metrics
+                                                  :registry registry
+                                                  :artifacts_dir artifacts-dir
+                                                  :retention_runs 4
+                                                  :auto_promote true})]
+    (testing "top-level phase5 cycle writes its own retained artifact and index"
+      (is (str/ends-with? (get-in cycle [:scheduled_run :artifact_path]) ".json"))
+      (is (.exists (io/file (get-in cycle [:scheduled_run :artifact_path]))))
+      (is (.exists (io/file (get-in cycle [:scheduled_run :manifest_path]))))
+      (is (.exists (io/file (get-in cycle [:scheduled_run :phase5_index_path]))))
+      (is (= 1 (count (get-in cycle [:phase5_index :runs]))))
+      (is (= (get-in cycle [:scheduled_run :artifact_path])
+             (get-in cycle [:phase5_index :runs 0 :artifact_paths :phase5_cycle]))))
+    (testing "phase5 cycle manifest preserves direct pointers to underlying retained review and governance artifacts"
+      (is (= (get-in cycle [:scheduled_run :artifact_path])
+             (get-in cycle [:manifest :latest_artifact_path])))
+      (is (= (get-in cycle [:governance_run_ref :artifact_path])
+             (get-in cycle [:manifest :latest_governance_cycle_artifact_path])))
+      (is (= (get-in cycle [:review_run_ref :artifact_path])
+             (get-in cycle [:manifest :latest_policy_review_artifact_path])))
+      (is (= (get-in cycle [:scheduled_run :phase5_index_path])
+             (get-in cycle [:manifest :phase5_index_path]))))
+    (testing "phase5 cycle snapshots current pending operator work for the same orchestration run"
+      (is (= 1 (count (:current_queue_items cycle))))
+      (is (= "multiple_eligible_candidates"
+             (get-in cycle [:current_queue_items 0 :reason_code])))
+      (is (= "choose_best_candidate_from_ranking"
+             (get-in cycle [:current_queue_items 0 :required_action]))))
+    (testing "phase5 cycle bundles the aggregate status view for the retained run set"
+      (is (= 1 (get-in cycle [:status_report :summary :review_runs])))
+      (is (= 1 (get-in cycle [:status_report :summary :governance_runs])))
+      (is (= 1 (get-in cycle [:status_report :summary :pending_queue_items]))))))

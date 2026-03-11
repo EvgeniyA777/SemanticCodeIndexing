@@ -855,6 +855,32 @@ Current status behavior:
 - includes pending reason counts so operators can see whether the loop is blocked by feedback gaps, manual approval, or promotion gating
 - reuses retained review and governance indexes rather than recomputing governance logic from scratch
 
+### Scheduled Phase 5 cycle
+
+You can also run the whole retained Phase 5 loop as one top-level orchestration artifact.
+
+CLI:
+
+```bash
+clojure -M:eval scheduled-phase5-cycle \
+  --root . \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --registry path/to/policy-registry.edn \
+  --artifacts-dir "${TMPDIR:-.tmp}/policy-review" \
+  --retention-runs 8 \
+  --auto-promote \
+  --limit 20 \
+  --out "${TMPDIR:-.tmp}/sci-scheduled-phase5-cycle.json"
+```
+
+Current orchestration behavior:
+
+- runs `scheduled-governance-cycle`, which itself runs `scheduled-policy-review` first
+- snapshots the current derived queue items for the same retained run id
+- snapshots the aggregate Phase 5 status summary after that run lands
+- writes a retained `phase5-cycle-<instant>.json` artifact plus `phase5-cycle-manifest.json`
+- maintains a `phase5-run-index.json` retained index so operators can trace the top-level orchestration cycle directly
+
 ## Offline Replay Evaluation
 
 Replay a dataset of structured queries against the current runtime:

@@ -32,7 +32,7 @@ Legend:
 - `[~]` Phase 3 TypeScript: compatibility and regression coverage exist, but no strategic deepening work
 - `[x]` Capabilities now drive per-language confidence ceilings and guardrails, and governed replay reports `confidence_ceiling_distribution`
 - `[x]` Phase 4 runtime and MCP hardening: snapshots, usage metrics, authz, tenant-aware correlation propagation, index lifecycle metadata, unified machine-readable error taxonomy, and SLO-facing metrics now exist on the main runtime surfaces
-- `[~]` Phase 5 real self-improvement loop: replay harvesting from usage events and feedback, query-to-outcome linkage, difficult-case promotion into `protected_case`, calibration reports against real feedback, weekly review artifacts, conversion of those artifacts back into protected replay datasets, a batch `policy-review-pipeline` into `shadow-review`, retained `scheduled-policy-review` runs, retained `scheduled-governance-cycle` promotion decisions with deterministic best-candidate selection, history-aware selection, streak/cooldown gating, governance approval tiers / allow-block auto-promotion constraints, and direct `promote-policy` governance-tier enforcement plus explicit manual approval now exist; the remaining tail is fuller closed-loop orchestration
+- `[x]` Phase 5 real self-improvement loop: replay harvesting from usage events and feedback, query-to-outcome linkage, difficult-case promotion into `protected_case`, calibration reports against real feedback, weekly review artifacts, conversion of those artifacts back into protected replay datasets, a batch `policy-review-pipeline` into `shadow-review`, retained `scheduled-policy-review` runs, retained `scheduled-governance-cycle` promotion decisions with deterministic best-candidate selection, history-aware selection, streak/cooldown gating, governance approval tiers / allow-block auto-promotion constraints, direct `promote-policy` governance-tier enforcement plus explicit manual approval, retained review/governance indexes, derived operator queue/status reports, and the top-level `scheduled-phase5-cycle` orchestration artifact now exist
 
 ## Canonical References
 
@@ -45,8 +45,7 @@ Legend:
 
 The compact-first staged retrieval refactor captured in [docs/compact-first-staged-retrieval-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/compact-first-staged-retrieval-plan.md) is now complete and should be treated as delivered.
 
-The current near-term focus is the remaining Phase 5 tail:
+The current near-term focus is now the remaining semantic-core tail:
 
-- fuller closed-loop orchestration from retained usage traces into protected replay datasets
-- tighter operationalization of retained review cycles and governance decisions
-- continued conversion of real-world review artifacts into replay-protected policy improvement inputs
+- deeper compiler-grade ownership/disambiguation work in the priority language adapters
+- any incremental operational polish on top of the now-complete retained Phase 5 loop

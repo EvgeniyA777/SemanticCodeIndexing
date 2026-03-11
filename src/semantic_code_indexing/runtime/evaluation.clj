@@ -1190,6 +1190,8 @@
                                                            :limit nil}))
         review-items (reduce (fn [acc run]
                                (let [base-item {:generated_at (:generated_at run)
+                                                :run_id (:run_id run)
+                                                :review_run_id (:run_id run)
                                                 :scope (:scope run)
                                                 :artifact_paths (:artifact_paths run)}
                                      with-gap-item (if (= "no_protected_queries" (get-in run [:shadow_review_summary :reason]))
@@ -1216,6 +1218,8 @@
         governance-items (reduce (fn [acc run]
                                    (let [reason (:promotion_reason run)
                                          base-item {:generated_at (:generated_at run)
+                                                    :run_id (:run_id run)
+                                                    :governance_run_id (:run_id run)
                                                     :artifact_paths (:artifact_paths run)
                                                     :review_run_ref (:review_run_ref run)}]
                                      (case reason
@@ -1309,6 +1313,143 @@
      :review_runs selected-review-runs
      :governance_runs (:runs governance-history)
      :pending_queue (:items queue)}))
+
+(defn scheduled-phase5-cycle
+  [{:keys [root_path usage_metrics parser_opts registry artifacts_dir surface tenant_id since lookback_days retention_runs write_registry auto_promote select_best_candidate history_aware_selection required_candidate_streak_runs promotion_cooldown_runs limit]
+    :or {root_path "."
+         lookback_days 7
+         retention_runs 8
+         write_registry true
+         auto_promote false
+         select_best_candidate false
+         history_aware_selection false
+         required_candidate_streak_runs 1
+         promotion_cooldown_runs 0
+         limit 20}}]
+  (let [artifacts-dir* (or artifacts_dir ".tmp/policy-review")
+        governance-cycle (scheduled-governance-cycle {:root_path root_path
+                                                      :usage_metrics usage_metrics
+                                                      :parser_opts parser_opts
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir*
+                                                      :surface surface
+                                                      :tenant_id tenant_id
+                                                      :since since
+                                                      :lookback_days lookback_days
+                                                      :retention_runs retention_runs
+                                                      :write_registry write_registry
+                                                      :auto_promote auto_promote
+                                                      :select_best_candidate select_best_candidate
+                                                      :history_aware_selection history_aware_selection
+                                                      :required_candidate_streak_runs required_candidate_streak_runs
+                                                      :promotion_cooldown_runs promotion_cooldown_runs})
+        run-id (get-in governance-cycle [:scheduled_run :run_id])
+        generated-at (or (get-in governance-cycle [:scheduled_run :generated_at]) (now-iso))
+        review-run-ref (:review_run_ref governance-cycle)
+        governance-run-ref {:run_id run-id
+                            :artifact_path (get-in governance-cycle [:scheduled_run :artifact_path])
+                            :manifest_path (get-in governance-cycle [:scheduled_run :manifest_path])}
+        queue (phase5-review-queue {:artifacts_dir artifacts-dir*
+                                    :limit limit})
+        current-queue-items (->> (:items queue)
+                                 (filter #(= run-id (:run_id %)))
+                                 vec)
+        status-report (phase5-status-report {:artifacts_dir artifacts-dir*
+                                             :limit limit})
+        artifact-path (.getAbsolutePath
+                       (io/file artifacts-dir*
+                                (str "phase5-cycle-"
+                                     (instant->artifact-token (iso->instant generated-at))
+                                     ".json")))
+        artifact-paths {:primary artifact-path
+                        :phase5_cycle artifact-path
+                        :governance_cycle (:artifact_path governance-run-ref)
+                        :policy_review_bundle (:artifact_path review-run-ref)
+                        :weekly_review (:weekly_review_path review-run-ref)
+                        :protected_replay_dataset (:protected_replay_dataset_path review-run-ref)
+                        :shadow_review (:shadow_review_path review-run-ref)}
+        phase5-artifact {:schema_version "1.0"
+                         :generated_at generated-at
+                         :review_run_ref review-run-ref
+                         :governance_run_ref governance-run-ref
+                         :artifact_paths artifact-paths
+                         :governance_run_summary (:governance_run_summary governance-cycle)
+                         :queue_summary (:summary queue)
+                         :current_queue_items current-queue-items
+                         :status_summary (:summary status-report)}
+        _ (write-json-file! artifact-path phase5-artifact)
+        retention (prune-artifacts! artifacts-dir*
+                                    retention_runs
+                                    "phase5-cycle-"
+                                    "phase5-cycle-manifest.json")
+        phase5-run-summary {:run_id run-id
+                            :generated_at generated-at
+                            :scope {:root_path root_path
+                                    :surface surface
+                                    :tenant_id tenant_id
+                                    :since (get-in governance-cycle [:review_run :scheduled_run :since])}
+                            :artifact_paths artifact-paths
+                            :review_run_ref review-run-ref
+                            :governance_run_ref governance-run-ref
+                            :promotion_summary (get-in governance-cycle [:governance_run_summary :promotion_summary])
+                            :queue_summary (:summary queue)
+                            :current_queue_reason_counts (->> current-queue-items
+                                                              (map :reason_code)
+                                                              frequencies
+                                                              (into (sorted-map)))
+                            :status_summary (:summary status-report)}
+        phase5-index-write (write-retained-index! {:artifacts_dir artifacts-dir*
+                                                   :index_name "phase5-run-index.json"
+                                                   :generated_at generated-at
+                                                   :retention_runs retention_runs
+                                                   :run_summary phase5-run-summary
+                                                   :run_key_fn :run_id})
+        manifest-data {:schema_version "1.0"
+                       :updated_at generated-at
+                       :last_run_at generated-at
+                       :root_path root_path
+                       :surface surface
+                       :tenant_id tenant_id
+                       :since (get-in governance-cycle [:review_run :scheduled_run :since])
+                       :artifacts_dir (.getAbsolutePath (io/file artifacts-dir*))
+                       :latest_artifact_path artifact-path
+                       :latest_run_id run-id
+                       :latest_review_run_id (:run_id review-run-ref)
+                       :latest_governance_run_id run-id
+                       :latest_policy_review_artifact_path (:artifact_path review-run-ref)
+                       :latest_governance_cycle_artifact_path (:artifact_path governance-run-ref)
+                       :latest_weekly_review_path (:weekly_review_path review-run-ref)
+                       :latest_protected_replay_dataset_path (:protected_replay_dataset_path review-run-ref)
+                       :latest_shadow_review_path (:shadow_review_path review-run-ref)
+                       :phase5_index_path (:path phase5-index-write)
+                       :retention_runs retention_runs
+                       :lookback_days lookback_days
+                       :write_registry write_registry
+                       :auto_promote auto_promote
+                       :select_best_candidate select_best_candidate
+                       :history_aware_selection history_aware_selection
+                       :required_candidate_streak_runs required_candidate_streak_runs
+                       :promotion_cooldown_runs promotion_cooldown_runs
+                       :limit limit}
+        manifest-path* (manifest-path artifacts-dir* "phase5-cycle-manifest.json")
+        _ (write-json-file! manifest-path* manifest-data)]
+    {:schema_version "1.0"
+     :scheduled_run {:generated_at generated-at
+                     :run_id run-id
+                     :artifact_path artifact-path
+                     :manifest_path manifest-path*
+                     :deleted_artifacts (:deleted_artifacts retention)
+                     :phase5_index_path (:path phase5-index-write)
+                     :limit limit}
+     :review_run_ref review-run-ref
+     :governance_run_ref governance-run-ref
+     :governance_cycle governance-cycle
+     :queue queue
+     :current_queue_items current-queue-items
+     :status_report status-report
+     :phase5_run_summary phase5-run-summary
+     :phase5_index (:index phase5-index-write)
+     :manifest manifest-data}))
 
 (defn- parse-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str (or value "")))))
@@ -1623,6 +1764,32 @@
     (print-or-write! out_path result)
     (System/exit 0)))
 
+(defn- run-scheduled-phase5-cycle-command [{:keys [root_path usage_metrics_jdbc_url registry_path surface tenant_id since artifacts_dir retention_runs lookback_days out_path write_registry auto_promote select_best_candidate history_aware_selection required_candidate_streak_runs promotion_cooldown_runs limit]}]
+  (when (or (nil? usage_metrics_jdbc_url) (nil? registry_path))
+    (println "Usage: clojure -M:eval scheduled-phase5-cycle --root <repo-root> --usage-metrics-jdbc-url <jdbc-url> --registry <registry.edn> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--artifacts-dir <dir>] [--retention-runs <n>] [--lookback-days <n>] [--required-candidate-streak-runs <n>] [--promotion-cooldown-runs <n>] [--limit <n>] [--write-registry] [--auto-promote] [--select-best-candidate] [--history-aware-selection] [--out <output.json>]")
+    (System/exit 1))
+  (let [usage-metrics (sci/postgres-usage-metrics {:jdbc-url usage_metrics_jdbc_url
+                                                   :table-name "usage_events"})
+        registry (read-string (slurp registry_path))
+        result (scheduled-phase5-cycle {:root_path root_path
+                                        :usage_metrics usage-metrics
+                                        :registry registry
+                                        :artifacts_dir artifacts_dir
+                                        :surface surface
+                                        :tenant_id tenant_id
+                                        :since since
+                                        :lookback_days lookback_days
+                                        :retention_runs retention_runs
+                                        :write_registry write_registry
+                                        :auto_promote auto_promote
+                                        :select_best_candidate select_best_candidate
+                                        :history_aware_selection history_aware_selection
+                                        :required_candidate_streak_runs required_candidate_streak_runs
+                                        :promotion_cooldown_runs promotion_cooldown_runs
+                                        :limit limit})]
+    (print-or-write! out_path result)
+    (System/exit 0)))
+
 (defn -main [& args]
   (let [[command & rest-args] args]
     (case command
@@ -1637,6 +1804,7 @@
       "policy-review-pipeline" (run-policy-review-pipeline-command (parse-args rest-args))
       "scheduled-policy-review" (run-scheduled-policy-review-command (parse-args rest-args))
       "scheduled-governance-cycle" (run-scheduled-governance-cycle-command (parse-args rest-args))
+      "scheduled-phase5-cycle" (run-scheduled-phase5-cycle-command (parse-args rest-args))
       "governance-history-report" (run-governance-history-report-command (parse-args rest-args))
       "phase5-review-queue" (run-phase5-review-queue-command (parse-args rest-args))
       "phase5-status-report" (run-phase5-status-report-command (parse-args rest-args))
