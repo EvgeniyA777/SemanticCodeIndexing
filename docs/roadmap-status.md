@@ -41,14 +41,12 @@ Legend:
 - Go issue tracker milestones: <https://github.com/golang/go/milestones>
 - Rust tracking issue guidance: <https://forge.rust-lang.org/feature-tracking.html>
 
-## Current Refactor Plan
+## Current Focus
 
-The current near-term execution plan is captured in [docs/compact-first-staged-retrieval-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/compact-first-staged-retrieval-plan.md).
+The compact-first staged retrieval refactor captured in [docs/compact-first-staged-retrieval-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/compact-first-staged-retrieval-plan.md) is now complete and should be treated as delivered.
 
-It prioritizes:
+The current near-term focus is the remaining Phase 5 tail:
 
-- strict snapshot-bound `selection_id` semantics across staged retrieval
-- bounded retention and eviction behavior for selection artifacts
-- idempotent `fetch_context_detail` behavior while artifacts are retained
-- clean-break `api_version` routing and legacy contract cleanup
-- real per-stage budget enforcement and stage-aware metrics
+- fuller closed-loop orchestration from retained usage traces into protected replay datasets
+- tighter operationalization of retained review cycles and governance decisions
+- continued conversion of real-world review artifacts into replay-protected policy improvement inputs

@@ -4,6 +4,8 @@ Execution plan for finishing the clean-break retrieval line centered on compact 
 
 Last updated: 2026-03-10
 
+Status: Completed on 2026-03-11
+
 ## Goal
 
 Bring the repository fully in line with the intended role of a large-repo context narrowing layer:
@@ -19,7 +21,7 @@ Bring the repository fully in line with the intended role of a large-repo contex
 - The staged API shape already exists on library, HTTP, gRPC, and MCP surfaces.
 - Compact selection, structured `next_step`, and separate `expand_context` / `fetch_context_detail` flows are already implemented.
 - Iteration 4 alignment is now landed: `ADR-024` exists and `README`, runtime docs, MCP docs, and canonical example metadata all describe staged retrieval as the public default flow.
-- The remaining gap is hardening and cleanup, not greenfield API design.
+- Full plan outcome is now delivered and this document should be treated as a completed execution record rather than the active near-term backlog.
 
 ## Prioritized Work
 
@@ -120,3 +122,5 @@ This finalizes the refactor as the canonical line rather than a partial implemen
 - Selection artifacts are explicitly snapshot-bound across all public surfaces.
 - A repeated detail fetch is idempotent while the selection artifact exists.
 - Canonical docs and examples describe `resolve_context -> expand_context -> fetch_context_detail` as the default retrieval flow.
+
+All definition-of-done items are now satisfied.

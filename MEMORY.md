@@ -78,15 +78,13 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Language-priority roadmap tail remains open after the current Clojure, Elixir, Java, and Python pushes: TypeScript remains regression-only by design, and Clojure/Elixir/Java/Python still have room for deeper compiler-grade ownership, dataflow, and targeting beyond the current collision and generated-form slices.
 - Runtime hardening is now effectively complete for the main roadmap scope; any remaining ops work is incremental polish rather than a missing Phase 4 primitive.
 - Real self-improvement loop is still partial: replay harvesting, difficult-case capture, calibration reports, weekly review artifacts, protected replay dataset conversion, batch `policy-review-pipeline`, retained `scheduled-policy-review` runs, retained `scheduled-governance-cycle` decisions with multi-candidate selection, history-aware ranking, and streak/cooldown gating, and longer-horizon `governance-history-report` summaries exist, but fuller closed-loop automation is still open.
-- Compact-first staged retrieval is partially implemented on the public surfaces (`resolve_context`, `expand_context`, `fetch_context_detail`), but the repo still has an explicit hardening/refactor plan to finish the clean-break API line and make selection artifacts strictly snapshot-bound.
+- Compact-first staged retrieval is now fully aligned as the canonical public flow: `resolve_context` is compact-first, `expand_context` / `fetch_context_detail` are the explicit later stages, selection artifacts are snapshot-bound, and the implementation/docs/examples line is captured by `ADR-024` plus the completed `docs/compact-first-staged-retrieval-plan.md`.
 
 ## Next Execution Priorities
 
-1. Finish the compact-first staged retrieval refactor by making `selection_id` artifacts strictly snapshot-bound across library, HTTP, gRPC, and MCP; add bounded retention/eviction semantics for selection artifacts; and make `fetch_context_detail` idempotent for the lifetime of a retained selection artifact.
-2. Complete the clean-break public API line so `api_version` is the only client-facing version switch, legacy knobs such as `favor_compact_packet` are removed from the canonical API, and staged retrieval docs/examples become the canonical user path.
-3. Tighten budget enforcement and observability for staged retrieval: real per-stage shaping/caps for selection, expand, and detail payloads plus stage-specific usage metrics and token-footprint reporting.
-4. Build the remaining Phase 5 closed-loop automation on top of `scheduled-policy-review`, `scheduled-governance-cycle`, and `governance-history-report`, especially fuller end-to-end orchestration from real usage traces into retained protected replay sets.
-5. Reserve any next semantic-core pass for genuinely deeper compiler-grade tails only after the staged retrieval hardening work lands.
+1. Build the remaining Phase 5 closed-loop automation on top of `scheduled-policy-review`, `scheduled-governance-cycle`, and `governance-history-report`, especially fuller end-to-end orchestration from real usage traces into retained protected replay sets.
+2. Tighten the operator workflow around retained review artifacts, approval points, and promotion decisions so the existing governance loop is easier to run repeatedly.
+3. Reserve any next semantic-core pass for genuinely deeper compiler-grade tails only after the remaining Phase 5 orchestration work lands.
 
 ## Update Rule
 
