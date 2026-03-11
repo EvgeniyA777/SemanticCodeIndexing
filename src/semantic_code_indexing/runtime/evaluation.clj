@@ -43,6 +43,11 @@
     :path [:confidence_calibration :mean_absolute_error]
     :direction :at_most}])
 
+(declare prior-governance-runs
+         selected-policy-match?
+         candidate-streak-length
+         cooldown-active?)
+
 (defn- read-json [path]
   (with-open [rdr (io/reader path)]
     (json/read rdr :key-fn keyword)))
@@ -318,10 +323,95 @@
 (defn- now-iso []
   (.toString (java.time.Instant/now)))
 
+(defn- iso->instant [value]
+  (when (seq (str value))
+    (java.time.Instant/parse (str value))))
+
+(defn- instant->artifact-token [instant]
+  (-> (str instant)
+      (str/replace ":" "")
+      (str/replace "." "-")))
+
+(defn- ensure-parent-dir! [path]
+  (when-let [parent (.getParentFile (io/file path))]
+    (.mkdirs parent)))
+
+(defn- read-json-if-exists [path]
+  (when (.exists (io/file path))
+    (read-json path)))
+
+(defn- write-json-file! [path data]
+  (ensure-parent-dir! path)
+  (write-json path data)
+  path)
+
+(defn- artifact-files
+  ([artifacts-dir]
+   (artifact-files artifacts-dir "policy-review-" "policy-review-manifest.json"))
+  ([artifacts-dir prefix manifest-name]
+  (let [dir (io/file artifacts-dir)]
+    (if (.isDirectory dir)
+      (->> (.listFiles dir)
+           (filter #(.isFile %))
+           (filter #(str/starts-with? (.getName %) prefix))
+           (remove #(= manifest-name (.getName %)))
+           (filter #(str/ends-with? (.getName %) ".json"))
+           (sort-by #(.getName %) compare)
+           vec)
+      []))))
+
+(defn- prune-artifacts!
+  ([artifacts-dir retention_runs]
+   (prune-artifacts! artifacts-dir retention_runs "policy-review-" "policy-review-manifest.json"))
+  ([artifacts-dir retention_runs prefix manifest-name]
+  (let [files (artifact-files artifacts-dir prefix manifest-name)
+        keep-count (max 0 (long (or retention_runs 0)))
+        delete-count (max 0 (- (count files) keep-count))
+        doomed (take delete-count files)]
+    (doseq [file doomed]
+      (.delete file))
+    {:deleted_artifacts (mapv #(.getAbsolutePath %) doomed)
+     :retained_artifact_count (min keep-count (max 0 (- (count files) delete-count)))})))
+
+(defn- manifest-path
+  ([artifacts-dir]
+   (manifest-path artifacts-dir "policy-review-manifest.json"))
+  ([artifacts-dir manifest-name]
+   (.getAbsolutePath (io/file artifacts-dir manifest-name))))
+
+(defn- derive-since [{:keys [since lookback_days manifest]}]
+  (cond
+    since since
+    (get manifest :last_run_at) (get manifest :last_run_at)
+    lookback_days (str (.minus (java.time.Instant/now)
+                               (java.time.Duration/ofDays (long lookback_days))))
+    :else nil))
+
 (defn- failed-checks [decision]
   (->> (:checks decision)
        (remove :passed?)
        vec))
+
+(defn- governance-review [entry gate-eligible?]
+  (let [governance (rp/effective-governance entry)
+        promotion-mode (:promotion_mode governance)
+        approval-tier (:approval_tier governance)
+        auto-eligible? (and gate-eligible? (rp/auto-promotable? entry))
+        manual-review? (and gate-eligible? (rp/manual-approval-required? entry))
+        blocked-by-governance? (and gate-eligible? (rp/blocked? entry))
+        reason (cond
+                 (not gate-eligible?) "replay_gates_failed"
+                 auto-eligible? "auto_promotable"
+                 manual-review? "manual_approval_required"
+                 blocked-by-governance? "promotion_blocked"
+                 :else "unknown")]
+    {:governance governance
+     :approval_tier approval-tier
+     :promotion_mode promotion-mode
+     :eligible_for_auto_promotion auto-eligible?
+     :manual_review_required manual-review?
+     :blocked_by_governance blocked-by-governance?
+     :governance_reason reason}))
 
 (defn shadow-review-report
   [{:keys [root_path dataset parser_opts registry]
@@ -344,30 +434,40 @@
                                                             :parser_opts parser_opts
                                                             :baseline_policy baseline-policy
                                                             :candidate_policy candidate-policy})
-                              decision (promotion-gate-decision comparison)]
-                          {:policy_summary (rp/policy-summary candidate-policy)
-                           :state (:state entry)
-                           :baseline_policy (rp/policy-summary baseline-policy)
-                           :reviewed_at reviewed-at
-                           :eligible_for_promotion (:eligible? decision)
-                           :failed_checks (failed-checks decision)
-                           :protected_case_summary (:protected_case_summary comparison)
-                           :scorecard (get-in comparison [:candidate :scorecard])
-                           :protected_summary (get-in comparison [:candidate :protected_summary])}))
+                              decision (promotion-gate-decision comparison)
+                              gate-eligible? (:eligible? decision)
+                              governance-review* (governance-review entry gate-eligible?)]
+                          (merge
+                           {:policy_summary (rp/policy-summary candidate-policy)
+                            :state (:state entry)
+                            :baseline_policy (rp/policy-summary baseline-policy)
+                            :reviewed_at reviewed-at
+                            :eligible_for_promotion gate-eligible?
+                            :failed_checks (failed-checks decision)
+                            :protected_case_summary (:protected_case_summary comparison)
+                            :scorecard (get-in comparison [:candidate :scorecard])
+                            :protected_summary (get-in comparison [:candidate :protected_summary])}
+                           governance-review*)))
                       shadow-entries)
         ready (count (filter :eligible_for_promotion reviews))
-        blocked (- (count reviews) ready)]
+        blocked (- (count reviews) ready)
+        auto-promotable (count (filter :eligible_for_auto_promotion reviews))
+        manual-review (count (filter :manual_review_required reviews))
+        governance-blocked (count (filter :blocked_by_governance reviews))]
     {:active_policy {:policy_summary (rp/policy-summary baseline-policy)
                      :state (:state baseline-entry)}
      :summary {:shadow_candidates (count reviews)
                :ready_for_promotion ready
                :blocked blocked
+               :ready_for_auto_promotion auto-promotable
+               :manual_review_required manual-review
+               :governance_blocked governance-blocked
                :reviewed_at reviewed-at}
      :shadow_candidates reviews}))
 
 (defn apply-shadow-review
   [registry report]
-  (reduce (fn [acc {:keys [policy_summary reviewed_at eligible_for_promotion failed_checks protected_case_summary]}]
+  (reduce (fn [acc {:keys [policy_summary reviewed_at eligible_for_promotion eligible_for_auto_promotion manual_review_required blocked_by_governance promotion_mode approval_tier governance_reason failed_checks protected_case_summary]}]
             (if-let [entry (rp/resolve-registry-entry acc
                                                       (:policy_id policy_summary)
                                                       (:version policy_summary))]
@@ -376,6 +476,12 @@
                (assoc entry
                       :shadow_review {:reviewed_at reviewed_at
                                       :eligible_for_promotion eligible_for_promotion
+                                      :eligible_for_auto_promotion eligible_for_auto_promotion
+                                      :manual_review_required manual_review_required
+                                      :blocked_by_governance blocked_by_governance
+                                      :promotion_mode promotion_mode
+                                      :approval_tier approval_tier
+                                      :governance_reason governance_reason
                                       :failed_checks failed_checks
                                       :protected_case_summary protected_case_summary}))
               acc))
@@ -405,7 +511,8 @@
             registry*)]
       {:candidate {:policy_id (:policy_id candidate)
                    :version (:version candidate)
-                   :state_before (:state candidate)}
+                   :state_before (:state candidate)
+                   :governance (rp/effective-governance candidate)}
        :baseline (when baseline
                    {:policy_id (:policy_id baseline)
                     :version (:version baseline)
@@ -413,6 +520,433 @@
        :decision decision
        :promoted? (and eligible? (not dry_run))
        :registry promoted-registry})))
+
+(defn policy-review-pipeline
+  [{:keys [root_path usage_metrics parser_opts registry surface tenant_id since write_registry]
+    :or {root_path "."
+         write_registry false}}]
+  (let [filters (cond-> {:root_path root_path}
+                  surface (assoc :surface surface)
+                  tenant_id (assoc :tenant_id tenant_id)
+                  since (assoc :since since))
+        weekly-review (sci/weekly-review-report usage_metrics filters)
+        protected-dataset (sci/review-report->protected-replay-dataset weekly-review)
+        registry* (rp/normalize-registry registry)
+        shadow-entries (->> (rp/list-registry-entries registry*)
+                            (filter #(= "shadow" (:state %)))
+                            vec)
+        active-entry (rp/active-registry-entry registry*)
+        shadow-review (cond
+                        (empty? (:queries protected-dataset))
+                        {:skipped true
+                         :reason "no_protected_queries"}
+
+                        (nil? active-entry)
+                        {:skipped true
+                         :reason "active_policy_not_found"}
+
+                        (empty? shadow-entries)
+                        {:skipped true
+                         :reason "no_shadow_policies"}
+
+                        :else
+                        (shadow-review-report {:root_path root_path
+                                               :dataset protected-dataset
+                                               :parser_opts parser_opts
+                                               :registry registry*}))
+        registry-after (if (and write_registry (not (:skipped shadow-review)))
+                         (apply-shadow-review registry* shadow-review)
+                         registry*)]
+    {:schema_version "1.0"
+     :generated_at (now-iso)
+     :root_path root_path
+     :weekly_review_report weekly-review
+     :protected_replay_dataset protected-dataset
+     :shadow_review_report shadow-review
+     :registry registry-after}))
+
+(defn scheduled-policy-review
+  [{:keys [root_path usage_metrics parser_opts registry artifacts_dir surface tenant_id since lookback_days retention_runs write_registry]
+    :or {root_path "."
+         lookback_days 7
+         retention_runs 8
+         write_registry true}}]
+  (let [artifacts-dir* (or artifacts_dir ".tmp/policy-review")
+        manifest* (or (read-json-if-exists (manifest-path artifacts-dir*)) {})
+        since* (derive-since {:since since
+                              :lookback_days lookback_days
+                              :manifest manifest*})
+        bundle (policy-review-pipeline {:root_path root_path
+                                        :usage_metrics usage_metrics
+                                        :parser_opts parser_opts
+                                        :registry registry
+                                        :surface surface
+                                        :tenant_id tenant_id
+                                        :since since*
+                                        :write_registry write_registry})
+        generated-at (or (:generated_at bundle) (now-iso))
+        artifact-path (.getAbsolutePath
+                       (io/file artifacts-dir*
+                                (str "policy-review-"
+                                     (instant->artifact-token (iso->instant generated-at))
+                                     ".json")))
+        _ (.mkdirs (io/file artifacts-dir*))
+        _ (write-json-file! artifact-path bundle)
+        retention (prune-artifacts! artifacts-dir* retention_runs)
+        manifest-data {:schema_version "1.0"
+                       :updated_at generated-at
+                       :last_run_at generated-at
+                       :root_path root_path
+                       :surface surface
+                       :tenant_id tenant_id
+                       :since since*
+                       :artifacts_dir (.getAbsolutePath (io/file artifacts-dir*))
+                       :latest_artifact_path artifact-path
+                       :retention_runs retention_runs
+                       :lookback_days lookback_days
+                       :write_registry write_registry}
+        manifest-path* (manifest-path artifacts-dir*)
+        _ (write-json-file! manifest-path* manifest-data)]
+    {:schema_version "1.0"
+     :scheduled_run {:generated_at generated-at
+                     :since since*
+                     :lookback_days lookback_days
+                     :retention_runs retention_runs
+                     :artifact_path artifact-path
+                     :manifest_path manifest-path*
+                     :deleted_artifacts (:deleted_artifacts retention)
+                     :write_registry write_registry}
+     :bundle bundle
+     :manifest manifest-data}))
+
+(defn- candidate-ranking-vector [candidate]
+  (let [scorecard (:scorecard candidate)
+        protected-scorecard (get-in candidate [:protected_summary :scorecard])
+        candidate-scorecard (or protected-scorecard scorecard)
+        policy-summary (:policy_summary candidate)]
+    [(- (double (get candidate-scorecard :pass_rate 0.0)))
+     (- (double (get candidate-scorecard :top_authority_hit_rate 0.0)))
+     (- (double (get candidate-scorecard :required_path_hit_rate 0.0)))
+     (- (double (get candidate-scorecard :minimum_confidence_pass_rate 0.0)))
+     (double (get candidate-scorecard :degraded_rate 1.0))
+     (double (get candidate-scorecard :fallback_rate 1.0))
+     (double (get-in candidate-scorecard [:confidence_calibration :mean_absolute_error] 1.0))
+     (str (:policy_id policy-summary))
+     (str (:version policy-summary))]))
+
+(defn- rank-eligible-candidates [shadow-review]
+  (->> (:shadow_candidates shadow-review)
+       (filter :eligible_for_auto_promotion)
+       (sort-by candidate-ranking-vector)
+       (mapv (fn [candidate]
+               {:policy_summary (:policy_summary candidate)
+                :ranking_vector (candidate-ranking-vector candidate)
+                :scorecard (:scorecard candidate)
+                :protected_summary (:protected_summary candidate)
+                :governance (:governance candidate)
+                :approval_tier (:approval_tier candidate)
+                :promotion_mode (:promotion_mode candidate)}))))
+
+(defn- candidate-history-stats [runs policy-summary]
+  (let [matching (filter #(selected-policy-match? % policy-summary) runs)
+        promoted (filter :promoted matching)
+        skipped (filter :skipped matching)
+        selected-runs (count matching)
+        promoted-runs (count promoted)]
+    {:selected_runs selected-runs
+     :promoted_runs promoted-runs
+     :skipped_runs (count skipped)
+     :promotion_rate (if (pos? selected-runs)
+                       (/ (double promoted-runs) (double selected-runs))
+                       0.0)}))
+
+(defn- history-aware-selection-vector [entry prior-runs]
+  (let [policy-summary (:policy_summary entry)
+        stats (candidate-history-stats prior-runs policy-summary)]
+    [(- (double (:promotion_rate stats)))
+     (- (long (:promoted_runs stats)))
+     (- (long (:selected_runs stats)))
+     (long (:skipped_runs stats))
+     (:ranking_vector entry)]))
+
+(defn- apply-history-aware-ranking [candidate-ranking prior-runs]
+  (->> candidate-ranking
+       (mapv (fn [entry]
+               (assoc entry
+                      :history_stats (candidate-history-stats prior-runs (:policy_summary entry))
+                      :selection_vector (history-aware-selection-vector entry prior-runs))))
+       (sort-by :selection_vector)
+       vec))
+
+(defn- promote-selected-candidate [{:keys [root_path parser_opts registry protected_dataset candidate]}]
+  (let [baseline-policy (or (some-> (rp/active-registry-entry registry)
+                                    rp/policy-from-entry)
+                            (rp/default-retrieval-policy))
+        candidate-policy (or (some-> (rp/resolve-registry-entry registry
+                                                                 (:policy_id candidate)
+                                                                 (:version candidate))
+                                     rp/policy-from-entry)
+                             (throw (ex-info "eligible candidate policy not found in registry"
+                                             {:type :invalid_request
+                                              :message "eligible candidate policy not found in registry"})))
+        comparison (compare-policies {:root_path root_path
+                                      :dataset protected_dataset
+                                      :parser_opts parser_opts
+                                      :baseline_policy baseline-policy
+                                      :candidate_policy candidate-policy})
+        result (promote-policy {:registry registry
+                                :candidate_policy_id (:policy_id candidate)
+                                :candidate_version (:version candidate)
+                                :comparison comparison
+                                :dry_run false})]
+    (assoc result :comparison comparison)))
+
+(defn scheduled-governance-cycle
+  [{:keys [root_path usage_metrics parser_opts registry artifacts_dir surface tenant_id since lookback_days retention_runs write_registry auto_promote select_best_candidate history_aware_selection required_candidate_streak_runs promotion_cooldown_runs]
+    :or {root_path "."
+         lookback_days 7
+         retention_runs 8
+         write_registry true
+         auto_promote false
+         select_best_candidate false
+         history_aware_selection false
+         required_candidate_streak_runs 1
+         promotion_cooldown_runs 0}}]
+  (let [review-run (scheduled-policy-review {:root_path root_path
+                                             :usage_metrics usage_metrics
+                                             :parser_opts parser_opts
+                                             :registry registry
+                                             :artifacts_dir artifacts_dir
+                                             :surface surface
+                                             :tenant_id tenant_id
+                                             :since since
+                                             :lookback_days lookback_days
+                                             :retention_runs retention_runs
+                                             :write_registry write_registry})
+        bundle (:bundle review-run)
+        registry-after-review (:registry bundle)
+        shadow-review (:shadow_review_report bundle)
+        protected-dataset (:protected_replay_dataset bundle)
+        prior-runs (prior-governance-runs {:artifacts_dir (or artifacts_dir ".tmp/policy-review")
+                                           :limit retention_runs})
+        candidate-ranking-base (rank-eligible-candidates shadow-review)
+        candidate-ranking (if history_aware_selection
+                            (apply-history-aware-ranking candidate-ranking-base prior-runs)
+                            candidate-ranking-base)
+        eligible-candidate-entries candidate-ranking
+        eligible-candidates (mapv :policy_summary eligible-candidate-entries)
+        manual-review-candidates (->> (:shadow_candidates shadow-review)
+                                      (filter :manual_review_required)
+                                      (mapv :policy_summary))
+        governance-blocked-candidates (->> (:shadow_candidates shadow-review)
+                                           (filter :blocked_by_governance)
+                                           (mapv :policy_summary))
+        promotion (cond
+                    (:skipped shadow-review)
+                    {:skipped true
+                     :reason (str "shadow_review_" (:reason shadow-review))}
+
+                    (not auto_promote)
+                    {:skipped true
+                     :reason "auto_promote_disabled"
+                     :eligible_candidates eligible-candidates}
+
+                    (empty? eligible-candidates)
+                    {:skipped true
+                     :reason (cond
+                               (seq manual-review-candidates) "no_auto_promotable_candidates"
+                               (seq governance-blocked-candidates) "all_candidates_blocked_by_governance"
+                               :else "no_eligible_candidates")
+                     :manual_review_candidates manual-review-candidates
+                     :governance_blocked_candidates governance-blocked-candidates}
+
+                    (and (> (count eligible-candidates) 1)
+                         (not select_best_candidate))
+                    {:skipped true
+                     :reason "multiple_eligible_candidates"
+                     :eligible_candidates eligible-candidates
+                     :candidate_ranking candidate-ranking}
+
+                    :else
+                    (let [candidate-entry (first eligible-candidate-entries)
+                          candidate (:policy_summary candidate-entry)
+                          selection-mode (if (> (count eligible-candidates) 1)
+                                           "best_eligible_candidate"
+                                           "single_eligible_candidate")
+                          candidate-streak (candidate-streak-length prior-runs candidate)]
+                      (cond
+                        (cooldown-active? prior-runs promotion_cooldown_runs)
+                        {:skipped true
+                         :reason "promotion_cooldown_active"
+                         :selected_candidate candidate
+                         :candidate_ranking candidate-ranking
+                         :selection_mode selection-mode
+                         :required_candidate_streak_runs required_candidate_streak_runs
+                         :candidate_streak_runs candidate-streak
+                         :promotion_cooldown_runs promotion_cooldown_runs}
+
+                        (< candidate-streak (max 1 (long required_candidate_streak_runs)))
+                        {:skipped true
+                         :reason "insufficient_candidate_streak"
+                         :selected_candidate candidate
+                         :candidate_ranking candidate-ranking
+                         :selection_mode selection-mode
+                         :required_candidate_streak_runs required_candidate_streak_runs
+                         :candidate_streak_runs candidate-streak
+                         :promotion_cooldown_runs promotion_cooldown_runs}
+
+                        :else
+                        (let [result (promote-selected-candidate {:root_path root_path
+                                                                  :parser_opts parser_opts
+                                                                  :registry registry-after-review
+                                                                  :protected_dataset protected-dataset
+                                                                  :candidate candidate})]
+                          (assoc result
+                                 :selected_candidate (assoc candidate
+                                                           :governance (:governance candidate-entry)
+                                                           :approval_tier (:approval_tier candidate-entry)
+                                                           :promotion_mode (:promotion_mode candidate-entry))
+                                 :candidate_ranking candidate-ranking
+                                 :selection_mode selection-mode
+                                 :required_candidate_streak_runs required_candidate_streak_runs
+                                 :candidate_streak_runs candidate-streak
+                                 :promotion_cooldown_runs promotion_cooldown_runs)))))
+        final-registry (if (:promoted? promotion)
+                         (:registry promotion)
+                         registry-after-review)
+        generated-at (or (get-in review-run [:scheduled_run :generated_at]) (now-iso))
+        governance-artifact-path (.getAbsolutePath
+                                  (io/file (or artifacts_dir ".tmp/policy-review")
+                                           (str "governance-cycle-"
+                                                (instant->artifact-token (iso->instant generated-at))
+                                                ".json")))
+        _ (write-json-file! governance-artifact-path
+                            {:schema_version "1.0"
+                             :generated_at generated-at
+                             :review_run review-run
+                             :promotion promotion
+                             :registry final-registry})
+        governance-retention (prune-artifacts! (or artifacts_dir ".tmp/policy-review")
+                                               retention_runs
+                                               "governance-cycle-"
+                                               "governance-cycle-manifest.json")
+        governance-manifest {:schema_version "1.0"
+                             :updated_at generated-at
+                             :last_run_at generated-at
+                             :root_path root_path
+                             :surface surface
+                             :tenant_id tenant_id
+                             :since (get-in review-run [:scheduled_run :since])
+                             :artifacts_dir (.getAbsolutePath (io/file (or artifacts_dir ".tmp/policy-review")))
+                             :latest_artifact_path governance-artifact-path
+                             :retention_runs retention_runs
+                             :lookback_days lookback_days
+                             :write_registry write_registry
+                             :auto_promote auto_promote
+                             :select_best_candidate select_best_candidate
+                             :history_aware_selection history_aware_selection
+                             :required_candidate_streak_runs required_candidate_streak_runs
+                             :promotion_cooldown_runs promotion_cooldown_runs}
+        governance-manifest-path* (manifest-path (or artifacts_dir ".tmp/policy-review")
+                                                 "governance-cycle-manifest.json")
+        _ (write-json-file! governance-manifest-path* governance-manifest)]
+    {:schema_version "1.0"
+     :scheduled_run {:generated_at generated-at
+                     :artifact_path governance-artifact-path
+                     :manifest_path governance-manifest-path*
+                     :deleted_artifacts (:deleted_artifacts governance-retention)
+                     :auto_promote auto_promote
+                     :select_best_candidate select_best_candidate
+                     :history_aware_selection history_aware_selection
+                     :required_candidate_streak_runs required_candidate_streak_runs
+                     :promotion_cooldown_runs promotion_cooldown_runs}
+     :review_run review-run
+     :candidate_ranking candidate-ranking
+     :promotion promotion
+     :registry final-registry
+     :manifest governance-manifest}))
+
+(defn governance-history-report
+  [{:keys [artifacts_dir limit]
+    :or {artifacts_dir ".tmp/policy-review"}}]
+  (let [manifest* (or (read-json-if-exists (manifest-path artifacts_dir "governance-cycle-manifest.json")) {})
+        files (artifact-files artifacts_dir "governance-cycle-" "governance-cycle-manifest.json")
+        selected-files (if limit
+                         (take-last (max 0 (long limit)) files)
+                         files)
+        runs (mapv (fn [file]
+                     (let [artifact (read-json (.getAbsolutePath file))
+                           promotion (:promotion artifact)
+                           selected-candidate (:selected_candidate promotion)
+                           skipped? (boolean (:skipped promotion))
+                           promoted? (boolean (:promoted? promotion))]
+                       {:generated_at (or (:generated_at artifact)
+                                          (get-in artifact [:scheduled_run :generated_at]))
+                        :artifact_path (.getAbsolutePath file)
+                        :promoted promoted?
+                        :skipped skipped?
+                        :selection_mode (:selection_mode promotion)
+                        :promotion_reason (:reason promotion)
+                        :selected_candidate selected-candidate
+                        :selected_policy_id (:policy_id selected-candidate)
+                        :selected_version (:version selected-candidate)
+                        :selected_approval_tier (:approval_tier selected-candidate)
+                        :selected_promotion_mode (:promotion_mode selected-candidate)
+                        :candidate_ranking_size (count (or (:candidate_ranking artifact)
+                                                          (get promotion :candidate_ranking)
+                                                          []))}))
+                   selected-files)
+        summary {:total_runs (count runs)
+                 :promoted_runs (count (filter :promoted runs))
+                 :skipped_runs (count (filter :skipped runs))
+                 :selection_mode_counts (->> runs
+                                            (keep :selection_mode)
+                                            frequencies
+                                            (into (sorted-map)))
+                 :promotion_reason_counts (->> runs
+                                             (keep :promotion_reason)
+                                             frequencies
+                                             (into (sorted-map)))
+                 :selected_policy_counts (->> runs
+                                             (keep :selected_policy_id)
+                                             frequencies
+                                             (into (sorted-map)))
+                 :selected_approval_tier_counts (->> runs
+                                                    (keep :selected_approval_tier)
+                                                    frequencies
+                                                    (into (sorted-map)))
+                 :selected_promotion_mode_counts (->> runs
+                                                      (keep :selected_promotion_mode)
+                                                      frequencies
+                                                      (into (sorted-map)))
+                 :latest_run_at (some-> runs last :generated_at)}]
+    {:schema_version "1.0"
+     :artifacts_dir (.getAbsolutePath (io/file artifacts_dir))
+     :manifest manifest*
+     :summary summary
+     :runs runs}))
+
+(defn- prior-governance-runs
+  [{:keys [artifacts_dir limit]
+    :or {artifacts_dir ".tmp/policy-review"}}]
+  (:runs (governance-history-report {:artifacts_dir artifacts_dir
+                                     :limit limit})))
+
+(defn- selected-policy-match? [run policy-summary]
+  (and policy-summary
+       (= (:policy_id policy-summary) (:selected_policy_id run))
+       (= (:version policy-summary) (:selected_version run))))
+
+(defn- candidate-streak-length [runs candidate]
+  (inc
+   (count
+    (take-while #(selected-policy-match? % candidate)
+                (reverse runs)))))
+
+(defn- cooldown-active? [runs promotion-cooldown-runs]
+  (let [cooldown (max 0 (long (or promotion-cooldown-runs 0)))]
+    (when (pos? cooldown)
+      (some :promoted (take-last cooldown runs)))))
 
 (defn- parse-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str (or value "")))))
@@ -440,8 +974,17 @@
           "--surface" (recur (assoc m :surface v) rest)
           "--tenant-id" (recur (assoc m :tenant_id v) rest)
           "--since" (recur (assoc m :since v) rest)
+          "--artifacts-dir" (recur (assoc m :artifacts_dir v) rest)
+          "--retention-runs" (recur (assoc m :retention_runs (Long/parseLong v)) rest)
+          "--lookback-days" (recur (assoc m :lookback_days (Long/parseLong v)) rest)
+          "--limit" (recur (assoc m :limit (Long/parseLong v)) rest)
+          "--required-candidate-streak-runs" (recur (assoc m :required_candidate_streak_runs (Long/parseLong v)) rest)
+          "--promotion-cooldown-runs" (recur (assoc m :promotion_cooldown_runs (Long/parseLong v)) rest)
           "--out" (recur (assoc m :out_path v) rest)
           "--write-registry" (recur (assoc m :write_registry true) rest)
+          "--auto-promote" (recur (assoc m :auto_promote true) rest)
+          "--select-best-candidate" (recur (assoc m :select_best_candidate true) rest)
+          "--history-aware-selection" (recur (assoc m :history_aware_selection true) rest)
           "--dry-run" (recur (assoc m :dry_run true) rest)
           "--pretty" (recur (assoc m :pretty (parse-bool v)) rest)
           (recur m rest))))))
@@ -615,6 +1158,89 @@
     (print-or-write! out_path result)
     (System/exit 0)))
 
+(defn- run-policy-review-pipeline-command [{:keys [root_path usage_metrics_jdbc_url registry_path surface tenant_id since out_path write_registry]}]
+  (when-not (and root_path usage_metrics_jdbc_url registry_path)
+    (println "Usage: clojure -M:eval policy-review-pipeline --root <repo-root> --usage-metrics-jdbc-url <jdbc-url> --registry <registry.edn> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--write-registry] [--out <output.json>]")
+    (System/exit 1))
+  (let [metrics (sci/postgres-usage-metrics {:jdbc-url usage_metrics_jdbc_url
+                                             :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                             :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+        registry (rp/load-registry registry_path)
+        result (policy-review-pipeline {:root_path root_path
+                                        :usage_metrics metrics
+                                        :registry registry
+                                        :surface surface
+                                        :tenant_id tenant_id
+                                        :since since
+                                        :write_registry write_registry})]
+    (when write_registry
+      (rp/write-registry! registry_path (:registry result)))
+    (print-or-write! out_path result)
+    (System/exit 0)))
+
+(defn- run-scheduled-policy-review-command [{:keys [root_path usage_metrics_jdbc_url registry_path surface tenant_id since artifacts_dir retention_runs lookback_days out_path write_registry]}]
+  (when-not (and root_path usage_metrics_jdbc_url registry_path)
+    (println "Usage: clojure -M:eval scheduled-policy-review --root <repo-root> --usage-metrics-jdbc-url <jdbc-url> --registry <registry.edn> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--artifacts-dir <dir>] [--retention-runs <n>] [--lookback-days <n>] [--write-registry] [--out <output.json>]")
+    (System/exit 1))
+  (let [metrics (sci/postgres-usage-metrics {:jdbc-url usage_metrics_jdbc_url
+                                             :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                             :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+        registry (rp/load-registry registry_path)
+        result (scheduled-policy-review {:root_path root_path
+                                         :usage_metrics metrics
+                                         :registry registry
+                                         :surface surface
+                                         :tenant_id tenant_id
+                                         :since since
+                                         :artifacts_dir artifacts_dir
+                                         :retention_runs retention_runs
+                                         :lookback_days lookback_days
+                                         :write_registry write_registry})]
+    (when write_registry
+      (rp/write-registry! registry_path (get-in result [:bundle :registry])))
+    (print-or-write! out_path result)
+    (System/exit 0)))
+
+(defn- run-scheduled-governance-cycle-command [{:keys [root_path usage_metrics_jdbc_url registry_path surface tenant_id since artifacts_dir retention_runs lookback_days out_path write_registry auto_promote select_best_candidate history_aware_selection required_candidate_streak_runs promotion_cooldown_runs]}]
+  (when-not (and root_path usage_metrics_jdbc_url registry_path)
+    (println "Usage: clojure -M:eval scheduled-governance-cycle --root <repo-root> --usage-metrics-jdbc-url <jdbc-url> --registry <registry.edn> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--artifacts-dir <dir>] [--retention-runs <n>] [--lookback-days <n>] [--required-candidate-streak-runs <n>] [--promotion-cooldown-runs <n>] [--write-registry] [--auto-promote] [--select-best-candidate] [--history-aware-selection] [--out <output.json>]")
+    (System/exit 1))
+  (let [metrics (sci/postgres-usage-metrics {:jdbc-url usage_metrics_jdbc_url
+                                             :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
+                                             :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")})
+        registry (rp/load-registry registry_path)
+        result (scheduled-governance-cycle {:root_path root_path
+                                            :usage_metrics metrics
+                                            :registry registry
+                                            :surface surface
+                                            :tenant_id tenant_id
+                                            :since since
+                                            :artifacts_dir artifacts_dir
+                                            :retention_runs retention_runs
+                                            :lookback_days lookback_days
+                                            :write_registry write_registry
+                                            :auto_promote auto_promote
+                                            :select_best_candidate select_best_candidate
+                                            :history_aware_selection history_aware_selection
+                                            :required_candidate_streak_runs required_candidate_streak_runs
+                                            :promotion_cooldown_runs promotion_cooldown_runs})]
+    (when write_registry
+      (rp/write-registry! registry_path (:registry result)))
+    (print-or-write! out_path result)
+    (System/exit (if (or (:promoted? (:promotion result))
+                         (:skipped (:promotion result)))
+                   0
+                   1))))
+
+(defn- run-governance-history-report-command [{:keys [artifacts_dir limit out_path]}]
+  (when-not artifacts_dir
+    (println "Usage: clojure -M:eval governance-history-report --artifacts-dir <dir> [--limit <n>] [--out <output.json>]")
+    (System/exit 1))
+  (let [result (governance-history-report {:artifacts_dir artifacts_dir
+                                           :limit limit})]
+    (print-or-write! out_path result)
+    (System/exit 0)))
+
 (defn -main [& args]
   (let [[command & rest-args] args]
     (case command
@@ -626,4 +1252,8 @@
       "calibration-report" (run-calibration-report-command (parse-args rest-args))
       "weekly-review-report" (run-weekly-review-report-command (parse-args rest-args))
       "protected-replay-dataset" (run-protected-replay-dataset-command (parse-args rest-args))
+      "policy-review-pipeline" (run-policy-review-pipeline-command (parse-args rest-args))
+      "scheduled-policy-review" (run-scheduled-policy-review-command (parse-args rest-args))
+      "scheduled-governance-cycle" (run-scheduled-governance-cycle-command (parse-args rest-args))
+      "governance-history-report" (run-governance-history-report-command (parse-args rest-args))
       (run-replay-command (parse-args args)))))

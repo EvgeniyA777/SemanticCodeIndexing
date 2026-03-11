@@ -1,6 +1,8 @@
 (ns semantic-code-indexing.policy-governance-test
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [semantic-code-indexing.core :as sci]
             [semantic-code-indexing.runtime.evaluation :as evaluation]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]))
 
@@ -205,3 +207,617 @@
                          [:shadow_review :eligible_for_promotion])))
       (is (false? (get-in (rp/resolve-registry-entry reviewed-registry "heuristic_v1_shadow_bad" "2026-03-15")
                           [:shadow_review :eligible_for_promotion]))))))
+
+(deftest policy-review-pipeline-builds-weekly-review-dataset-and-shadow-review-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-review-pipeline" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+                             :request_id "policy-review-pipeline-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_pipeline" :version "2026-03-16")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        bundle (evaluation/policy-review-pipeline {:root_path tmp-root
+                                                   :usage_metrics metrics
+                                                   :registry registry})]
+    (testing "pipeline emits weekly review and protected replay dataset"
+      (is (= 1 (get-in bundle [:weekly_review_report :summary :total_queries])))
+      (is (= 1 (count (get-in bundle [:protected_replay_dataset :queries]))))
+      (is (true? (get-in bundle [:protected_replay_dataset :queries 0 :protected_case]))))
+    (testing "pipeline runs shadow review on the generated protected dataset"
+      (is (= 1 (get-in bundle [:shadow_review_report :summary :shadow_candidates])))
+      (is (= "heuristic_v1" (get-in bundle [:shadow_review_report :active_policy :policy_summary :policy_id])))
+      (is (= "heuristic_v1_shadow_pipeline"
+             (get-in bundle [:shadow_review_report :shadow_candidates 0 :policy_summary :policy_id]))))
+    (testing "registry is returned even without write-back"
+      (is (= 2 (count (:policies (:registry bundle)))))
+      (is (= "active"
+             (:state (rp/resolve-registry-entry (:registry bundle) "heuristic_v1" "2026-03-10")))))))
+
+(deftest policy-review-pipeline-can-write-shadow-review-back-to-registry-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-review-pipeline-write" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+                             :request_id "policy-review-pipeline-write-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_write" :version "2026-03-17")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        bundle (evaluation/policy-review-pipeline {:root_path tmp-root
+                                                   :usage_metrics metrics
+                                                   :registry registry
+                                                   :write_registry true})]
+    (testing "write-back persists shadow review metadata onto shadow entries"
+      (is (string? (get-in (rp/resolve-registry-entry (:registry bundle)
+                                                      "heuristic_v1_shadow_write"
+                                                      "2026-03-17")
+                           [:shadow_review :reviewed_at])))
+      (is (contains? (get-in (rp/resolve-registry-entry (:registry bundle)
+                                                        "heuristic_v1_shadow_write"
+                                                        "2026-03-17")
+                             [:shadow_review])
+                     :eligible_for_promotion)))))
+
+(deftest scheduled-policy-review-writes-artifacts-and-prunes-retention-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-scheduled-policy-review" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_scheduled" :version "2026-03-18")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        query-1 (assoc sample-query
+                       :trace {:trace_id "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+                               :request_id "scheduled-policy-review-001"})
+        _result-1 (sci/resolve-context index query-1)
+        _feedback-1 (sci/record-feedback! index {:trace_id (get-in query-1 [:trace :trace_id])
+                                                 :request_id (get-in query-1 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        first-run (evaluation/scheduled-policy-review {:root_path tmp-root
+                                                       :usage_metrics metrics
+                                                       :registry registry
+                                                       :artifacts_dir artifacts-dir
+                                                       :retention_runs 1
+                                                       :lookback_days 7})
+        _ (Thread/sleep 5)
+        query-2 (assoc sample-query
+                       :trace {:trace_id "ffffffff-ffff-4fff-8fff-ffffffffffff"
+                               :request_id "scheduled-policy-review-002"})
+        _result-2 (sci/resolve-context index query-2)
+        _feedback-2 (sci/record-feedback! index {:trace_id (get-in query-2 [:trace :trace_id])
+                                                 :request_id (get-in query-2 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        second-run (evaluation/scheduled-policy-review {:root_path tmp-root
+                                                        :usage_metrics metrics
+                                                        :registry registry
+                                                        :artifacts_dir artifacts-dir
+                                                        :retention_runs 1
+                                                        :lookback_days 7})
+        files (->> (.listFiles (io/file artifacts-dir))
+                   (filter #(.isFile %))
+                   (map #(.getName %))
+                   sort
+                   vec)]
+    (testing "scheduled run writes a manifest and a timestamped artifact"
+      (is (some #(= "policy-review-manifest.json" %) files))
+      (is (= 1 (count (filter #(and (str/starts-with? % "policy-review-")
+                                    (not= "policy-review-manifest.json" %))
+                              files)))))
+    (testing "second run uses previous manifest timestamp as implicit since"
+      (is (= (get-in first-run [:scheduled_run :generated_at])
+             (get-in second-run [:scheduled_run :since]))))
+    (testing "retention pruning deletes the older artifact"
+      (is (= 1 (count (get-in second-run [:scheduled_run :deleted_artifacts]))))
+      (is (str/ends-with? (get-in second-run [:scheduled_run :artifact_path]) ".json")))))
+
+(deftest scheduled-governance-cycle-can-auto-promote-single-eligible-shadow-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-scheduled-governance-cycle" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "12121212-1212-4212-8212-121212121212"
+                             :request_id "scheduled-governance-cycle-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_auto" :version "2026-03-19")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                      :usage_metrics metrics
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir
+                                                      :retention_runs 2
+                                                      :auto_promote true})]
+    (testing "single eligible candidate is auto-promoted"
+      (is (true? (get-in cycle [:promotion :promoted?])))
+      (is (= "active"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_auto"
+                                                "2026-03-19"))))
+      (is (= "retired"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1"
+                                                "2026-03-10")))))
+    (testing "governance cycle writes its own retained artifact stream"
+      (is (str/ends-with? (get-in cycle [:scheduled_run :artifact_path]) ".json"))
+      (is (.exists (io/file (get-in cycle [:scheduled_run :manifest_path]))))
+      (is (some #(= "governance-cycle-manifest.json" %)
+                (map #(.getName %)
+                     (seq (.listFiles (io/file artifacts-dir)))))))))
+
+(deftest scheduled-governance-cycle-can-select-best-candidate-among-multiple-eligible-shadows-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-scheduled-governance-best" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "34343434-3434-4434-8434-343434343434"
+                             :request_id "scheduled-governance-best-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-a (assoc active-policy :policy_id "heuristic_v1_shadow_a" :version "2026-03-20")
+        shadow-b (assoc active-policy :policy_id "heuristic_v1_shadow_b" :version "2026-03-21")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-a {:state "shadow"})
+                             (rp/registry-entry shadow-b {:state "shadow"})]}
+        cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                      :usage_metrics metrics
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir
+                                                      :retention_runs 2
+                                                      :auto_promote true
+                                                      :select_best_candidate true})]
+    (testing "ranking is emitted and deterministic across eligible shadows"
+      (is (= ["heuristic_v1_shadow_a" "heuristic_v1_shadow_b"]
+             (mapv #(get-in % [:policy_summary :policy_id]) (:candidate_ranking cycle)))))
+    (testing "best-ranked candidate is auto-promoted when selection is enabled"
+      (is (= "best_eligible_candidate" (get-in cycle [:promotion :selection_mode])))
+      (is (= "heuristic_v1_shadow_a"
+             (get-in cycle [:promotion :selected_candidate :policy_id])))
+      (is (= "active"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_a"
+                                                "2026-03-20"))))
+      (is (= "shadow"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_b"
+                                                "2026-03-21")))))))
+
+(deftest governance-history-report-summarizes-retained-governance-runs-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-history" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query-1 (assoc sample-query
+                       :trace {:trace_id "56565656-5656-4656-8656-565656565656"
+                               :request_id "governance-history-001"})
+        _result-1 (sci/resolve-context index query-1)
+        _feedback-1 (sci/record-feedback! index {:trace_id (get-in query-1 [:trace :trace_id])
+                                                 :request_id (get-in query-1 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        shadow-a (assoc active-policy :policy_id "heuristic_v1_shadow_hist_a" :version "2026-03-22")
+        shadow-b (assoc active-policy :policy_id "heuristic_v1_shadow_hist_b" :version "2026-03-23")
+        registry-multi {:schema_version "1.0"
+                        :policies [(rp/registry-entry active-policy {:state "active"})
+                                   (rp/registry-entry shadow-a {:state "shadow"})
+                                   (rp/registry-entry shadow-b {:state "shadow"})]}
+        _cycle-1 (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                         :usage_metrics metrics
+                                                         :registry registry-multi
+                                                         :artifacts_dir artifacts-dir
+                                                         :retention_runs 4
+                                                         :auto_promote true})
+        _ (Thread/sleep 5)
+        query-2 (assoc sample-query
+                       :trace {:trace_id "78787878-7878-4787-8787-787878787878"
+                               :request_id "governance-history-002"})
+        _result-2 (sci/resolve-context index query-2)
+        _feedback-2 (sci/record-feedback! index {:trace_id (get-in query-2 [:trace :trace_id])
+                                                 :request_id (get-in query-2 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        registry-single {:schema_version "1.0"
+                         :policies [(rp/registry-entry active-policy {:state "active"})
+                                    (rp/registry-entry shadow-a {:state "shadow"})]}
+        _cycle-2 (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                         :usage_metrics metrics
+                                                         :registry registry-single
+                                                         :artifacts_dir artifacts-dir
+                                                         :retention_runs 4
+                                                         :auto_promote true})
+        report (evaluation/governance-history-report {:artifacts_dir artifacts-dir})]
+    (testing "history report aggregates promoted and skipped runs"
+      (is (= 2 (get-in report [:summary :total_runs])))
+      (is (= 1 (get-in report [:summary :promoted_runs])))
+      (is (= 1 (get-in report [:summary :skipped_runs]))))
+    (testing "history report carries skipped reason and selected policy counts"
+      (is (= 1 (get-in report [:summary :promotion_reason_counts "multiple_eligible_candidates"])))
+      (is (= 1 (get-in report [:summary :selected_policy_counts "heuristic_v1_shadow_hist_a"]))))
+    (testing "history report preserves recent run entries"
+      (is (= 2 (count (:runs report))))
+      (is (some :artifact_path (:runs report)))
+      (is (string? (get-in report [:summary :latest_run_at]))))))
+
+(deftest scheduled-governance-cycle-can-require-candidate-streak-before-promotion-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-streak" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_streak" :version "2026-03-24")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        query-1 (assoc sample-query
+                       :trace {:trace_id "90909090-9090-4090-8090-909090909090"
+                               :request_id "governance-streak-001"})
+        _result-1 (sci/resolve-context index query-1)
+        _feedback-1 (sci/record-feedback! index {:trace_id (get-in query-1 [:trace :trace_id])
+                                                 :request_id (get-in query-1 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        first-cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                            :usage_metrics metrics
+                                                            :registry registry
+                                                            :artifacts_dir artifacts-dir
+                                                            :retention_runs 4
+                                                            :auto_promote true
+                                                            :required_candidate_streak_runs 2})
+        _ (Thread/sleep 5)
+        query-2 (assoc sample-query
+                       :trace {:trace_id "91919191-9191-4191-8191-919191919191"
+                               :request_id "governance-streak-002"})
+        _result-2 (sci/resolve-context index query-2)
+        _feedback-2 (sci/record-feedback! index {:trace_id (get-in query-2 [:trace :trace_id])
+                                                 :request_id (get-in query-2 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        second-cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                             :usage_metrics metrics
+                                                             :registry registry
+                                                             :artifacts_dir artifacts-dir
+                                                             :retention_runs 4
+                                                             :auto_promote true
+                                                             :required_candidate_streak_runs 2})]
+    (testing "first run is gated by insufficient streak"
+      (is (= "insufficient_candidate_streak" (get-in first-cycle [:promotion :reason])))
+      (is (= 1 (get-in first-cycle [:promotion :candidate_streak_runs]))))
+    (testing "second consecutive run promotes the same candidate"
+      (is (true? (get-in second-cycle [:promotion :promoted?])))
+      (is (= 2 (get-in second-cycle [:promotion :candidate_streak_runs]))))))
+
+(deftest scheduled-governance-cycle-can-apply-promotion-cooldown-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-cooldown" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        active-policy (rp/default-retrieval-policy)
+        shadow-policy (assoc active-policy :policy_id "heuristic_v1_shadow_cooldown" :version "2026-03-25")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-policy {:state "shadow"})]}
+        query-1 (assoc sample-query
+                       :trace {:trace_id "92929292-9292-4292-8292-929292929292"
+                               :request_id "governance-cooldown-001"})
+        _result-1 (sci/resolve-context index query-1)
+        _feedback-1 (sci/record-feedback! index {:trace_id (get-in query-1 [:trace :trace_id])
+                                                 :request_id (get-in query-1 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        first-cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                            :usage_metrics metrics
+                                                            :registry registry
+                                                            :artifacts_dir artifacts-dir
+                                                            :retention_runs 4
+                                                            :auto_promote true
+                                                            :promotion_cooldown_runs 1})
+        _ (Thread/sleep 5)
+        query-2 (assoc sample-query
+                       :trace {:trace_id "93939393-9393-4393-8393-939393939393"
+                               :request_id "governance-cooldown-002"})
+        _result-2 (sci/resolve-context index query-2)
+        _feedback-2 (sci/record-feedback! index {:trace_id (get-in query-2 [:trace :trace_id])
+                                                 :request_id (get-in query-2 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        second-cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                             :usage_metrics metrics
+                                                             :registry registry
+                                                             :artifacts_dir artifacts-dir
+                                                             :retention_runs 4
+                                                             :auto_promote true
+                                                             :promotion_cooldown_runs 1})]
+    (testing "first run promotes normally"
+      (is (true? (get-in first-cycle [:promotion :promoted?]))))
+    (testing "next run is held by promotion cooldown"
+      (is (= "promotion_cooldown_active" (get-in second-cycle [:promotion :reason])))
+      (is (true? (get-in second-cycle [:promotion :skipped]))))))
+
+(deftest scheduled-governance-cycle-can-use-history-aware-selection-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-history-aware" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        active-policy (rp/default-retrieval-policy)
+        shadow-a (assoc active-policy :policy_id "heuristic_v1_shadow_hist_select_a" :version "2026-03-26")
+        shadow-b (assoc active-policy :policy_id "heuristic_v1_shadow_hist_select_b" :version "2026-03-27")
+        query-1 (assoc sample-query
+                       :trace {:trace_id "94949494-9494-4494-8494-949494949494"
+                               :request_id "governance-history-aware-001"})
+        _result-1 (sci/resolve-context index query-1)
+        _feedback-1 (sci/record-feedback! index {:trace_id (get-in query-1 [:trace :trace_id])
+                                                 :request_id (get-in query-1 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        prior-registry {:schema_version "1.0"
+                        :policies [(rp/registry-entry active-policy {:state "active"})
+                                   (rp/registry-entry shadow-b {:state "shadow"})]}
+        _prior-cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                             :usage_metrics metrics
+                                                             :registry prior-registry
+                                                             :artifacts_dir artifacts-dir
+                                                             :retention_runs 6
+                                                             :auto_promote true})
+        _ (Thread/sleep 5)
+        query-2 (assoc sample-query
+                       :trace {:trace_id "95959595-9595-4595-8595-959595959595"
+                               :request_id "governance-history-aware-002"})
+        _result-2 (sci/resolve-context index query-2)
+        _feedback-2 (sci/record-feedback! index {:trace_id (get-in query-2 [:trace :trace_id])
+                                                 :request_id (get-in query-2 [:trace :request_id])
+                                                 :feedback_outcome "not_helpful"
+                                                 :followup_action "discarded"
+                                                 :confidence_level "medium"
+                                                 :retrieval_issue_codes ["missing_authority"]
+                                                 :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                                 :ground_truth_paths ["src/my/app/order.clj"]})
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry shadow-a {:state "shadow"})
+                             (rp/registry-entry shadow-b {:state "shadow"})]}
+        cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                      :usage_metrics metrics
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir
+                                                      :retention_runs 6
+                                                      :auto_promote true
+                                                      :select_best_candidate true
+                                                      :history_aware_selection true})]
+    (testing "history-aware selection reorders candidates using prior promotion history"
+      (is (= ["heuristic_v1_shadow_hist_select_b" "heuristic_v1_shadow_hist_select_a"]
+             (mapv #(get-in % [:policy_summary :policy_id]) (:candidate_ranking cycle))))
+      (is (= 1 (get-in cycle [:candidate_ranking 0 :history_stats :promoted_runs]))))
+    (testing "history-preferred candidate is promoted"
+      (is (= "heuristic_v1_shadow_hist_select_b"
+             (get-in cycle [:promotion :selected_candidate :policy_id])))
+      (is (= "active"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_hist_select_b"
+                                                "2026-03-27")))))))
+
+(deftest registry-defaults-governance-metadata-for-existing-entries-test
+  (let [registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry (rp/default-retrieval-policy) {:state "active"})]}
+        entry (rp/active-registry-entry registry)]
+    (is (= "auto_promotable" (:promotion_mode (rp/effective-governance entry))))
+    (is (= "standard" (:approval_tier (rp/effective-governance entry))))))
+
+(deftest shadow-review-emits-governance-tier-metadata-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-shadow-review-governance" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        active-policy (rp/default-retrieval-policy)
+        manual-shadow (assoc active-policy :policy_id "heuristic_v1_shadow_manual" :version "2026-03-28")
+        blocked-shadow (assoc active-policy :policy_id "heuristic_v1_shadow_blocked" :version "2026-03-29")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry manual-shadow {:state "shadow"
+                                                               :governance {:promotion_mode "manual_approval_required"
+                                                                            :approval_tier "restricted"}})
+                             (rp/registry-entry blocked-shadow {:state "shadow"
+                                                                :governance {:promotion_mode "blocked"
+                                                                             :approval_tier "critical"}})]}
+        report (evaluation/shadow-review-report {:root_path tmp-root
+                                                 :dataset (protected-sample-dataset)
+                                                 :registry registry})
+        manual-candidate (some #(when (= "heuristic_v1_shadow_manual" (get-in % [:policy_summary :policy_id])) %) (:shadow_candidates report))
+        blocked-candidate (some #(when (= "heuristic_v1_shadow_blocked" (get-in % [:policy_summary :policy_id])) %) (:shadow_candidates report))]
+    (testing "replay eligibility and auto-promotion eligibility are separated"
+      (is (= 2 (get-in report [:summary :ready_for_promotion])))
+      (is (= 0 (get-in report [:summary :ready_for_auto_promotion])))
+      (is (= 1 (get-in report [:summary :manual_review_required])))
+      (is (= 1 (get-in report [:summary :governance_blocked]))))
+    (testing "manual tier candidate is review-eligible but not auto-promotable"
+      (is (true? (:eligible_for_promotion manual-candidate)))
+      (is (false? (:eligible_for_auto_promotion manual-candidate)))
+      (is (true? (:manual_review_required manual-candidate)))
+      (is (= "restricted" (:approval_tier manual-candidate))))
+    (testing "blocked candidate is withheld by governance"
+      (is (true? (:eligible_for_promotion blocked-candidate)))
+      (is (false? (:eligible_for_auto_promotion blocked-candidate)))
+      (is (true? (:blocked_by_governance blocked-candidate)))
+      (is (= "critical" (:approval_tier blocked-candidate))))))
+
+(deftest scheduled-governance-cycle-skips-manual-approval-candidates-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-manual-tier" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "96969696-9696-4696-8696-969696969696"
+                             :request_id "governance-manual-tier-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        manual-shadow (assoc active-policy :policy_id "heuristic_v1_shadow_manual_cycle" :version "2026-03-30")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry manual-shadow {:state "shadow"
+                                                               :governance {:promotion_mode "manual_approval_required"
+                                                                            :approval_tier "restricted"}})]}
+        cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                      :usage_metrics metrics
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir
+                                                      :retention_runs 2
+                                                      :auto_promote true})]
+    (testing "manual-review candidates do not auto-promote"
+      (is (= "no_auto_promotable_candidates" (get-in cycle [:promotion :reason])))
+      (is (= "heuristic_v1_shadow_manual_cycle"
+             (get-in cycle [:promotion :manual_review_candidates 0 :policy_id])))
+      (is (= "shadow"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_manual_cycle"
+                                                "2026-03-30")))))))
+
+(deftest scheduled-governance-cycle-skips-governance-blocked-candidates-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-governance-blocked-tier" (make-array java.nio.file.attribute.FileAttribute 0)))
+        artifacts-dir (str (io/file tmp-root ".tmp" "policy-review"))
+        _ (create-sample-repo! tmp-root)
+        metrics (sci/in-memory-usage-metrics)
+        index (sci/create-index {:root_path tmp-root
+                                 :usage_metrics metrics})
+        query (assoc sample-query
+                     :trace {:trace_id "97979797-9797-4797-8797-979797979797"
+                             :request_id "governance-blocked-tier-001"})
+        _result (sci/resolve-context index query)
+        _feedback (sci/record-feedback! index {:trace_id (get-in query [:trace :trace_id])
+                                               :request_id (get-in query [:trace :request_id])
+                                               :feedback_outcome "not_helpful"
+                                               :followup_action "discarded"
+                                               :confidence_level "medium"
+                                               :retrieval_issue_codes ["missing_authority"]
+                                               :ground_truth_unit_ids ["src/my/app/order.clj::my.app.order/process-order"]
+                                               :ground_truth_paths ["src/my/app/order.clj"]})
+        active-policy (rp/default-retrieval-policy)
+        blocked-shadow (assoc active-policy :policy_id "heuristic_v1_shadow_blocked_cycle" :version "2026-03-31")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry active-policy {:state "active"})
+                             (rp/registry-entry blocked-shadow {:state "shadow"
+                                                                :governance {:promotion_mode "blocked"
+                                                                             :approval_tier "critical"}})]}
+        cycle (evaluation/scheduled-governance-cycle {:root_path tmp-root
+                                                      :usage_metrics metrics
+                                                      :registry registry
+                                                      :artifacts_dir artifacts-dir
+                                                      :retention_runs 2
+                                                      :auto_promote true})]
+    (testing "blocked candidates are excluded from auto-promotion"
+      (is (= "all_candidates_blocked_by_governance" (get-in cycle [:promotion :reason])))
+      (is (= "heuristic_v1_shadow_blocked_cycle"
+             (get-in cycle [:promotion :governance_blocked_candidates 0 :policy_id])))
+      (is (= "shadow"
+             (:state (rp/resolve-registry-entry (:registry cycle)
+                                                "heuristic_v1_shadow_blocked_cycle"
+                                                "2026-03-31")))))))

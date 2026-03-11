@@ -32,11 +32,21 @@
 (def ^:private lifecycle-states
   #{"draft" "shadow" "active" "retired"})
 
+(def ^:private promotion-modes
+  #{"auto_promotable" "manual_approval_required" "blocked"})
+
+(def ^:private approval-tiers
+  #{"standard" "restricted" "critical"})
+
 (def ^:private policy-tuning-keys
   #{:weights :caps :thresholds :confidence_scores :raw_fetch})
 
 (def ^:private registry-metadata-keys
-  [:notes :created_at :updated_at :activated_at :retired_at :shadow_review])
+  [:notes :created_at :updated_at :activated_at :retired_at :shadow_review :governance])
+
+(def ^:private default-governance
+  {:promotion_mode "auto_promotable"
+   :approval_tier "standard"})
 
 (def ^:private confidence-level-rank
   {"low" 0
@@ -82,6 +92,21 @@
               :policy normalized}
        true (merge (select-keys metadata registry-metadata-keys))))))
 
+(defn normalize-governance [governance]
+  (let [governance* (merge default-governance (or governance {}))
+        promotion-mode (str/lower-case (str (:promotion_mode governance*)))
+        approval-tier (str/lower-case (str (:approval_tier governance*)))]
+    (when-not (contains? promotion-modes promotion-mode)
+      (throw (ex-info (str "unsupported policy promotion mode " promotion-mode)
+                      {:type :invalid_request
+                       :message (str "unsupported policy promotion mode " promotion-mode)})))
+    (when-not (contains? approval-tiers approval-tier)
+      (throw (ex-info (str "unsupported policy approval tier " approval-tier)
+                      {:type :invalid_request
+                       :message (str "unsupported policy approval tier " approval-tier)})))
+    {:promotion_mode promotion-mode
+     :approval_tier approval-tier}))
+
 (defn normalize-policy [policy]
   (let [policy* (or policy {})
         policy-source (if (registry-entry? policy*)
@@ -108,7 +133,9 @@
                                               (merge {:state (:state entry)}
                                                      (select-keys entry registry-metadata-keys))))))]
     {:schema_version (or (:schema_version registry*) "1.0")
-     :policies policies}))
+     :policies (mapv (fn [entry]
+                       (update entry :governance normalize-governance))
+                     policies)}))
 
 (defn load-registry [path]
   (with-open [rdr (java.io.PushbackReader. (io/reader path))]
@@ -149,6 +176,24 @@
 (defn policy-from-entry [entry]
   (when entry
     (normalize-policy entry)))
+
+(defn effective-governance [entry]
+  (normalize-governance (:governance entry)))
+
+(defn promotion-mode [entry]
+  (:promotion_mode (effective-governance entry)))
+
+(defn approval-tier [entry]
+  (:approval_tier (effective-governance entry)))
+
+(defn auto-promotable? [entry]
+  (= "auto_promotable" (promotion-mode entry)))
+
+(defn manual-approval-required? [entry]
+  (= "manual_approval_required" (promotion-mode entry)))
+
+(defn blocked? [entry]
+  (= "blocked" (promotion-mode entry)))
 
 (defn- policy-selector-map? [policy]
   (and (map? policy)

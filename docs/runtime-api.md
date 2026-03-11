@@ -203,7 +203,9 @@ Both `:context_packet` and `:diagnostics_trace` now include:
 
 For Clojure retrieval, `impact_hints.related_tests` now also links nearby test files via namespace/import relationships, not only direct caller overlap. This keeps `related_tests` useful even when a test namespace exercises a sibling var instead of the exact selected var. The Clojure fallback parser is also top-level-aware, so nested `defn` forms inside wrappers such as `comment` are no longer indexed as real units. For multimethods, `defmethod` implementations now keep dispatch-aware unit identities internally, and retrieval can boost the correct implementation when the query text strongly hints at a dispatch case such as `pickup` or `delivery`, without changing the public query symbol shape. Custom macro calls can also contribute recursive graph-level inherited caller edges for the vars they structurally inject across syntax-quoted, list-built, and common composed expansion patterns such as `concat`, `apply list`, `into`, and conditional branches, while filtering out ordinary macro implementation helpers that are not part of the generated expansion path.
 
-For Elixir retrieval, the regex adapter now resolves normalized `import` and `use` targets, expands unqualified imported calls toward imported modules, links `defdelegate` units to their delegated target functions, and adds ExUnit-oriented file linkage so `related_tests` can point back to test files such as `test/**/*_test.exs` that exercise the selected source module.
+For Clojure retrieval, local `letfn` helpers that structurally emit generated forms can now contribute inherited caller edges when they are actually used inside the generated expansion path, while helper calls that run only as macro implementation side effects are filtered out.
+
+For Elixir retrieval, the regex adapter now resolves normalized `import` and `use` targets, expands unqualified imported calls toward imported modules, records per-function arity so same-name definitions keep distinct internal identities, narrows caller/callee links by observed call arity when enough evidence exists, links `defdelegate` units to their delegated target functions, and adds ExUnit-oriented file linkage so `related_tests` can point back to test files such as `test/**/*_test.exs` that exercise the selected source module.
 
 For Java retrieval, overload-sensitive unit identities are now complemented by arity-aware caller/callee linking, so calls such as `normalize(id, true)` prefer the `arity=2` method target instead of all same-name overloads. Static-imported methods are also matched back to their owning class more accurately via import-aware ownership filtering.
 
@@ -280,11 +282,15 @@ Registry shape (EDN):
  [{:policy_id "heuristic_v1"
    :version "2026-03-10"
    :state "active"
+   :governance {:promotion_mode "auto_promotable"
+                :approval_tier "standard"}
    :policy {:policy_id "heuristic_v1"
             :version "2026-03-10"}}
   {:policy_id "heuristic_v1_candidate"
    :version "2026-03-11"
    :state "shadow"
+   :governance {:promotion_mode "manual_approval_required"
+                :approval_tier "restricted"}
    :policy {:policy_id "heuristic_v1_candidate"
             :version "2026-03-11"
             :thresholds {:top_authority_min 140}}}]}
@@ -303,7 +309,7 @@ Governed replay outputs now also include `confidence_ceiling_distribution`, so p
 
 Promotion gates currently reject activation when any protected metric regresses versus the baseline policy.
 
-`shadow-review` treats the current `active` registry entry as the baseline, evaluates every `shadow` policy against it, reports `ready_for_promotion` vs `blocked`, and can persist per-policy `:shadow_review` metadata such as `:reviewed_at`, `:eligible_for_promotion`, `:failed_checks`, and protected-case summaries.
+`shadow-review` treats the current `active` registry entry as the baseline, evaluates every `shadow` policy against it, reports replay-gate readiness separately from governance-tier auto-promotion readiness, and can persist per-policy `:shadow_review` metadata such as `:reviewed_at`, `:eligible_for_promotion`, `:eligible_for_auto_promotion`, governance reasons, and protected-case summaries.
 
 ### `impact-analysis`
 
@@ -450,6 +456,7 @@ Optional filters:
 - `:operation`
 - `:tenant_id`
 - `:since`
+- `:root_path`
 
 ### Replay harvesting
 
@@ -460,7 +467,8 @@ Library API:
 ```clojure
 (sci/harvest-replay-dataset metrics)
 (sci/harvest-replay-dataset metrics {:surface "http"
-                                     :tenant_id "tenant-001"})
+                                     :tenant_id "tenant-001"
+                                     :root_path "/srv/repos/app"})
 ```
 
 CLI:
@@ -479,6 +487,7 @@ Current harvested dataset behavior:
 - the original structured query is preserved under each dataset entry
 - feedback `ground_truth_unit_ids` and `ground_truth_paths` are translated into the existing `expected` replay shape
 - difficult or failed retrievals are automatically marked as `protected_case` when feedback or retrieval telemetry indicates a hard case (`not_helpful`, `abandoned`, major issue codes, degraded result, low confidence, or fallback-heavy retrieval)
+- `:root_path` filtering is applied via the recorded `root_path_hash`, so one shared metrics sink can be partitioned back into per-repository replay corpora
 
 ### Calibration reports
 
@@ -489,7 +498,8 @@ Library API:
 ```clojure
 (sci/calibration-report metrics)
 (sci/calibration-report metrics {:surface "mcp"
-                                 :tenant_id "tenant-001"})
+                                 :tenant_id "tenant-001"
+                                 :root_path "/srv/repos/app"})
 ```
 
 CLI:
@@ -521,7 +531,8 @@ Library API:
 ```clojure
 (sci/weekly-review-report metrics)
 (sci/weekly-review-report metrics {:surface "grpc"
-                                   :tenant_id "tenant-001"})
+                                   :tenant_id "tenant-001"
+                                   :root_path "/srv/repos/app"})
 ```
 
 CLI:
@@ -578,6 +589,130 @@ Current conversion behavior:
 - `expected.required_paths` comes from review feedback ground truth plus query target paths
 - `expected.min_confidence_level` uses the strongest feedback confidence level when present, otherwise defaults to `"medium"`
 - `source_review` is retained on each query entry for auditability
+
+### Batch policy review pipeline
+
+You can also run the current Phase 5 operational loop as one batch artifact.
+
+Library API:
+
+```clojure
+(require '[semantic-code-indexing.runtime.evaluation :as eval]
+         '[semantic-code-indexing.runtime.retrieval-policy :as rp])
+
+(eval/policy-review-pipeline
+ {:root_path "."
+  :usage_metrics metrics
+  :registry (rp/load-registry "policy-registry.edn")
+  :surface "http"
+  :write_registry true})
+```
+
+CLI:
+
+```bash
+clojure -M:eval policy-review-pipeline \
+  --root . \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --registry policy-registry.edn \
+  --surface http \
+  --write-registry \
+  --out "${TMPDIR:-.tmp}/sci-policy-review-pipeline.json"
+```
+
+Current pipeline behavior:
+
+- builds `weekly_review_report` from usage metrics using optional `surface`, `tenant_id`, `since`, and `root_path` filters
+- converts protected weekly review entries into `protected_replay_dataset`
+- runs `shadow-review` against the current registry `active` policy when protected queries and `shadow` policies exist
+- returns `shadow_review_report.skipped` with a machine-readable reason when there are no protected queries, no active policy, or no shadow policies
+- optionally persists `:shadow_review` metadata back into the registry when `:write_registry true` or `--write-registry` is used
+
+### Scheduled policy review cycle
+
+You can also regularize the Phase 5 loop into a retained artifact stream.
+
+CLI:
+
+```bash
+clojure -M:eval scheduled-policy-review \
+  --root . \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --registry policy-registry.edn \
+  --artifacts-dir "${TMPDIR:-.tmp}/policy-review" \
+  --retention-runs 8 \
+  --lookback-days 7 \
+  --write-registry \
+  --out "${TMPDIR:-.tmp}/sci-scheduled-policy-review.json"
+```
+
+Current scheduling/retention behavior:
+
+- on the first run, if `--since` is omitted, the command uses `--lookback-days` to derive the review window
+- on later runs, if `--since` is omitted, the command reuses `last_run_at` from `policy-review-manifest.json`
+- each run writes a timestamped `policy-review-<instant>.json` bundle under `--artifacts-dir`
+- a rolling `policy-review-manifest.json` is updated with `last_run_at`, `latest_artifact_path`, retention settings, and scope
+- old timestamped bundles are pruned to `--retention-runs`
+- when `--write-registry` is set, the persisted registry is updated from the bundled `shadow-review` result during the same run
+
+### Scheduled governance cadence
+
+You can also close the loop one step further and emit retained promotion decisions.
+
+CLI:
+
+```bash
+clojure -M:eval scheduled-governance-cycle \
+  --root . \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --registry policy-registry.edn \
+  --artifacts-dir "${TMPDIR:-.tmp}/policy-review" \
+  --retention-runs 8 \
+  --lookback-days 7 \
+  --history-aware-selection \
+  --required-candidate-streak-runs 2 \
+  --promotion-cooldown-runs 1 \
+  --write-registry \
+  --auto-promote \
+  --select-best-candidate \
+  --out "${TMPDIR:-.tmp}/sci-scheduled-governance-cycle.json"
+```
+
+Current cadence behavior:
+
+- runs `scheduled-policy-review` first and reuses its protected replay dataset plus `shadow-review` result
+- extracts eligible shadow candidates from the bundled review output and emits deterministic `candidate_ranking`
+- if `--auto-promote` is not set, returns retained promotion candidates without activating them
+- if `--auto-promote` is set and exactly one eligible shadow candidate exists, runs `promote-policy` automatically against the bundled protected replay dataset
+- registry governance metadata can mark candidates as `auto_promotable`, `manual_approval_required`, or `blocked`; only `auto_promotable` candidates can be auto-promoted, and replay gate failures still block all of them
+- if replay-eligible candidates exist but all require manual approval, the run is skipped with `no_auto_promotable_candidates`
+- if replay-eligible candidates exist but all are governance-blocked, the run is skipped with `all_candidates_blocked_by_governance`
+- if multiple eligible candidates exist and `--select-best-candidate` is not set, promotion is skipped with machine-readable reason `multiple_eligible_candidates`
+- if multiple eligible candidates exist and `--select-best-candidate` is set, the cadence promotes the highest-ranked candidate using scorecard order plus deterministic policy-id/version tie-breaks
+- if `--history-aware-selection` is set, candidate ordering is reweighted by prior governance history before the current deterministic ranking, using prior promoted/selected counts as a stability signal
+- `--required-candidate-streak-runs` can require the same selected candidate to appear across consecutive governance runs before promotion is allowed; otherwise the run is skipped with `insufficient_candidate_streak`
+- `--promotion-cooldown-runs` can hold auto-promotion for N subsequent governance runs after a successful promotion; otherwise the run is skipped with `promotion_cooldown_active`
+- writes a retained `governance-cycle-<instant>.json` artifact plus `governance-cycle-manifest.json`
+
+### Governance history report
+
+You can also summarize retained governance artifacts over time.
+
+CLI:
+
+```bash
+clojure -M:eval governance-history-report \
+  --artifacts-dir "${TMPDIR:-.tmp}/policy-review" \
+  --limit 20 \
+  --out "${TMPDIR:-.tmp}/sci-governance-history.json"
+```
+
+Current report behavior:
+
+- reads retained `governance-cycle-*.json` artifacts from `--artifacts-dir`
+- uses `governance-cycle-manifest.json` as the current scope/retention pointer when present
+- aggregates `promoted_runs`, `skipped_runs`, `selection_mode_counts`, `promotion_reason_counts`, `selected_policy_counts`, and selected governance-tier summaries
+- returns recent `runs` entries with `generated_at`, `artifact_path`, `selection_mode`, `promotion_reason`, selected policy identity, and selected governance metadata when one exists
 
 ## Offline Replay Evaluation
 
