@@ -41,6 +41,7 @@
 (def ^:private py-class-re #"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)")
 (def ^:private py-def-re #"^\s*(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 (def ^:private py-call-re #"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
+(declare py-normalize-relative-module)
 
 (def ^:private ts-import-from-re #"^\s*(?:import|export)\s+.+?\s+from\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-import-bare-re #"^\s*import\s+['\"]([^'\"]+)['\"]")
@@ -156,18 +157,19 @@
             (inc idx)
             (recur (inc idx) next-state)))))))
 
-(defn- parse-python-import [line]
+(defn- parse-python-import [module line]
   (if-let [[_ from names] (re-find py-from-import-re line)]
-    (let [parts (->> (str/split names #",")
+    (let [resolved-from (py-normalize-relative-module module from)
+          parts (->> (str/split names #",")
                      (map str/trim)
                      (remove str/blank?))]
-      (vec (cons from
+      (vec (cons resolved-from
                  (map (fn [n]
                         (let [[_ name _alias] (or (re-find #"^([A-Za-z0-9_\*]+)(?:\s+as\s+([A-Za-z0-9_]+))?$" n)
                                                   [nil n nil])]
                           (if (= name "*")
-                            from
-                            (str from "." name))))
+                            resolved-from
+                            (str resolved-from "." name))))
                       parts))))
     (when-let [[_ imp] (re-find py-import-re line)]
       [imp])))
@@ -1774,6 +1776,23 @@
       (str/replace #"/" ".")
       (str/replace #"^\.+" "")))
 
+(defn- py-normalize-relative-module [module import-module]
+  (let [import* (str import-module)]
+    (if (str/starts-with? import* ".")
+      (let [dot-count (count (re-find #"^\.*" import*))
+            suffix (str/replace import* #"^\.*" "")
+            module-parts (->> (str/split (str module) #"\.")
+                              (remove str/blank?))
+            package-parts (vec (butlast module-parts))
+            up-levels (max 0 (dec dot-count))
+            kept-count (max 0 (- (count package-parts) up-levels))
+            base-parts (subvec package-parts 0 kept-count)
+            suffix-parts (->> (str/split suffix #"\.")
+                              (remove str/blank?))
+            resolved (concat base-parts suffix-parts)]
+        (str/join "." resolved))
+      import*)))
+
 (defn- py-test-path? [path]
   (let [p (str/lower-case (str path))]
     (or (str/includes? p "/test/")
@@ -1804,12 +1823,13 @@
        last
        :name))
 
-(defn- py-import-state [lines]
+(defn- py-import-state [module lines]
   (reduce
    (fn [{:keys [imports module-aliases symbol-aliases] :as acc} line]
      (cond
        (re-find py-from-import-re line)
        (let [[_ from names] (re-find py-from-import-re line)
+             from (py-normalize-relative-module module from)
              parts (->> (str/split names #",")
                         (map str/trim)
                         (remove str/blank?))
@@ -1914,7 +1934,7 @@
 (defn- parse-python [path lines]
   (let [line-count (count lines)
         module (py-module-name path)
-        {:keys [imports module-aliases symbol-aliases]} (py-import-state lines)
+        {:keys [imports module-aliases symbol-aliases]} (py-import-state module lines)
         imports (->> imports distinct vec)
         test-target-modules (py-test-target-modules module imports path)
         defs (loop [idx 0

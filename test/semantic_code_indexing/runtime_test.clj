@@ -71,6 +71,10 @@
                "from app.validators import validate_order\nimport app.validators as validators\n\nclass CollisionService:\n    def validate_order(self, order):\n        return {\"local\": bool(order)}\n\n    def process_method(self, order):\n        return self.validate_order(order)\n\n    def process_class_name(self, order):\n        return CollisionService.validate_order(self, order)\n\n    def process_module_alias(self, order):\n        return validators.validate_order(order)\n\n\ndef validate_order(order):\n    return {\"top_level\": bool(order)}\n\n\ndef process_top_level(order):\n    return validate_order(order)\n")
   (write-file! root "app/validators.py"
                "def validate_order(order):\n    return bool(order and order.get(\"id\"))\n")
+  (write-file! root "app/nested/relative_orders.py"
+               "from ..validators import validate_order\n\nclass NestedRelativeOrderService:\n    def process_nested_relative(self, order):\n        return validate_order(order)\n")
+  (write-file! root "app/nested/relative_collision_orders.py"
+               "from ..validators import validate_order\n\n\ndef validate_order(order):\n    return {\"local\": bool(order)}\n\n\ndef process_local_relative(order):\n    return validate_order(order)\n")
   (write-file! root "app/orders_test.py"
                "from app.orders import OrderService\n\n\ndef test_process_order():\n    service = OrderService()\n    assert service.process_order({\"id\": 1})\n")
   (write-file! root "src/example/normalize.ts"
@@ -627,6 +631,45 @@
         result (sci/resolve-context-detail index sample-query-python)
         related-tests (get-in result [:context_packet :impact_hints :related_tests])]
     (is (some #{"app/orders_test.py"} related-tests))))
+
+(deftest python-relative-import-normalization-links-parent-package-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-relative-imports" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        validator-units (sci/query-units storage tmp-root {:module "app.validators" :limit 20})
+        validate-order-id (some->> validator-units
+                                   (filter #(= "app.validators/validate_order" (:symbol %)))
+                                   first
+                                   :unit_id)
+        validate-callers (sci/query-callers storage tmp-root validate-order-id {:limit 20})]
+    (is validate-order-id)
+    (is (some #(= "app.nested.relative_orders.NestedRelativeOrderService/process_nested_relative" (:symbol %))
+              validate-callers))))
+
+(deftest python-local-function-still-beats-relative-imported-symbol-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-relative-collision" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        collision-units (sci/query-units storage tmp-root {:module "app.nested.relative_collision_orders" :limit 20})
+        validator-units (sci/query-units storage tmp-root {:module "app.validators" :limit 20})
+        local-validate-id (some->> collision-units
+                                   (filter #(= "app.nested.relative_collision_orders/validate_order" (:symbol %)))
+                                   first
+                                   :unit_id)
+        imported-validate-id (some->> validator-units
+                                      (filter #(= "app.validators/validate_order" (:symbol %)))
+                                      first
+                                      :unit_id)
+        local-callers (sci/query-callers storage tmp-root local-validate-id {:limit 20})
+        imported-callers (sci/query-callers storage tmp-root imported-validate-id {:limit 20})]
+    (is local-validate-id)
+    (is imported-validate-id)
+    (is (some #(= "app.nested.relative_collision_orders/process_local_relative" (:symbol %))
+              local-callers))
+    (is (not-any? #(= "app.nested.relative_collision_orders/process_local_relative" (:symbol %))
+                  imported-callers))))
 
 (deftest typescript-call-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-typescript-call-test" (make-array java.nio.file.attribute.FileAttribute 0)))
