@@ -152,9 +152,9 @@
         degraded-count (count (filter :degraded results*))
         fallback-count (count (filter :fallback results*))
         confidence-ceiling-distribution (->> results*
-                                           (keep :confidence_ceiling)
-                                           frequencies
-                                           (into (sorted-map)))
+                                             (keep :confidence_ceiling)
+                                             frequencies
+                                             (into (sorted-map)))
         calibration-by-level
         (->> results*
              (group-by :confidence_level)
@@ -349,29 +349,29 @@
   ([artifacts-dir]
    (artifact-files artifacts-dir "policy-review-" "policy-review-manifest.json"))
   ([artifacts-dir prefix manifest-name]
-  (let [dir (io/file artifacts-dir)]
-    (if (.isDirectory dir)
-      (->> (.listFiles dir)
-           (filter #(.isFile %))
-           (filter #(str/starts-with? (.getName %) prefix))
-           (remove #(= manifest-name (.getName %)))
-           (filter #(str/ends-with? (.getName %) ".json"))
-           (sort-by #(.getName %) compare)
-           vec)
-      []))))
+   (let [dir (io/file artifacts-dir)]
+     (if (.isDirectory dir)
+       (->> (.listFiles dir)
+            (filter #(.isFile %))
+            (filter #(str/starts-with? (.getName %) prefix))
+            (remove #(= manifest-name (.getName %)))
+            (filter #(str/ends-with? (.getName %) ".json"))
+            (sort-by #(.getName %) compare)
+            vec)
+       []))))
 
 (defn- prune-artifacts!
   ([artifacts-dir retention_runs]
    (prune-artifacts! artifacts-dir retention_runs "policy-review-" "policy-review-manifest.json"))
   ([artifacts-dir retention_runs prefix manifest-name]
-  (let [files (artifact-files artifacts-dir prefix manifest-name)
-        keep-count (max 0 (long (or retention_runs 0)))
-        delete-count (max 0 (- (count files) keep-count))
-        doomed (take delete-count files)]
-    (doseq [file doomed]
-      (.delete file))
-    {:deleted_artifacts (mapv #(.getAbsolutePath %) doomed)
-     :retained_artifact_count (min keep-count (max 0 (- (count files) delete-count)))})))
+   (let [files (artifact-files artifacts-dir prefix manifest-name)
+         keep-count (max 0 (long (or retention_runs 0)))
+         delete-count (max 0 (- (count files) keep-count))
+         doomed (take delete-count files)]
+     (doseq [file doomed]
+       (.delete file))
+     {:deleted_artifacts (mapv #(.getAbsolutePath %) doomed)
+      :retained_artifact_count (min keep-count (max 0 (- (count files) delete-count)))})))
 
 (defn- manifest-path
   ([artifacts-dir]
@@ -619,14 +619,42 @@
                                         :since since*
                                         :write_registry write_registry})
         generated-at (or (:generated_at bundle) (now-iso))
+        artifact-token (instant->artifact-token (iso->instant generated-at))
+        artifacts-root (io/file artifacts-dir*)
+        _ (.mkdirs artifacts-root)
+        weekly-review-path (.getAbsolutePath
+                            (io/file artifacts-root
+                                     (str "weekly-review-" artifact-token ".json")))
+        protected-dataset-path (.getAbsolutePath
+                                (io/file artifacts-root
+                                         (str "protected-replay-dataset-" artifact-token ".json")))
+        shadow-review-path (.getAbsolutePath
+                            (io/file artifacts-root
+                                     (str "shadow-review-" artifact-token ".json")))
         artifact-path (.getAbsolutePath
-                       (io/file artifacts-dir*
-                                (str "policy-review-"
-                                     (instant->artifact-token (iso->instant generated-at))
-                                     ".json")))
-        _ (.mkdirs (io/file artifacts-dir*))
+                       (io/file artifacts-root
+                                (str "policy-review-" artifact-token ".json")))
+        _ (write-json-file! weekly-review-path (:weekly_review_report bundle))
+        _ (write-json-file! protected-dataset-path (:protected_replay_dataset bundle))
+        _ (write-json-file! shadow-review-path (:shadow_review_report bundle))
         _ (write-json-file! artifact-path bundle)
-        retention (prune-artifacts! artifacts-dir* retention_runs)
+        retention (merge
+                   (prune-artifacts! artifacts-dir* retention_runs)
+                   {:weekly_review_deleted_artifacts (:deleted_artifacts
+                                                      (prune-artifacts! artifacts-dir*
+                                                                        retention_runs
+                                                                        "weekly-review-"
+                                                                        "policy-review-manifest.json"))
+                    :protected_replay_dataset_deleted_artifacts (:deleted_artifacts
+                                                                 (prune-artifacts! artifacts-dir*
+                                                                                   retention_runs
+                                                                                   "protected-replay-dataset-"
+                                                                                   "policy-review-manifest.json"))
+                    :shadow_review_deleted_artifacts (:deleted_artifacts
+                                                      (prune-artifacts! artifacts-dir*
+                                                                        retention_runs
+                                                                        "shadow-review-"
+                                                                        "policy-review-manifest.json"))})
         manifest-data {:schema_version "1.0"
                        :updated_at generated-at
                        :last_run_at generated-at
@@ -634,8 +662,11 @@
                        :surface surface
                        :tenant_id tenant_id
                        :since since*
-                       :artifacts_dir (.getAbsolutePath (io/file artifacts-dir*))
+                       :artifacts_dir (.getAbsolutePath artifacts-root)
                        :latest_artifact_path artifact-path
+                       :latest_weekly_review_path weekly-review-path
+                       :latest_protected_replay_dataset_path protected-dataset-path
+                       :latest_shadow_review_path shadow-review-path
                        :retention_runs retention_runs
                        :lookback_days lookback_days
                        :write_registry write_registry}
@@ -647,8 +678,14 @@
                      :lookback_days lookback_days
                      :retention_runs retention_runs
                      :artifact_path artifact-path
+                     :weekly_review_path weekly-review-path
+                     :protected_replay_dataset_path protected-dataset-path
+                     :shadow_review_path shadow-review-path
                      :manifest_path manifest-path*
                      :deleted_artifacts (:deleted_artifacts retention)
+                     :weekly_review_deleted_artifacts (:weekly_review_deleted_artifacts retention)
+                     :protected_replay_dataset_deleted_artifacts (:protected_replay_dataset_deleted_artifacts retention)
+                     :shadow_review_deleted_artifacts (:shadow_review_deleted_artifacts retention)
                      :write_registry write_registry}
      :bundle bundle
      :manifest manifest-data}))
@@ -717,8 +754,8 @@
                                     rp/policy-from-entry)
                             (rp/default-retrieval-policy))
         candidate-policy (or (some-> (rp/resolve-registry-entry registry
-                                                                 (:policy_id candidate)
-                                                                 (:version candidate))
+                                                                (:policy_id candidate)
+                                                                (:version candidate))
                                      rp/policy-from-entry)
                              (throw (ex-info "eligible candidate policy not found in registry"
                                              {:type :invalid_request
@@ -837,9 +874,9 @@
                                                                   :candidate candidate})]
                           (assoc result
                                  :selected_candidate (assoc candidate
-                                                           :governance (:governance candidate-entry)
-                                                           :approval_tier (:approval_tier candidate-entry)
-                                                           :promotion_mode (:promotion_mode candidate-entry))
+                                                            :governance (:governance candidate-entry)
+                                                            :approval_tier (:approval_tier candidate-entry)
+                                                            :promotion_mode (:promotion_mode candidate-entry))
                                  :candidate_ranking candidate-ranking
                                  :selection_mode selection-mode
                                  :required_candidate_streak_runs required_candidate_streak_runs
@@ -927,28 +964,28 @@
                         :selected_approval_tier (:approval_tier selected-candidate)
                         :selected_promotion_mode (:promotion_mode selected-candidate)
                         :candidate_ranking_size (count (or (:candidate_ranking artifact)
-                                                          (get promotion :candidate_ranking)
-                                                          []))}))
+                                                           (get promotion :candidate_ranking)
+                                                           []))}))
                    selected-files)
         summary {:total_runs (count runs)
                  :promoted_runs (count (filter :promoted runs))
                  :skipped_runs (count (filter :skipped runs))
                  :selection_mode_counts (->> runs
-                                            (keep :selection_mode)
-                                            frequencies
-                                            (into (sorted-map)))
+                                             (keep :selection_mode)
+                                             frequencies
+                                             (into (sorted-map)))
                  :promotion_reason_counts (->> runs
-                                             (keep :promotion_reason)
-                                             frequencies
-                                             (into (sorted-map)))
+                                               (keep :promotion_reason)
+                                               frequencies
+                                               (into (sorted-map)))
                  :selected_policy_counts (->> runs
-                                             (keep :selected_policy_id)
-                                             frequencies
-                                             (into (sorted-map)))
+                                              (keep :selected_policy_id)
+                                              frequencies
+                                              (into (sorted-map)))
                  :selected_approval_tier_counts (->> runs
-                                                    (keep :selected_approval_tier)
-                                                    frequencies
-                                                    (into (sorted-map)))
+                                                     (keep :selected_approval_tier)
+                                                     frequencies
+                                                     (into (sorted-map)))
                  :selected_promotion_mode_counts (->> runs
                                                       (keep :selected_promotion_mode)
                                                       frequencies

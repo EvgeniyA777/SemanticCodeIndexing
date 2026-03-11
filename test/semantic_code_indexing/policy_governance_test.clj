@@ -71,8 +71,8 @@
                                                  :dataset (sample-dataset)
                                                  :baseline_policy (rp/default-retrieval-policy)
                                                  :candidate_policy (assoc strict-candidate
-                                                                           :policy_id "heuristic_v1_shadow"
-                                                                           :version "2026-03-11")})
+                                                                          :policy_id "heuristic_v1_shadow"
+                                                                          :version "2026-03-11")})
         decision (evaluation/promotion-gate-decision comparison)]
     (testing "protected metrics expose regression when candidate is stricter and worse"
       (is (true? (get-in comparison [:protected_metrics :top_authority_hit_rate :regressed?])))
@@ -433,17 +433,36 @@
                    (map #(.getName %))
                    sort
                    vec)]
-    (testing "scheduled run writes a manifest and a timestamped artifact"
+    (testing "scheduled run writes bundle, manifest, and retained standalone artifacts"
       (is (some #(= "policy-review-manifest.json" %) files))
       (is (= 1 (count (filter #(and (str/starts-with? % "policy-review-")
                                     (not= "policy-review-manifest.json" %))
-                              files)))))
+                              files))))
+      (is (= 1 (count (filter #(str/starts-with? % "weekly-review-") files))))
+      (is (= 1 (count (filter #(str/starts-with? % "protected-replay-dataset-") files))))
+      (is (= 1 (count (filter #(str/starts-with? % "shadow-review-") files)))))
+    (testing "scheduled run returns direct pointers to retained component artifacts"
+      (is (str/ends-with? (get-in second-run [:scheduled_run :artifact_path]) ".json"))
+      (is (str/ends-with? (get-in second-run [:scheduled_run :weekly_review_path]) ".json"))
+      (is (str/ends-with? (get-in second-run [:scheduled_run :protected_replay_dataset_path]) ".json"))
+      (is (str/ends-with? (get-in second-run [:scheduled_run :shadow_review_path]) ".json"))
+      (is (.exists (io/file (get-in second-run [:scheduled_run :weekly_review_path]))))
+      (is (.exists (io/file (get-in second-run [:scheduled_run :protected_replay_dataset_path]))))
+      (is (.exists (io/file (get-in second-run [:scheduled_run :shadow_review_path]))))
+      (is (= (get-in second-run [:scheduled_run :weekly_review_path])
+             (get-in second-run [:manifest :latest_weekly_review_path])))
+      (is (= (get-in second-run [:scheduled_run :protected_replay_dataset_path])
+             (get-in second-run [:manifest :latest_protected_replay_dataset_path])))
+      (is (= (get-in second-run [:scheduled_run :shadow_review_path])
+             (get-in second-run [:manifest :latest_shadow_review_path]))))
     (testing "second run uses previous manifest timestamp as implicit since"
       (is (= (get-in first-run [:scheduled_run :generated_at])
              (get-in second-run [:scheduled_run :since]))))
-    (testing "retention pruning deletes the older artifact"
+    (testing "retention pruning deletes the older artifact generation across every retained stream"
       (is (= 1 (count (get-in second-run [:scheduled_run :deleted_artifacts]))))
-      (is (str/ends-with? (get-in second-run [:scheduled_run :artifact_path]) ".json")))))
+      (is (= 1 (count (get-in second-run [:scheduled_run :weekly_review_deleted_artifacts]))))
+      (is (= 1 (count (get-in second-run [:scheduled_run :protected_replay_dataset_deleted_artifacts]))))
+      (is (= 1 (count (get-in second-run [:scheduled_run :shadow_review_deleted_artifacts])))))))
 
 (deftest scheduled-governance-cycle-can-auto-promote-single-eligible-shadow-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-scheduled-governance-cycle" (make-array java.nio.file.attribute.FileAttribute 0)))

@@ -750,9 +750,10 @@ Current scheduling/retention behavior:
 
 - on the first run, if `--since` is omitted, the command uses `--lookback-days` to derive the review window
 - on later runs, if `--since` is omitted, the command reuses `last_run_at` from `policy-review-manifest.json`
+- each run writes standalone retained `weekly-review-<instant>.json`, `protected-replay-dataset-<instant>.json`, and `shadow-review-<instant>.json` artifacts in addition to the bundle
 - each run writes a timestamped `policy-review-<instant>.json` bundle under `--artifacts-dir`
-- a rolling `policy-review-manifest.json` is updated with `last_run_at`, `latest_artifact_path`, retention settings, and scope
-- old timestamped bundles are pruned to `--retention-runs`
+- a rolling `policy-review-manifest.json` is updated with `last_run_at`, `latest_artifact_path`, direct pointers to the latest standalone component artifacts, retention settings, and scope
+- old timestamped bundles and their matching standalone component artifacts are pruned to `--retention-runs`
 - when `--write-registry` is set, the persisted registry is updated from the bundled `shadow-review` result during the same run
 
 ### Scheduled governance cadence
