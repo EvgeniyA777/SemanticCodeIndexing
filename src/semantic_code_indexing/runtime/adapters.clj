@@ -436,6 +436,9 @@
 (def ^:private clj-generated-apply-ops
   #{"apply" "clojure.core/apply"})
 
+(def ^:private clj-generated-threading-ops
+  #{"->" "->>" "some->" "some->>"})
+
 (def ^:private clj-generated-conditional-ops
   #{"if" "if-not" "cond" "case" "when" "when-not"})
 
@@ -531,6 +534,30 @@
                                        vec)])))))
        (into {})))
 
+(defn- direct-generated-call-token [step]
+  (cond
+    (symbol? step) (str step)
+    (seq? step) (some-> step first str)
+    :else nil))
+
+(defn- threading-generated-tokens [args walk helper-generated-calls*]
+  (let [steps (rest args)]
+    (->> steps
+         (mapcat (fn [step]
+                   (let [direct-token (direct-generated-call-token step)
+                         helper-tokens (when (and direct-token
+                                                  (contains? helper-generated-calls* direct-token))
+                                         (get helper-generated-calls* direct-token))
+                         nested-tokens (walk step helper-generated-calls* false)]
+                     (concat
+                      (when (and direct-token
+                                 (not (contains? clj-call-stop direct-token)))
+                        [direct-token])
+                      helper-tokens
+                      nested-tokens))))
+         distinct
+         vec)))
+
 (defn- generated-builder-call-tokens*
   [form helper-generated-calls generated-context?]
   (letfn [(walk [node helper-generated-calls* generated-context?]
@@ -560,6 +587,8 @@
                     helper-tokens (when (and generated-context?
                                              (contains? helper-generated-calls** op))
                                     (get helper-generated-calls** op))
+                    threading-tokens (when (contains? clj-generated-threading-ops op)
+                                       (threading-generated-tokens args walk helper-generated-calls**))
                     branch-tokens (when (contains? clj-generated-conditional-ops op)
                                     (conditional-branch-generated-tokens op args walk helper-generated-calls**))
                     child-generated-context? (or generated-context?
@@ -572,6 +601,7 @@
                 (concat
                  (when builder-token [builder-token])
                  helper-tokens
+                 threading-tokens
                  branch-tokens
                  (mapcat #(walk % helper-generated-calls** child-generated-context?) children)))
 
