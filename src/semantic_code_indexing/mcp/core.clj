@@ -84,6 +84,20 @@
    :required ["intent"]
    :additionalProperties false})
 
+(def ^:private mcp-query-default-constraints
+  {:token_budget 1600
+   :max_raw_code_level "enclosing_unit"
+   :freshness "current_snapshot"})
+
+(def ^:private mcp-query-default-hints
+  {:prefer_definitions_over_callers true
+   :prefer_breadth_over_depth true})
+
+(def ^:private mcp-query-default-options
+  {:include_tests false
+   :include_impact_hints true
+   :allow_raw_code_escalation false})
+
 (defn now-ms []
   (System/currentTimeMillis))
 
@@ -421,6 +435,74 @@
          :recommended_flow canonical-mcp-flow
          :usage_hint mcp-first-usage-hint))
 
+(defn- canonical-query-shape? [query]
+  (and (map? query)
+       (string? (:schema_version query))
+       (map? (:intent query))
+       (map? (:targets query))
+       (map? (:constraints query))
+       (map? (:hints query))
+       (map? (:options query))
+       (map? (:trace query))))
+
+(defn- fill-trace-defaults [state trace]
+  (let [trace* (or trace {})
+        actor-id (or (:actor_id trace*)
+                     (:agent_id trace*)
+                     (some-> @state :client-info :name)
+                     "mcp_client")]
+    (cond-> trace*
+      (not (:trace_id trace*)) (assoc :trace_id (str (UUID/randomUUID)))
+      (not (:request_id trace*)) (assoc :request_id (str "mcp-shorthand-" (UUID/randomUUID)))
+      (not (:actor_id trace*)) (assoc :actor_id actor-id))))
+
+(defn- shorthand-intent->map [intent]
+  (cond
+    (string? intent)
+    {:purpose "code_understanding"
+     :details intent}
+
+    (map? intent)
+    (cond-> {:purpose (or (:purpose intent) "code_understanding")}
+      (:details intent) (assoc :details (:details intent)))
+
+    :else nil))
+
+(defn- normalized-query-summary [query]
+  {:purpose (get-in query [:intent :purpose])
+   :details (get-in query [:intent :details])
+   :target_keys (->> (keys (:targets query))
+                     (map name)
+                     sort
+                     vec)
+   :token_budget (get-in query [:constraints :token_budget])
+   :include_tests (boolean (get-in query [:options :include_tests]))})
+
+(defn- normalize-mcp-query [state query]
+  (cond
+    (canonical-query-shape? query)
+    {:query query
+     :query_normalized false
+     :query_ingress_mode "canonical"
+     :normalized_query_summary (normalized-query-summary query)}
+
+    (map? query)
+    (when-let [intent-map (shorthand-intent->map (:intent query))]
+      (let [normalized {:api_version (or (:api_version query) "1.0")
+                        :schema_version (or (:schema_version query) "1.0")
+                        :intent intent-map
+                        :targets (or (:targets query) {:paths ["."]})
+                        :constraints (merge mcp-query-default-constraints (:constraints query))
+                        :hints (merge mcp-query-default-hints (:hints query))
+                        :options (merge mcp-query-default-options (:options query))
+                        :trace (fill-trace-defaults state (:trace query))}]
+        {:query normalized
+         :query_normalized true
+         :query_ingress_mode "mcp_shorthand"
+         :normalized_query_summary (normalized-query-summary normalized)}))
+
+    :else nil))
+
 (defn tool-repo-map [state args]
   (when-not (map? args)
     (invalid-request "repo_map arguments must be an object"))
@@ -451,36 +533,49 @@
         retrieval-policy (ensure-map-or-nil (:retrieval_policy args) "retrieval_policy")]
     (when-not query
       (invalid-request "query is required"))
-    (activation/ensure-request-languages-active!
-     {:active_languages (get-in entry [:index :active_languages])
-      :supported_languages (get-in entry [:index :supported_languages])}
-     {:query query})
-    (let [result (-> (sci/resolve-context (:index entry)
-                                          query
-                                          {:suppress_usage_metrics true
-                                           :retrieval_policy retrieval-policy
-                                           :policy_registry (:policy_registry @state)})
-                     (assoc :index_id (:index_id entry)
-                            :project_context (project-context-for-entry entry))
-                     (add-next-step-guidance "expand_context"))
-          result-meta (meta result)]
-      (with-usage-event
-        result
-        (merge
-         (usage-fields-for-query query)
-         {:root_path_hash (usage/hash-root-path (:root_path entry))
-          :selected_units_count (count (:focus result))
-          :selected_files_count (count (distinct (map :path (:focus result))))
-          :confidence_level (:confidence_level result)
-          :result_status (:result_status result)
-          :payload {:index_id (:index_id entry)
-                    :selection_id (:selection_id result)
-                    :snapshot_id (:snapshot_id result)
-                    :estimated_tokens (get-in result [:budget_summary :estimated_tokens])
-                    :requested_tokens (get-in result [:budget_summary :requested_tokens])
-                    :policy_id (get-in result-meta [:retrieval_policy :policy_id])
-                    :policy_version (get-in result-meta [:retrieval_policy :version])
-                    :recommended_action (get-in result [:next_step :recommended_action])}})))))
+    (let [{:keys [query query_normalized query_ingress_mode normalized_query_summary]
+           :or {query_normalized false
+                query_ingress_mode "canonical"}}
+          (or (normalize-mcp-query state query)
+              {:query query
+               :query_normalized false
+               :query_ingress_mode "canonical"})]
+      (activation/ensure-request-languages-active!
+       {:active_languages (get-in entry [:index :active_languages])
+        :supported_languages (get-in entry [:index :supported_languages])}
+       {:query query})
+      (let [result (-> (cond-> (sci/resolve-context (:index entry)
+                                                    query
+                                                    {:suppress_usage_metrics true
+                                                     :retrieval_policy retrieval-policy
+                                                     :policy_registry (:policy_registry @state)})
+                             true (assoc :index_id (:index_id entry)
+                                         :project_context (project-context-for-entry entry)
+                                         :query_normalized query_normalized
+                                         :query_ingress_mode query_ingress_mode)
+                             normalized_query_summary (assoc :normalized_query_summary normalized_query_summary))
+                       (add-next-step-guidance "expand_context"))
+            result-meta (meta result)]
+        (with-usage-event
+          result
+          (merge
+           (usage-fields-for-query query)
+           {:root_path_hash (usage/hash-root-path (:root_path entry))
+            :selected_units_count (count (:focus result))
+            :selected_files_count (count (distinct (map :path (:focus result))))
+            :confidence_level (:confidence_level result)
+            :result_status (:result_status result)
+            :payload {:index_id (:index_id entry)
+                      :selection_id (:selection_id result)
+                      :snapshot_id (:snapshot_id result)
+                      :estimated_tokens (get-in result [:budget_summary :estimated_tokens])
+                      :requested_tokens (get-in result [:budget_summary :requested_tokens])
+                      :policy_id (get-in result-meta [:retrieval_policy :policy_id])
+                      :policy_version (get-in result-meta [:retrieval_policy :version])
+                      :query_ingress_mode query_ingress_mode
+                      :query_normalized query_normalized
+                      :normalized_query_summary normalized_query_summary
+                      :recommended_action (get-in result [:next_step :recommended_action])}}))))))
 
 (defn tool-expand-context [state args]
   (when-not (map? args)

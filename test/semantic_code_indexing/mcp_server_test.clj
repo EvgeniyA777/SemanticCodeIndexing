@@ -45,6 +45,9 @@
            :request_id "mcp-server-test-001"
            :actor_id "test_runner"}})
 
+(def sample-shorthand-query
+  {:intent "Find the main orchestration flow and key entrypoints."})
+
 (defn- headers-complete? [^bytes bytes]
   (let [n (alength bytes)]
     (and (>= n 4)
@@ -351,6 +354,19 @@
                    (get-in resolve-data [:next_step :available_actions])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (:focus resolve-data)))))
+
+        (testing "resolve_context normalizes narrow MCP shorthand"
+          (let [resolve-response (call-tool! handle 66 "resolve_context" {:index_id index-id
+                                                                          :query sample-shorthand-query})
+                resolve-data (get-in resolve-response [:result :structuredContent])]
+            (is (= index-id (:index_id resolve-data)))
+            (is (true? (:query_normalized resolve-data)))
+            (is (= "mcp_shorthand" (:query_ingress_mode resolve-data)))
+            (is (= "code_understanding"
+                   (get-in resolve-data [:normalized_query_summary :purpose])))
+            (is (= ["paths"]
+                   (get-in resolve-data [:normalized_query_summary :target_keys])))
+            (is (string? (:selection_id resolve-data)))))
 
         (testing "expand_context and fetch_context_detail return staged artifacts"
           (let [resolve-response (call-tool! handle 61 "resolve_context" {:index_id index-id

@@ -16,6 +16,9 @@
   (write-file! root "src/my/app/order.clj"
                "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  order)\n"))
 
+(def ^:private sample-shorthand-query
+  {:intent "Find the main orchestration flow and key entrypoints."})
+
 (defn- request!
   ([method url]
    (request! method url nil nil))
@@ -125,6 +128,32 @@
             (is (string? (get-in create-response [:body :result :structuredContent :snapshot_id])))
             (is (= "repo_map"
                    (get-in create-response [:body :result :structuredContent :recommended_next_step])))))
+        (testing "resolve_context shorthand works over streamable HTTP"
+          (let [create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 31
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path tmp-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 32
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :query sample-shorthand-query}}}
+                                           {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status resolve-response)))
+            (is (true? (get-in resolve-response [:body :result :structuredContent :query_normalized])))
+            (is (= "mcp_shorthand"
+                   (get-in resolve-response [:body :result :structuredContent :query_ingress_mode])))
+            (is (= ["paths"]
+                   (get-in resolve-response [:body :result :structuredContent :normalized_query_summary :target_keys])))))
         (testing "missing session is rejected for non-initialize calls"
           (let [missing-session (request! "POST"
                                           (str base-url "/mcp")
