@@ -64,7 +64,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Phase 5 now also has a top-level retained orchestration command, `scheduled-phase5-cycle`, which snapshots the current governance run, queue state, and aggregate status into one first-class artifact stream plus `phase5-run-index.json`.
 - Canonical in-repo roadmap status checklist now lives in `docs/roadmap-status.md`, with a dated rationale and status snapshot stored under `notes/`.
 - Product roadmap progress is now effectively through the main Phase 5 slices: governed quality loop, language-priority semantic-core deepening, capabilities/calibration, index lifecycle, unified error taxonomy, SLO-facing metrics, tenant/trace consistency, governance-tier enforcement, and retained self-improvement orchestration are in place; the next major tranche is post-roadmap deeper compiler-grade semantic follow-up.
-- Active execution backlog is now tracked in `docs/post-roadmap-semantic-deepening-plan.md`; Stage 1 (Clojure lexical/destructuring deepening) is delivered and Stage 2 is the active slice.
+- Active execution backlog is now tracked in `docs/post-roadmap-semantic-deepening-plan.md`; Stages 1-2 (Clojure lexical/destructuring plus dispatch/protocol deepening) are delivered and Stage 3 is the active slice.
 
 ## Hard Invariants
 
@@ -85,6 +85,7 @@ Use this as a fast session bootstrap before deep-diving into ADRs and code.
 - Persistence graph queries are retrieval-oriented and not yet a full semantic graph query language.
 - Phase 3 roadmap closure is now complete across Clojure, Elixir, Java, Python, and TypeScript; remaining semantic work is post-roadmap deepening rather than an open roadmap tail.
 - Clojure fallback/tree-sitter call extraction now suppresses false same-name global edges when calls are actually owned by local params, destructured bindings, `when-let` locals, comprehension bindings, `as->` locals, or `letfn` helper names.
+- Clojure multimethod/protocol handling now also emits literal dispatch-aware call tokens for `defmulti`/`defmethod` targeting and first-class `defprotocol` method units, while keeping generic multimethod calls from over-linking every implementation.
 - Runtime hardening is now effectively complete for the main roadmap scope; any remaining ops work is incremental polish rather than a missing Phase 4 primitive.
 - Real self-improvement loop is now operationally complete for the current roadmap scope: replay harvesting, difficult-case capture, calibration reports, weekly review artifacts, protected replay dataset conversion, retained review/governance runs, queue/status reporting, and top-level retained Phase 5 orchestration all exist.
 - Compact-first staged retrieval is now fully aligned as the canonical public flow: `resolve_context` is compact-first, `expand_context` / `fetch_context_detail` are the explicit later stages, selection artifacts are snapshot-bound, and the implementation/docs/examples line is captured by `ADR-024` plus the completed `docs/compact-first-staged-retrieval-plan.md`.

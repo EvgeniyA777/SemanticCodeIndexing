@@ -6,7 +6,7 @@
             [clojure.string :as str]))
 
 (def ^:private clj-def-re
-  #"^\s*\((defn-|defn|defmacro|defmulti|defmethod|def|deftest)\s+([^\s\[\]\)]+)")
+  #"^\s*\((defn-|defn|defmacro|defmulti|defmethod|defprotocol|def|deftest)\s+([^\s\[\]\)]+)")
 
 (def ^:private clj-call-re
   #"\(([a-zA-Z][a-zA-Z0-9\-\.!/<>\?]*)")
@@ -431,6 +431,96 @@
                  (into acc (walk next-item locals*))))))))
 
 (declare clj-read-form)
+(declare clj-dispatch-fragment)
+(declare clj-qualified-symbol)
+
+(defn- clj-dispatch-call-token [symbol dispatch-value]
+  (str symbol "$dispatch:" dispatch-value))
+
+(defn- clj-literal-dispatch-fragment [node]
+  (when (or (keyword? node)
+            (string? node)
+            (number? node)
+            (char? node))
+    (clj-dispatch-fragment node)))
+
+(defn- clj-dispatch-call-tokens [form-text ns-name alias-map dispatch-symbols]
+  (let [form (clj-read-form form-text)]
+    (letfn [(walk [node]
+              (cond
+                (seq? node)
+                (let [items (seq node)
+                      op-node (first items)
+                      op-str (some-> op-node str)
+                      rewritten-op (some-> op-str (rewrite-clj-call-token alias-map))
+                      op-qualified (when rewritten-op
+                                     (if (str/includes? rewritten-op "/")
+                                       rewritten-op
+                                       (clj-qualified-symbol ns-name rewritten-op)))
+                      dispatch-arg (first (rest items))
+                      direct-token (when-let [dispatch-value (clj-literal-dispatch-fragment dispatch-arg)]
+                                     (when (contains? dispatch-symbols op-qualified)
+                                       (clj-dispatch-call-token op-qualified dispatch-value)))]
+                  (concat
+                   (when direct-token [direct-token])
+                   (mapcat walk items)))
+
+                (vector? node)
+                (mapcat walk node)
+
+                (map? node)
+                (mapcat walk (concat (keys node) (vals node)))
+
+                (set? node)
+                (mapcat walk node)
+
+                :else
+                []))]
+      (->> (walk form)
+           distinct
+           vec))))
+
+(defn- clj-protocol-method-specs [form-text]
+  (let [form (clj-read-form form-text)]
+    (when (and (seq? form)
+               (= "defprotocol" (some-> form first str)))
+      (let [body (drop 2 form)
+            body (cond-> body
+                   (string? (first body)) rest
+                   (map? (first body)) rest)]
+        (->> body
+             (keep (fn [entry]
+                     (when (seq? entry)
+                       (let [method-name (some-> entry first str)
+                             arglists (->> (rest entry)
+                                           (filter vector?)
+                                           vec)]
+                         (when (and (seq method-name) (seq arglists))
+                           {:method-name method-name
+                            :arity (count (first arglists))
+                            :signature (trim-signature (pr-str (take 2 entry)))})))))
+             vec)))))
+
+(defn- clj-protocol-method-units
+  [{:keys [path ns-name start-line end-line imports parser-mode]} form-text]
+  (->> (clj-protocol-method-specs form-text)
+       (mapv (fn [{:keys [method-name arity signature]}]
+               (let [symbol (clj-qualified-symbol ns-name method-name)]
+                 {:unit_id (str path "::" symbol "$protocol$arity" arity)
+                  :kind "method"
+                  :symbol symbol
+                  :path path
+                  :module ns-name
+                  :form_operator "defprotocol"
+                  :start_line start-line
+                  :end_line end-line
+                  :signature signature
+                  :summary (str "method " symbol " protocol")
+                  :docstring_excerpt nil
+                  :imports imports
+                  :method_arity arity
+                  :calls []
+                  :parser_mode parser-mode})))))
 
 (defn- extract-clj-calls
   ([body]
@@ -964,11 +1054,19 @@
              :imports imports
              :calls calls
              :parser_mode parser-mode}
+      dispatch-value
+      (assoc :call_tokens [(clj-dispatch-call-token symbol dispatch-value)])
       (seq generated-calls)
       (assoc :generated_calls generated-calls)
       dispatch-value
       (assoc :dispatch_value dispatch-value
              :multimethod_symbol symbol))))
+
+(defn- clj-units-from-form
+  [ctx form-text]
+  (if (= "defprotocol" (:operator ctx))
+    (clj-protocol-method-units ctx form-text)
+    [(clj-unit-from-form ctx form-text)]))
 
 (defn- usage-in-line-range? [usage start-line end-line]
   (let [row (long (or (:row usage) (:name-row usage) 0))]
@@ -993,16 +1091,24 @@
                      (mapcat #(map second (re-seq clj-require-re %)))
                      distinct
                      vec)
+        dispatch-symbols (->> lines
+                              (map-indexed vector)
+                              (keep (fn [[idx line]]
+                                      (when (zero? (nth line-start-depths idx 1))
+                                        (when-let [[_ kw raw-sym] (re-find clj-def-re line)]
+                                          (when (= kw "defmulti")
+                                            (clj-qualified-symbol ns-name raw-sym))))))
+                              set)
         test-target-modules (clj-test-target-modules ns-name imports path)
         defs (->> (map-indexed vector lines)
                   (keep (fn [[idx line]]
                           (when (zero? (nth line-start-depths idx 1))
                             (when-let [[_ kw raw-sym] (re-find clj-def-re line)]
                               {:start-line (inc idx)
-                               :kind (clj-kind kw path)
-                               :operator kw
-                               :raw-symbol raw-sym
-                               :signature (trim-signature line)})))))
+                                            :kind (clj-kind kw path)
+                                            :operator kw
+                                            :raw-symbol raw-sym
+                                            :signature (trim-signature line)})))))
         starts (mapv :start-line defs)
         ends (if (seq starts)
                (mapv #(clj-form-end-line lines %) starts)
@@ -1019,21 +1125,22 @@
                                      :form-text form-text}))))
         helper-generated-calls (top-level-helper-generated-calls form-records ns-name alias-map)
         units (->> form-records
-                   (map (fn [{:keys [def end-line body form-text]}]
-                          (clj-unit-from-form {:path path
-                                               :ns-name ns-name
-                                               :raw-symbol (:raw-symbol def)
-                                               :operator (:operator def)
-                                               :kind (:kind def)
-                                               :start-line (:start-line def)
-                                               :end-line end-line
-                                               :signature (:signature def)
-                                               :imports imports
-                                               :calls (extract-clj-calls body alias-map)
-                                               :parser-mode "fallback"
-                                               :alias-map alias-map
-                                               :helper-generated-calls helper-generated-calls}
-                                              form-text)))
+                   (mapcat (fn [{:keys [def end-line body form-text]}]
+                             (clj-units-from-form {:path path
+                                                   :ns-name ns-name
+                                                   :raw-symbol (:raw-symbol def)
+                                                   :operator (:operator def)
+                                                   :kind (:kind def)
+                                                   :start-line (:start-line def)
+                                                   :end-line end-line
+                                                   :signature (:signature def)
+                                                   :imports imports
+                                                   :calls (vec (distinct (concat (extract-clj-calls body alias-map)
+                                                                                 (clj-dispatch-call-tokens form-text ns-name alias-map dispatch-symbols))))
+                                                   :parser-mode "fallback"
+                                                   :alias-map alias-map
+                                                   :helper-generated-calls helper-generated-calls}
+                                                  form-text)))
                    vec)]
     {:language "clojure"
      :module ns-name
@@ -1111,21 +1218,24 @@
                                                                  (clj-require-alias-map lines))
         primary-units
         (->> primary-records
-             (map (fn [{:keys [ns-name raw-symbol kind start end form-text signature operator]}]
-                      (clj-unit-from-form {:path path
-                                           :ns-name ns-name
-                                           :raw-symbol raw-symbol
-                                           :operator operator
-                                           :kind kind
-                                           :start-line start
-                                           :end-line end
-                                           :signature signature
-                                           :imports imports
-                                           :calls (clj-kondo-unit-calls var-usages start end)
-                                           :parser-mode "full"
-                                           :alias-map (clj-require-alias-map lines)
-                                           :helper-generated-calls helper-generated-calls}
-                                          form-text)))
+             (mapcat (fn [{:keys [ns-name raw-symbol kind start end form-text signature operator]}]
+                       (clj-units-from-form {:path path
+                                             :ns-name ns-name
+                                             :raw-symbol raw-symbol
+                                             :operator operator
+                                             :kind kind
+                                             :start-line start
+                                             :end-line end
+                                             :signature signature
+                                             :imports imports
+                                             :calls (vec (distinct (concat (clj-kondo-unit-calls var-usages start end)
+                                                                           (clj-dispatch-call-tokens form-text ns-name (clj-require-alias-map lines) (set (map #(when (= "defmulti" (:operator %))
+                                                                                                                                                            (clj-qualified-symbol ns-name (:raw-symbol %)))
+                                                                                                                                                         primary-records))))))
+                                             :parser-mode "full"
+                                             :alias-map (clj-require-alias-map lines)
+                                             :helper-generated-calls helper-generated-calls}
+                                            form-text)))
              vec)
         existing-unit-ids (set (map :unit_id primary-units))
         supplemental-units (->> (:units fallback)
@@ -1219,7 +1329,7 @@
                                   (let [syms (sym-names-in-range ts-lines (:start-row r) (:end-row r))
                                         op (first syms)
                                         raw-name (second syms)]
-                                    (when (and op raw-name (contains? #{"defn" "defn-" "defmacro" "defmulti" "defmethod" "def" "deftest"} op))
+                                    (when (and op raw-name (contains? #{"defn" "defn-" "defmacro" "defmulti" "defmethod" "defprotocol" "def" "deftest"} op))
                                       {:start-line (inc (:start-row r))
                                        :end-line (inc (:end-row r))
                                        :operator op
@@ -1239,21 +1349,27 @@
                                            :calls calls
                                            :form-text (str/join "\n" (subvec src-lines (dec start-line) end-line))})))
                 helper-generated-calls (top-level-helper-generated-calls form-records ns-name alias-map)
+                dispatch-symbols (->> form-records
+                                      (keep (fn [{:keys [operator raw-symbol]}]
+                                              (when (= "defmulti" operator)
+                                                (clj-qualified-symbol ns-name raw-symbol))))
+                                      set)
                 units (->> form-records
-                           (map (fn [{:keys [start-line end-line operator raw-symbol calls form-text]}]
-                                  (clj-unit-from-form {:path path
-                                                       :ns-name ns-name
-                                                       :raw-symbol raw-symbol
-                                                       :operator operator
-                                                       :start-line start-line
-                                                       :end-line end-line
-                                                       :signature (safe-line src-lines start-line)
-                                                       :imports imports
-                                                       :calls calls
-                                                       :parser-mode "full"
-                                                       :alias-map alias-map
-                                                       :helper-generated-calls helper-generated-calls}
-                                                      form-text)))
+                           (mapcat (fn [{:keys [start-line end-line operator raw-symbol calls form-text]}]
+                                     (clj-units-from-form {:path path
+                                                           :ns-name ns-name
+                                                           :raw-symbol raw-symbol
+                                                           :operator operator
+                                                           :start-line start-line
+                                                           :end-line end-line
+                                                           :signature (safe-line src-lines start-line)
+                                                           :imports imports
+                                                           :calls (vec (distinct (concat calls
+                                                                                         (clj-dispatch-call-tokens form-text ns-name alias-map dispatch-symbols))))
+                                                           :parser-mode "full"
+                                                           :alias-map alias-map
+                                                           :helper-generated-calls helper-generated-calls}
+                                                          form-text)))
                            vec)]
             (if (seq units)
               {:ok? true

@@ -32,7 +32,9 @@
   (write-file! root "src/my/app/workflow.clj"
                "(ns my.app.workflow\n  (:require [my.app.macros :refer [with-validated-order with-prepared-order with-listed-prepared with-composed-validation with-threaded-validation with-threaded-ambiguous-validation with-top-level-helper-validation with-branching-validation with-ambiguous-branch-validation with-letfn-validation with-side-effect-helper]]))\n\n(defn prepare-order [order]\n  (with-validated-order order\n    {:prepared true}))\n\n(defn prepare-prevalidated-order [order]\n  (with-prepared-order order\n    {:prepared true :mode :nested}))\n\n(defn prepare-listed-order [order]\n  (with-listed-prepared order\n    {:prepared true :mode :list-generated}))\n\n(defn prepare-composed-order [order]\n  (with-composed-validation order\n    {:prepared true :mode :concat-generated}))\n\n(defn prepare-threaded-order [order]\n  (with-threaded-validation order\n    {:prepared true :mode :thread-generated}))\n\n(defn prepare-threaded-ambiguous-order [order]\n  (with-threaded-ambiguous-validation order :primary\n    {:prepared true :mode :thread-ambiguous}))\n\n(defn prepare-top-level-helper-order [order]\n  (with-top-level-helper-validation order\n    {:prepared true :mode :top-level-helper-generated}))\n\n(defn prepare-branching-order [order]\n  (with-branching-validation order :apply\n    {:prepared true :mode :branch-generated}))\n\n(defn prepare-ambiguous-order [order]\n  (with-ambiguous-branch-validation order :primary\n    {:prepared true :mode :branch-ambiguous}))\n\n(defn prepare-letfn-order [order]\n  (with-letfn-validation order\n    {:prepared true :mode :letfn-generated}))\n\n(defn prepare-side-effect-order [order]\n  (with-side-effect-helper order\n    {:prepared true :mode :helper-side-effect}))\n")
   (write-file! root "src/my/app/shipping.clj"
-               "(ns my.app.shipping)\n\n(defmulti route-order (fn [mode payload] mode))\n\n(defn pickup-stop [payload]\n  (:pickup payload))\n\n(defn delivery-stop [payload]\n  (:delivery payload))\n\n(defmethod route-order :pickup [_ payload]\n  (pickup-stop payload))\n\n(defmethod route-order :delivery [_ payload]\n  (delivery-stop payload))\n\n(defn plan-route [mode payload]\n  (route-order mode payload))\n")
+               "(ns my.app.shipping)\n\n(defmulti route-order (fn [mode payload] mode))\n\n(defn pickup-stop [payload]\n  (:pickup payload))\n\n(defn delivery-stop [payload]\n  (:delivery payload))\n\n(defmethod route-order :pickup [_ payload]\n  (pickup-stop payload))\n\n(defmethod route-order :delivery [_ payload]\n  (delivery-stop payload))\n\n(defn plan-route [mode payload]\n  (route-order mode payload))\n\n(defn plan-pickup [payload]\n  (route-order :pickup payload))\n\n(defn plan-delivery [payload]\n  (route-order :delivery payload))\n")
+  (write-file! root "src/my/app/protocols.clj"
+               "(ns my.app.protocols)\n\n(defprotocol OrderFormatter\n  (format-order [this payload])\n  (format-summary [this]))\n\n(defn render-order [formatter payload]\n  (format-order formatter payload))\n")
   (write-file! root "src/com/acme/CheckoutService.java"
                "package com.acme;\n\nimport java.util.Objects;\nimport static com.acme.IdNormalizer.normalizeImported;\n\npublic class CheckoutService {\n  public CheckoutService() {\n    this(\"default\");\n  }\n\n  public CheckoutService(String id) {\n    normalize(id, true);\n  }\n\n  public String processOrder(String id) {\n    return normalize(id, true);\n  }\n\n  public String processImported(String id) {\n    return normalizeImported(id);\n  }\n\n  public String processImportedStrict(String id) {\n    return normalizeImported(id, true);\n  }\n\n  private String normalize(String id) {\n    return normalize(id, false);\n  }\n\n  private String normalize(String id, boolean strict) {\n    String base = Objects.requireNonNull(id).trim();\n    return strict ? base : base.toLowerCase();\n  }\n}\n")
   (write-file! root "src/com/acme/CheckoutFactory.java"
@@ -1270,6 +1272,47 @@
     (is (= (:unit_id pickup-method)
            (get-in result [:context_packet :relevant_units 0 :unit_id])))
     (is (= "high" (get-in result [:context_packet :confidence :level])))))
+
+(deftest clojure-literal-defmulti-dispatch-links-callers-to-specific-defmethod-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-literal-defmulti-dispatch" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        shipping-units (sci/query-units storage tmp-root {:module "my.app.shipping" :limit 20})
+        pickup-method-id (some->> shipping-units
+                                  (filter #(and (= "my.app.shipping/route-order" (:symbol %))
+                                                (= ":pickup" (:dispatch_value %))))
+                                  first
+                                  :unit_id)
+        delivery-method-id (some->> shipping-units
+                                    (filter #(and (= "my.app.shipping/route-order" (:symbol %))
+                                                  (= ":delivery" (:dispatch_value %))))
+                                    first
+                                    :unit_id)
+        pickup-callers (sci/query-callers storage tmp-root pickup-method-id {:limit 20})
+        delivery-callers (sci/query-callers storage tmp-root delivery-method-id {:limit 20})]
+    (is pickup-method-id)
+    (is delivery-method-id)
+    (is (some #(= "my.app.shipping/plan-pickup" (:symbol %)) pickup-callers))
+    (is (not-any? #(= "my.app.shipping/plan-delivery" (:symbol %)) pickup-callers))
+    (is (some #(= "my.app.shipping/plan-delivery" (:symbol %)) delivery-callers))
+    (is (not-any? #(= "my.app.shipping/plan-pickup" (:symbol %)) delivery-callers))))
+
+(deftest clojure-defprotocol-method-units-and-caller-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-defprotocol-units" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        protocol-units (sci/query-units storage tmp-root {:module "my.app.protocols" :limit 20})
+        format-order-id (some->> protocol-units
+                                 (filter #(= "my.app.protocols/format-order" (:symbol %)))
+                                 first
+                                 :unit_id)
+        callers (sci/query-callers storage tmp-root format-order-id {:limit 20})]
+    (is (some #(= "my.app.protocols/format-order" (:symbol %)) protocol-units))
+    (is (some #(= "my.app.protocols/format-summary" (:symbol %)) protocol-units))
+    (is format-order-id)
+    (is (some #(= "my.app.protocols/render-order" (:symbol %)) callers))))
 
 (deftest tree-sitter-parser-path-test
   (let [clj-grammar (System/getenv "SCI_TREE_SITTER_CLOJURE_GRAMMAR_PATH")

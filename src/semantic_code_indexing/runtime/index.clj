@@ -149,7 +149,9 @@
   (reduce
    (fn [acc u]
      (if-let [sym (:symbol u)]
-       (let [symbol-tokens (symbol-call-tokens sym)
+       (let [symbol-tokens (if (:dispatch_value u)
+                             #{}
+                             (symbol-call-tokens sym))
              alias-tokens (->> (:call_tokens u)
                                (mapcat (fn [token]
                                          (if-let [l (lower token)]

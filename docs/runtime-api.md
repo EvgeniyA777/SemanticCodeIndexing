@@ -1104,6 +1104,7 @@ Transport mapping for authz denials:
 ## Current MVP Notes
 
 - Clojure parser pipeline is `clj-kondo` first, with regex fallback.
+- Clojure semantic-core now carries dispatch-specific multimethod call tokens and first-class `defprotocol` method units, so literal dispatch calls and protocol-owned call sites can resolve without collapsing into generic symbol matches.
 - Java, Elixir, and Python parsers are lightweight regex-based in MVP; TypeScript is regex-first with an optional tree-sitter path.
 - `tree-sitter` extraction is implemented for Clojure, Java, and TypeScript when corresponding grammar paths are configured.
 - If tree-sitter is requested but unavailable/misconfigured, runtime falls back with diagnostics (`tree_sitter_*` codes).

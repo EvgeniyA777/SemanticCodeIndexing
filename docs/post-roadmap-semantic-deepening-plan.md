@@ -9,7 +9,7 @@ Push the language adapters beyond the delivered roadmap scope toward more compil
 ## Stage Checklist
 
 - `[x]` Stage 1 Clojure lexical + destructuring deepening
-- `[ ]` Stage 2 Clojure multimethod / protocol / dispatch deepening
+- `[x]` Stage 2 Clojure multimethod / protocol / dispatch deepening
 - `[ ]` Stage 3 Java inheritance / lambda / method-reference deepening
 - `[ ]` Stage 4 Python decorator / class-scope deepening
 - `[ ]` Stage 5 Elixir pipelines / `with` / nested-module deepening
@@ -31,7 +31,7 @@ No batching of multiple stages into one commit.
 
 ## Current Active Stage
 
-`Stage 2` is now the active slice.
+`Stage 3` is now the active slice.
 
 ## Stage Notes
 
@@ -45,8 +45,19 @@ Delivered scope:
 
 ### Stage 2
 
+Delivered scope:
+
+- Literal dispatch-value `defmulti` calls now emit dispatch-aware call tokens so callers can link to the matching `defmethod` instead of the generic multimethod symbol alone.
+- `defmethod` units now keep dispatch-specific identity without also polluting the generic symbol index, which prevents plain multimethod calls from over-linking every implementation.
+- `defprotocol` forms now emit protocol method units directly so protocol-owned call sites can resolve against a first-class method surface even when only the protocol declaration is present.
+- Regression coverage now proves both dispatch-specific multimethod targeting and protocol method caller resolution in the Clojure adapter.
+
+### Stage 3
+
 Planned scope:
 
-- stronger `defmulti` / `defmethod` targeting
-- protocol / `extend-type` / `reify` / `deftype` ownership where statically provable
-- conservative suppression for unresolved dynamic dispatch
+- `super.` vs local method precedence
+- inherited owner matching
+- lambda-body caller ownership
+- method-reference linkage
+- conservative fallback when owner class is uncertain
