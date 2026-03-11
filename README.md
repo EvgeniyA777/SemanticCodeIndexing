@@ -38,6 +38,7 @@ Current scope is contract architecture plus a working MVP runtime implementation
 - `docs/roadmap-status.md` - canonical in-repo roadmap status checklist
 - `contracts/schemas/` - JSON Schema contracts (external source of truth)
 - `contracts/examples/` - canonical examples for contract families
+- `docs/semantic-stabilization-plan.md` - next internal semantic architecture tranche
 - `fixtures/retrieval/` - retrieval fixture corpus (behavior bands)
 - `src/semantic_code_indexing/contracts/` - Clojure `malli` mirror and validator CLI
 - `src/semantic_code_indexing/mcp/` - stdio MCP server over the core library API
@@ -97,6 +98,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Roadmap status checklist: [docs/roadmap-status.md](docs/roadmap-status.md)
 - Compact-first staged retrieval execution plan: [docs/compact-first-staged-retrieval-plan.md](docs/compact-first-staged-retrieval-plan.md)
 - Post-roadmap semantic deepening plan (delivered tranche): [docs/post-roadmap-semantic-deepening-plan.md](docs/post-roadmap-semantic-deepening-plan.md)
+- Semantic stabilization plan (active tranche): [docs/semantic-stabilization-plan.md](docs/semantic-stabilization-plan.md)
 
 ## Agent Limit Policy
 
@@ -137,6 +139,7 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - Java semantic-core now uses arity-aware call resolution for overloads and constructors, respects static-import/class ownership when linking method calls, preserves direct superclass metadata for inherited targeting, and resolves `super.` / inherited unqualified calls / `super::method` references more accurately, including same-name local-method vs static-import collisions, explicit `this.`-qualified local ownership, constructor-target disambiguation on `new ClassName(...)`, and lambda bodies that call inherited methods
 - Python semantic-core now resolves imported symbols, relative imports, and module aliases more accurately, prefers local module/class ownership over imported-symbol collisions while preserving explicit module-alias calls, links `self`/`cls` and local class-qualified method calls back to class-owned methods, keeps decorated `@classmethod` / `@staticmethod` ownership intact, suppresses false edges from nested local defs/classes, preserves conservative `@property` access behavior, and surfaces Python test-file linkage in `related_tests`
 - TypeScript semantic-core now resolves named, namespace, and default-import ownership more accurately, preserves local `this.` and class-qualified method targeting, recognizes exported function-expression bindings alongside named functions and arrow bindings, emits object-literal methods and class field arrow methods as first-class units, and carries `export default foo` plus direct re-export alias surfaces, but the public confidence ceiling intentionally remains `low` until a stronger parser path justifies a bump
+- parsed files now also carry additive `semantic_pipeline` metadata so extraction can be stabilized internally without changing the public retrieval contracts
 - multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python, TypeScript
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets
 - optional tree-sitter extraction path is available for Clojure/Java/TypeScript (grammar-path configured)

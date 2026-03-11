@@ -49,8 +49,8 @@ The roadmap through Phase 5 is now effectively delivered for the current scope.
 
 The post-roadmap semantic tranche in [docs/post-roadmap-semantic-deepening-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/post-roadmap-semantic-deepening-plan.md) is now also complete.
 
-The next near-term focus is a new deeper-semantic tranche:
+The next near-term focus is the semantic stabilization tranche captured in [docs/semantic-stabilization-plan.md](/Users/ae/workspaces/SemanticCodeIndexing/docs/semantic-stabilization-plan.md):
 
-- interprocedural/dataflow-sensitive semantic resolution where current ownership is still mostly local/syntactic
-- stronger tree-sitter/compiler-grade ownership in the non-Clojure lanes
-- incremental operational/docs polish on top of the already-complete retained Phase 5 loop
+- split the current semantic adapter hotspot into thinner internal language modules
+- introduce a normalized internal semantic IR between extraction and resolver narrowing
+- stabilize TypeScript first as the Shadow IR/parity lane before the later interprocedural/dataflow tranche

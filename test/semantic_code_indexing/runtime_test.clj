@@ -1572,6 +1572,26 @@
         (is (some #(= "tree_sitter_active" (:code %)) ts-diags)))
       (is true "Tree-sitter grammar paths are not configured for Clojure/Java/TypeScript; skipping tree-sitter parser test."))))
 
+(deftest parsed-files-carry-semantic-pipeline-metadata-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-semantic-pipeline-meta" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        py-file (some (fn [[_ file]] (when (= "python" (:language file)) file)) (:files index))
+        ts-file (get-in index [:files "src/example/main.ts"])
+        py-unit (some->> (:unit_order index)
+                         (map #(get (:units index) %))
+                         (filter #(= "python" (get-in index [:files (:path %) :language])))
+                         first)
+        ts-unit (some->> (:unit_order index)
+                         (map #(get (:units index) %))
+                         (filter #(= "src/example/main.ts" (:path %)))
+                         first)]
+    (is (= "v1" (get-in py-file [:semantic_pipeline :version])))
+    (is (= "python" (get-in py-file [:semantic_pipeline :language])))
+    (is (= "v1" (:semantic_pipeline py-unit)))
+    (is (= "v1" (:semantic_pipeline ts-unit)))
+    (is (= "typescript" (get-in ts-file [:semantic_pipeline :language])))))
+
 (deftest postgres-storage-roundtrip-test
   (if-let [jdbc-url (System/getenv "SCI_TEST_POSTGRES_URL")]
     (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-pg-storage-test" (make-array java.nio.file.attribute.FileAttribute 0)))

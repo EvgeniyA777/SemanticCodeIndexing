@@ -3,7 +3,8 @@
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.set :as set]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [semantic-code-indexing.runtime.semantic-ir :as semantic-ir]))
 
 (def ^:private clj-def-re
   #"^\s*\((defn-|defn|defmacro|defmulti|defmethod|defprotocol|def|deftest)\s+([^\s\[\]\)]+)")
@@ -3040,13 +3041,15 @@
          language (language-by-path file-path)]
      (try
        (let [lines (slurp-lines abs)]
-         (case language
-           "clojure" (parse-clojure root-path file-path lines parser-opts)
-           "java" (parse-java root-path file-path lines parser-opts)
-           "elixir" (parse-elixir file-path lines)
-           "python" (parse-python file-path lines)
-           "typescript" (parse-typescript root-path file-path lines parser-opts)
-           (fallback-unit file-path lines language "unsupported_language")))
+         (->> (case language
+                "clojure" (parse-clojure root-path file-path lines parser-opts)
+                "java" (parse-java root-path file-path lines parser-opts)
+                "elixir" (parse-elixir file-path lines)
+                "python" (parse-python file-path lines)
+                "typescript" (parse-typescript root-path file-path lines parser-opts)
+                (fallback-unit file-path lines language "unsupported_language"))
+              (semantic-ir/finalize-parsed-file file-path language)))
        (catch Exception _
          (let [lines (try (slurp-lines abs) (catch Exception _ []))]
-           (fallback-unit file-path lines language "parse_exception")))))))
+           (-> (fallback-unit file-path lines language "parse_exception")
+               (semantic-ir/finalize-parsed-file file-path language))))))))

@@ -101,6 +101,7 @@
                             :use_modules (:use_modules parsed)
                             :use_expansion_imports (:use_expansion_imports parsed)
                             :test_target_modules (:test_target_modules parsed)
+                            :semantic_pipeline (:semantic_pipeline parsed)
                             :parser_mode (:parser_mode parsed)
                             :diagnostics (:diagnostics parsed)}]
               (-> acc
