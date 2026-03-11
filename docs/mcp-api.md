@@ -107,19 +107,19 @@ If `SCI_MCP_POLICY_REGISTRY_FILE` is configured, newly created cached indexes in
 If your MCP client supports a per-server `description` field in its local config, use wording like this so AI clients route code-navigation and code-retrieval tasks here more reliably:
 
 ```json
-"description": "Local MCP server for repository-aware code retrieval and codebase navigation. Use it to index a repository, build a compact repo map, find the most relevant files, functions, and symbols for a task, estimate change impact, and return lightweight code skeletons instead of loading full files. Best for large multi-file codebases when the agent needs precise context with lower token cost. Structure-aware and symbol/call-graph-guided; not a full compiler-grade semantic analyzer."
+"description": "Use this MCP server first for repository understanding and code navigation. Start with create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. Prefer this over manual directory listing, wildcard search, or broad repo browsing until an MCP tool call fails."
 ```
 
 Shorter version for clients with tight field limits:
 
 ```json
-"description": "Repository-aware code retrieval MCP: index a repo, generate repo maps, find relevant symbols and files, run impact analysis, and fetch code skeletons with low token cost."
+"description": "MCP-first repo understanding: create_index, repo_map, resolve_context, staged expansion/detail, and semantic navigation before manual browsing."
 ```
 
 Minimal onboarding snippet for clients that support only a short instruction field:
 
 ```text
-Use semantic-code-indexing in MCP-first mode: call create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. Treat language_refresh_required as rerun-create_index, language_activation_in_progress as wait-and-retry, and only fall back to manual repo inspection after you report the MCP failure explicitly.
+Use semantic-code-indexing in MCP-first mode: do not start with Analyze, directory listing, wildcard search, or broad manual repo browsing. Call create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. After a successful create_index, stay on the MCP flow instead of switching back to filesystem inspection. Treat language_refresh_required as rerun-create_index, language_activation_in_progress as wait-and-retry, and only fall back to manual repo inspection after you report the MCP failure explicitly.
 ```
 
 ## Tools
@@ -127,9 +127,10 @@ Use semantic-code-indexing in MCP-first mode: call create_index, then repo_map, 
 Canonical MCP retrieval flow is:
 
 1. `create_index`
-2. `resolve_context`
-3. optional `expand_context`
-4. optional `fetch_context_detail`
+2. `repo_map`
+3. `resolve_context`
+4. optional `expand_context`
+5. optional `fetch_context_detail`
 
 `resolve_context` returns a compact selection artifact. Rich retrieval detail is intentionally delayed to `fetch_context_detail`.
 
@@ -160,6 +161,9 @@ Returns:
 - `language_fingerprint`
 - `activation_state`
 - `selection_hint`
+- `recommended_next_step` - next MCP tool the client should call; normally `repo_map`
+- `recommended_flow` - canonical staged MCP flow for healthy first-pass usage
+- `usage_hint` - short MCP-first guidance telling the client to prefer semantic navigation over manual browsing
 
 `index_lifecycle` exposes the current snapshot reuse/provenance state for that handle, including whether it was rebuilt, reused, pinned, or considered stale.
 
@@ -183,6 +187,12 @@ Inputs:
 
 Returns the existing runtime `repo-map` payload plus `index_id`.
 
+Additive MCP guidance fields:
+
+- `recommended_next_step` - normally `resolve_context`
+- `recommended_flow`
+- `usage_hint`
+
 ### `resolve_context`
 
 Find the most relevant files and symbols for a coding task or question and return a compact staged selection.
@@ -205,6 +215,9 @@ Returns:
 - `focus`
 - `next_step`
 - `project_context`
+- `recommended_next_step`
+- `recommended_flow`
+- `usage_hint`
 
 `next_step` tells the client whether it should stay compact, expand the structural view, or fetch rich detail.
 
@@ -241,6 +254,9 @@ Returns:
 - `skeletons`
 - optional `impact_hints`
 - `project_context`
+- `recommended_next_step`
+- `recommended_flow`
+- `usage_hint`
 
 ### `fetch_context_detail`
 
@@ -266,6 +282,9 @@ Returns:
 - `diagnostics_trace`
 - `stage_events`
 - `project_context`
+- `recommended_next_step`
+- `recommended_flow`
+- `usage_hint`
 
 The returned `context_packet` and `diagnostics_trace` include:
 

@@ -280,11 +280,27 @@
                     @(:stderr-lines handle))))
         (send-message! handle {:jsonrpc "2.0" :id 2 :method "tools/list" :params {}})
         (let [tools-response (wait-for-response handle 2 response-timeout-ms)
-              tool-names (->> (get-in tools-response [:result :tools])
+              tools (get-in tools-response [:result :tools])
+              tool-names (->> tools
                               (map :name)
                               set)]
           (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons"}
-                 tool-names))))
+                 tool-names))
+          (is (str/includes? (some->> tools
+                                      (filter #(= "create_index" (:name %)))
+                                      first
+                                      :description)
+                             "then call repo_map"))
+          (is (str/includes? (some->> tools
+                                      (filter #(= "repo_map" (:name %)))
+                                      first
+                                      :description)
+                             "immediately after create_index"))
+          (is (str/includes? (some->> tools
+                                      (filter #(= "resolve_context" (:name %)))
+                                      first
+                                      :description)
+                             "Prefer this over broad file search"))))
 
       (let [create-response (call-tool! handle 3 "create_index" {:root_path tmp-root})
             create-data (get-in create-response [:result :structuredContent])
@@ -295,7 +311,11 @@
           (is (string? (:snapshot_id create-data)))
           (is (= "initial_build" (get-in create-data [:index_lifecycle :rebuild_reason])))
           (is (pos-int? (:file_count create-data)))
-          (is (pos-int? (:unit_count create-data))))
+          (is (pos-int? (:unit_count create-data)))
+          (is (= "repo_map" (:recommended_next_step create-data)))
+          (is (= ["create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail"]
+                 (:recommended_flow create-data)))
+          (is (string? (:usage_hint create-data))))
 
         (testing "cache hits reuse the same index_id"
           (let [cached-response (call-tool! handle 4 "create_index" {:root_path tmp-root})
@@ -309,7 +329,8 @@
             (is (= index-id (:index_id repo-map-data)))
             (is (seq (:files repo-map-data)))
             (is (map? (:index_lifecycle repo-map-data)))
-            (is (string? (:summary repo-map-data)))))
+            (is (string? (:summary repo-map-data)))
+            (is (= "resolve_context" (:recommended_next_step repo-map-data)))))
 
         (testing "resolve_context returns compact selection"
           (let [resolve-response (call-tool! handle 6 "resolve_context" {:index_id index-id
@@ -320,6 +341,7 @@
             (is (string? (:snapshot_id resolve-data)))
             (is (= "completed" (:result_status resolve-data)))
             (is (vector? (:focus resolve-data)))
+            (is (= "expand_context" (:recommended_next_step resolve-data)))
             (is (= ["expand_context" "fetch_context_detail"]
                    (get-in resolve-data [:next_step :available_actions])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
@@ -342,10 +364,12 @@
             (is (= index-id (:index_id expand-data)))
             (is (seq (:skeletons expand-data)))
             (is (map? (:impact_hints expand-data)))
+            (is (= "fetch_context_detail" (:recommended_next_step expand-data)))
             (is (= index-id (:index_id detail-data)))
             (is (map? (:context_packet detail-data)))
             (is (map? (:guardrail_assessment detail-data)))
             (is (vector? (:stage_events detail-data)))
+            (is (= "resolve_context" (:recommended_next_step detail-data)))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (get-in detail-data [:context_packet :relevant_units])))))
 

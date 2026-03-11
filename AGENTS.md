@@ -12,7 +12,8 @@
 
 ## MCP-First Workflow For This Repo
 
-- If the `semantic-code-indexing` MCP server is available, use it before manual file crawling.
+- If the `semantic-code-indexing` MCP server is available, do not begin with `Analyze`, directory listing, wildcard search, or broad manual file crawling.
+- Use MCP before manual file crawling.
 - First-pass flow is strict:
   1. `create_index`
   2. `repo_map`
@@ -22,6 +23,7 @@
 - Treat `no_supported_languages_found` as a user-guidance path: ask for the core language and suggest activating other languages later.
 - Treat `language_refresh_required` as a signal to rerun `create_index`, not as a reason to abandon MCP.
 - Treat `language_activation_in_progress` as a wait-and-retry signal for the same request.
+- A successful `create_index` is not a reason to switch to filesystem browsing; continue with `repo_map` and semantic retrieval.
 - Do not silently fall back to manual inspection if MCP fails; state that MCP failed, then continue manually if needed.
 - MCP wire-shape requirements:
   - `initialize.params.clientInfo` must be an object, not a string.

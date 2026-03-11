@@ -17,6 +17,12 @@
   {:clojure_engine :clj-kondo
    :tree_sitter_enabled false})
 
+(def ^:private canonical-mcp-flow
+  ["create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail"])
+
+(def ^:private mcp-first-usage-hint
+  "Use semantic-code-indexing in MCP-first mode: call create_index, then repo_map, then continue with resolve_context -> expand_context -> fetch_context_detail. Prefer this over manual directory listing, wildcard search, or broad file reading until an MCP tool call fails.")
+
 (defn now-ms []
   (System/currentTimeMillis))
 
@@ -222,6 +228,9 @@
      :language_fingerprint (:language_fingerprint index)
      :activation_state (:activation_state index)
      :selection_hint (:selection_hint index)
+     :recommended_next_step "repo_map"
+     :recommended_flow canonical-mcp-flow
+     :usage_hint mcp-first-usage-hint
      :cache_hit cache-hit?}))
 
 (defn touch-index! [state index-id]
@@ -344,6 +353,13 @@
    :activation_state (get-in entry [:index :activation_state])
    :selection_hint (get-in entry [:index :selection_hint])})
 
+(defn add-next-step-guidance
+  [payload next-step]
+  (assoc payload
+         :recommended_next_step next-step
+         :recommended_flow canonical-mcp-flow
+         :usage_hint mcp-first-usage-hint))
+
 (defn tool-repo-map [state args]
   (when-not (map? args)
     (invalid-request "repo_map arguments must be an object"))
@@ -357,7 +373,9 @@
                  (sci/repo-map (:index entry) (merge opts {:suppress_usage_metrics true}))
                  (sci/repo-map (:index entry) {:suppress_usage_metrics true}))]
     (with-usage-event
-      (assoc result :index_id (:index_id entry))
+      (-> result
+          (assoc :index_id (:index_id entry))
+          (add-next-step-guidance "resolve_context"))
       {:root_path_hash (usage/hash-root-path (:root_path entry))
        :payload {:index_id (:index_id entry)
                  :snapshot_id (:snapshot_id result)
@@ -376,13 +394,14 @@
      {:active_languages (get-in entry [:index :active_languages])
       :supported_languages (get-in entry [:index :supported_languages])}
      {:query query})
-    (let [result (assoc (sci/resolve-context (:index entry)
-                                             query
-                                             {:suppress_usage_metrics true
-                                              :retrieval_policy retrieval-policy
-                                              :policy_registry (:policy_registry @state)})
-                        :index_id (:index_id entry)
-                        :project_context (project-context-for-entry entry))
+    (let [result (-> (sci/resolve-context (:index entry)
+                                          query
+                                          {:suppress_usage_metrics true
+                                           :retrieval_policy retrieval-policy
+                                           :policy_registry (:policy_registry @state)})
+                     (assoc :index_id (:index_id entry)
+                            :project_context (project-context-for-entry entry))
+                     (add-next-step-guidance "expand_context"))
           result-meta (meta result)]
       (with-usage-event
         result
@@ -410,14 +429,15 @@
         snapshot-id (ensure-string (:snapshot_id args) "snapshot_id")
         unit-ids (normalize-unit-ids (:unit_ids args))
         include-impact-hints (ensure-boolean-or-nil (:include_impact_hints args) "include_impact_hints")
-        result (assoc (sci/expand-context (:index entry)
-                                          {:selection_id selection-id
-                                           :snapshot_id snapshot-id
-                                           :unit_ids unit-ids
-                                           :include_impact_hints include-impact-hints}
-                                          {:suppress_usage_metrics true})
-                      :index_id (:index_id entry)
-                      :project_context (project-context-for-entry entry))]
+        result (-> (sci/expand-context (:index entry)
+                                       {:selection_id selection-id
+                                        :snapshot_id snapshot-id
+                                        :unit_ids unit-ids
+                                        :include_impact_hints include-impact-hints}
+                                       {:suppress_usage_metrics true})
+                   (assoc :index_id (:index_id entry)
+                          :project_context (project-context-for-entry entry))
+                   (add-next-step-guidance "fetch_context_detail"))]
     (with-usage-event
       result
       {:root_path_hash (usage/hash-root-path (:root_path entry))
@@ -437,14 +457,15 @@
         snapshot-id (ensure-string (:snapshot_id args) "snapshot_id")
         unit-ids (normalize-unit-ids (:unit_ids args))
         detail-level (some-> (:detail_level args) (ensure-string "detail_level"))
-        result (assoc (sci/fetch-context-detail (:index entry)
-                                                {:selection_id selection-id
-                                                 :snapshot_id snapshot-id
-                                                 :unit_ids unit-ids
-                                                 :detail_level detail-level}
-                                                {:suppress_usage_metrics true})
-                      :index_id (:index_id entry)
-                      :project_context (project-context-for-entry entry))]
+        result (-> (sci/fetch-context-detail (:index entry)
+                                             {:selection_id selection-id
+                                              :snapshot_id snapshot-id
+                                              :unit_ids unit-ids
+                                              :detail_level detail-level}
+                                             {:suppress_usage_metrics true})
+                   (assoc :index_id (:index_id entry)
+                          :project_context (project-context-for-entry entry))
+                   (add-next-step-guidance "resolve_context"))]
     (with-usage-event
       result
       {:root_path_hash (usage/hash-root-path (:root_path entry))
@@ -501,7 +522,7 @@
 
 (def tool-definitions
   [{:name "create_index"
-    :description "Index a repository root or reuse a cached index. Call this first before repo navigation, code retrieval, impact analysis, or skeleton fetches."
+    :description "Index a repository root or reuse a cached index. Call this first, then call repo_map. Prefer this over manual directory listing, wildcard search, or broad file reading when the server is available."
     :inputSchema {:type "object"
                   :properties {"root_path" {:type "string"}
                                "paths" {:type "array" :items {:type "string"}}
@@ -511,7 +532,7 @@
                   :required ["root_path"]
                   :additionalProperties false}}
    {:name "repo_map"
-    :description "Return a compact repository map for high-level codebase navigation, highlighting important files and modules without loading full source files."
+    :description "Return a compact repository map for high-level codebase navigation. Call this immediately after create_index and prefer it over manual structure crawling for first-pass project overview."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "max_files" {:type "integer"}
@@ -519,7 +540,7 @@
                   :required ["index_id"]
                   :additionalProperties false}}
    {:name "resolve_context"
-    :description "Return a compact shortlist of the most relevant units for a coding task. Use expand_context for signatures and impact hints, or fetch_context_detail for raw code and full diagnostics."
+    :description "Return a compact shortlist of the most relevant units for a coding task. Prefer this over broad file search or reading; use expand_context for structural widening and fetch_context_detail only when richer evidence or raw code is needed."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "query" {:type "object"}
@@ -527,7 +548,7 @@
                   :required ["index_id" "query"]
                   :additionalProperties false}}
    {:name "expand_context"
-    :description "Expand a prior resolve_context selection with lightweight skeletons and optional impact hints without fetching raw code."
+    :description "Expand a prior resolve_context selection with lightweight skeletons and optional impact hints. Use this only after resolve_context when you need broader structure without raw code."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "selection_id" {:type "string"}
@@ -537,7 +558,7 @@
                   :required ["index_id" "selection_id" "snapshot_id"]
                   :additionalProperties false}}
    {:name "fetch_context_detail"
-    :description "Fetch raw code snippets and the full evidence packet for a prior resolve_context selection."
+    :description "Fetch raw code snippets and the full evidence packet for a prior resolve_context selection. Use this as the late detail stage after resolve_context or expand_context, not as the first repository-browsing step."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "selection_id" {:type "string"}

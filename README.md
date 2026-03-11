@@ -123,6 +123,9 @@ Canonical retrieval flow is compact-first staged retrieval:
 
 If an IDE or coding agent supports MCP plus repo-local instructions, this repo is intended to be used in `MCP-first` mode, not manual file-first mode.
 
+Agents should not begin with directory listing, wildcard search, or broad file crawling if the `semantic-code-indexing` MCP server is available and healthy.
+A successful `create_index` should be followed by `repo_map`, not by switching back to manual repository inspection.
+
 Recommended first-pass behavior:
 
 1. `create_index`

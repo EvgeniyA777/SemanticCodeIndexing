@@ -107,7 +107,11 @@
                                          :method "tools/list"}
                                         {"Mcp-Session-Id" session-id})]
             (is (= 200 (:status list-response)))
-            (is (seq (get-in list-response [:body :result :tools])))))
+            (is (seq (get-in list-response [:body :result :tools])))
+            (is (= "create_index"
+                   (get-in list-response [:body :result :tools 0 :name])))
+            (is (re-find #"then call repo_map"
+                         (get-in list-response [:body :result :tools 0 :description])))))
         (testing "tools/call create_index works over streamable HTTP"
           (let [create-response (request! "POST"
                                           (str base-url "/mcp")
@@ -118,7 +122,9 @@
                                                     :arguments {:root_path tmp-root}}}
                                           {"Mcp-Session-Id" session-id})]
             (is (= 200 (:status create-response)))
-            (is (string? (get-in create-response [:body :result :structuredContent :snapshot_id])))))
+            (is (string? (get-in create-response [:body :result :structuredContent :snapshot_id])))
+            (is (= "repo_map"
+                   (get-in create-response [:body :result :structuredContent :recommended_next_step])))))
         (testing "missing session is rejected for non-initialize calls"
           (let [missing-session (request! "POST"
                                           (str base-url "/mcp")
@@ -175,7 +181,9 @@
           (testing "tools/list round-trips over SSE"
             (is (= 202 (:status list-response)))
             (is (= "message" (:event list-event)))
-            (is (seq (get-in list-event [:payload :result :tools]))))))
+            (is (seq (get-in list-event [:payload :result :tools])))
+            (is (re-find #"manual structure crawling"
+                         (get-in list-event [:payload :result :tools 1 :description]))))))
       (finally
         (close-sse! sse)
         (mcp-http/stop-http-server! server)))))

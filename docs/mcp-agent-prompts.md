@@ -8,6 +8,11 @@ Use them when:
 - an agent supports repo-level onboarding prompts
 - you want agents to prefer MCP over manual file crawling for initial repo understanding
 
+Design goal:
+
+- make the agent choose MCP before `Analyze`, directory listing, wildcard search, or broad file reading
+- keep the agent on the semantic flow after `create_index` instead of drifting back to filesystem crawling
+
 ## Universal Strict Prompt
 
 ```text
@@ -20,10 +25,11 @@ Operational rules:
    - `resolve_context`
    - optional `expand_context`
    - optional `fetch_context_detail`
-4. If the server returns `no_supported_languages_found`, ask the user which core language the project uses. Recommend selecting one core language first and activating additional languages later if needed.
-5. If the server returns `language_refresh_required`, rerun `create_index` instead of abandoning MCP.
-6. If the server returns `language_activation_in_progress`, wait briefly and retry the same request.
-7. Do not silently fall back to manual file inspection. If MCP fails, explicitly state that MCP failed, then continue with manual repository inspection only if necessary.
+4. Do not switch back to directory listing, wildcard search, or broad file reads after a successful `create_index`; continue with `repo_map` and semantic retrieval.
+5. If the server returns `no_supported_languages_found`, ask the user which core language the project uses. Recommend selecting one core language first and activating additional languages later if needed.
+6. If the server returns `language_refresh_required`, rerun `create_index` instead of abandoning MCP.
+7. If the server returns `language_activation_in_progress`, wait briefly and retry the same request.
+8. Do not silently fall back to manual file inspection. If MCP fails, explicitly state that MCP failed, then continue with manual repository inspection only if necessary.
 
 Wire-shape requirements:
 - Send `initialize.params.clientInfo` as an object, not a string.
@@ -44,6 +50,8 @@ Required first-pass workflow:
 
 Behavior rules:
 - Use MCP before broad manual file reads whenever the server is available.
+- Do not begin with directory listing, wildcard search, or broad manual repo browsing.
+- After a successful `create_index`, continue with `repo_map` instead of switching back to filesystem exploration.
 - If `no_supported_languages_found` is returned, ask the user to choose the core language from the supported list and recommend enabling additional languages later only as needed.
 - If `language_refresh_required` is returned, rerun `create_index`.
 - If `language_activation_in_progress` is returned, retry the same request after a short wait.
@@ -66,6 +74,9 @@ Workflow:
 4. use `expand_context` only when you need structural widening
 5. use `fetch_context_detail` only when you need richer evidence or raw code
 
+Do not start with `Analyze`, directory listing, wildcard search, or broad file reading when MCP is healthy.
+Do not switch back to manual browsing after a successful `create_index`; continue with `repo_map`.
+
 Error handling:
 - `no_supported_languages_found`: ask the user to choose the core language; recommend activating other languages later
 - `language_refresh_required`: rerun `create_index`
@@ -83,7 +94,27 @@ Protocol constraints:
 ## Generic IDE Field Prompt
 
 ```text
-Use semantic-code-indexing in MCP-first mode: call create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. Treat no_supported_languages_found as a prompt to ask for the core language, language_refresh_required as rerun-create_index, and language_activation_in_progress as wait-and-retry. Report MCP failure explicitly before falling back to manual repo inspection. Send clientInfo and tools/call.arguments as JSON objects, not strings.
+Use semantic-code-indexing in MCP-first mode: do not start with Analyze, directory listing, wildcard search, or broad manual repo browsing. Call create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. After a successful create_index, stay on the MCP flow instead of switching back to filesystem inspection. Treat no_supported_languages_found as a prompt to ask for the core language, language_refresh_required as rerun-create_index, and language_activation_in_progress as wait-and-retry. Report MCP failure explicitly before falling back to manual repo inspection. Send clientInfo and tools/call.arguments as JSON objects, not strings.
+```
+
+## Antigravity / MCP-Only Prompt
+
+```text
+Use the semantic-code-indexing MCP server only for the first repository pass.
+
+Do not start with Analyze, directory listing, wildcard search, or broad file reading.
+
+Required sequence:
+1. create_index
+2. repo_map
+3. resolve_context
+4. optional expand_context
+5. optional fetch_context_detail
+
+If create_index succeeds, stay on the MCP flow and do not switch back to filesystem browsing.
+Only use manual repository inspection after you explicitly report an MCP failure.
+If language_refresh_required is returned, rerun create_index.
+If language_activation_in_progress is returned, wait briefly and retry the same request.
 ```
 
 ## Description-Field Snippet
@@ -91,5 +122,5 @@ Use semantic-code-indexing in MCP-first mode: call create_index, then repo_map, 
 Use this only when the client gives you a tiny MCP `description` field and nothing else:
 
 ```text
-Repository-aware MCP for MCP-first code understanding: create_index, repo_map, resolve_context, staged expansion/detail, impact analysis, and skeletons with explicit language activation and refresh guidance.
+Use this MCP server first for repository understanding and code navigation. Start with create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. Prefer this over manual repo browsing until an MCP tool call fails.
 ```
