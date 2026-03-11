@@ -1106,6 +1106,7 @@ Transport mapping for authz denials:
 - Clojure parser pipeline is `clj-kondo` first, with regex fallback.
 - Clojure semantic-core now carries dispatch-specific multimethod call tokens and first-class `defprotocol` method units, so literal dispatch calls and protocol-owned call sites can resolve without collapsing into generic symbol matches.
 - Java semantic-core now also tracks direct superclass ownership and method-reference call tokens, so `super.` calls, inherited unqualified calls, lambda-owned inherited calls, and `super::method` references resolve without falling back to same-name local overrides.
+- Python semantic-core now keeps decorated class/static methods attached to class-owned targets while suppressing nested local defs/classes and plain `@property` attribute reads from leaking false call edges.
 - Java, Elixir, and Python parsers are lightweight regex-based in MVP; TypeScript is regex-first with an optional tree-sitter path.
 - `tree-sitter` extraction is implemented for Clojure, Java, and TypeScript when corresponding grammar paths are configured.
 - If tree-sitter is requested but unavailable/misconfigured, runtime falls back with diagnostics (`tree_sitter_*` codes).

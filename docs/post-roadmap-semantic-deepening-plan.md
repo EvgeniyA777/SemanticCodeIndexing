@@ -11,7 +11,7 @@ Push the language adapters beyond the delivered roadmap scope toward more compil
 - `[x]` Stage 1 Clojure lexical + destructuring deepening
 - `[x]` Stage 2 Clojure multimethod / protocol / dispatch deepening
 - `[x]` Stage 3 Java inheritance / lambda / method-reference deepening
-- `[ ]` Stage 4 Python decorator / class-scope deepening
+- `[x]` Stage 4 Python decorator / class-scope deepening
 - `[ ]` Stage 5 Elixir pipelines / `with` / nested-module deepening
 - `[ ]` Stage 6 TypeScript parser-strengthening tranche
 - `[ ]` Stage 7 Cross-language confidence recalibration
@@ -31,7 +31,7 @@ No batching of multiple stages into one commit.
 
 ## Current Active Stage
 
-`Stage 4` is now the active slice.
+`Stage 5` is now the active slice.
 
 ## Stage Notes
 
@@ -63,9 +63,18 @@ Delivered scope:
 
 ### Stage 4
 
+Delivered scope:
+
+- Python decorated methods continue to resolve through `@classmethod` and `@staticmethod` ownership, so `cls.method(...)` and class-qualified static calls stay attached to class-owned targets.
+- Nested local `def` and `class` declarations inside a Python unit now suppress false outward edges, which keeps imported symbols and same-name class methods from stealing locally scoped calls.
+- Property access stays conservative: decorated `@property` methods remain indexable units, but plain attribute reads do not over-link as call edges.
+- Regression coverage now proves decorated class/static method resolution plus nested local-scope and property-access suppression.
+
+### Stage 5
+
 Planned scope:
 
-- tighter handling for `@classmethod`, `@staticmethod`, and `@property`
-- decorator-wrapped local methods and nested class/function scopes
-- import ownership under local class/member collisions
-- conservative fallback for dynamic decorator indirection
+- pipeline-aware caller ownership
+- `with` block target preservation
+- nested module reference normalization
+- anonymous function local ownership where statically provable

@@ -85,6 +85,8 @@
                "from ..validators import validate_order\n\nclass NestedRelativeOrderService:\n    def process_nested_relative(self, order):\n        return validate_order(order)\n")
   (write-file! root "app/nested/relative_collision_orders.py"
                "from ..validators import validate_order\n\n\ndef validate_order(order):\n    return {\"local\": bool(order)}\n\n\ndef process_local_relative(order):\n    return validate_order(order)\n")
+  (write-file! root "app/decorated_orders.py"
+               "from app.validators import validate_order\n\n\ndef trace_call(fn):\n    return fn\n\n\nclass DecoratedService:\n    @classmethod\n    def build(cls, order):\n        return {\"built\": order}\n\n    @staticmethod\n    def normalize(order):\n        return bool(order)\n\n    @property\n    def status(self):\n        return \"ready\"\n\n    @classmethod\n    def process_class(cls, order):\n        return cls.build(order)\n\n    @staticmethod\n    def process_static(order):\n        return DecoratedService.normalize(order)\n\n    @trace_call\n    def process_nested(self, order):\n        def validate_order(order):\n            return {\"local\": bool(order)}\n\n        return validate_order(order)\n\n    @trace_call\n    def process_nested_class(self, order):\n        class LocalFormatter:\n            @staticmethod\n            def normalize(order):\n                return {\"local\": order}\n\n        return LocalFormatter.normalize(order)\n\n    def process_status(self):\n        return self.status\n")
   (write-file! root "app/orders_test.py"
                "from app.orders import OrderService\n\n\ndef test_process_order():\n    service = OrderService()\n    assert service.process_order({\"id\": 1})\n")
   (write-file! root "src/example/normalize.ts"
@@ -728,6 +730,59 @@
               local-callers))
     (is (not-any? #(= "app.nested.relative_collision_orders/process_local_relative" (:symbol %))
                   imported-callers))))
+
+(deftest python-classmethod-and-staticmethod-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-decorator-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        decorated-units (sci/query-units storage tmp-root {:module "app.decorated_orders" :limit 20})
+        build-id (some->> decorated-units
+                          (filter #(= "app.decorated_orders.DecoratedService/build" (:symbol %)))
+                          first
+                          :unit_id)
+        normalize-id (some->> decorated-units
+                              (filter #(= "app.decorated_orders.DecoratedService/normalize" (:symbol %)))
+                              first
+                              :unit_id)
+        build-callers (sci/query-callers storage tmp-root build-id {:limit 20})
+        normalize-callers (sci/query-callers storage tmp-root normalize-id {:limit 20})]
+    (is build-id)
+    (is normalize-id)
+    (is (some #(= "app.decorated_orders.DecoratedService/process_class" (:symbol %)) build-callers))
+    (is (some #(= "app.decorated_orders.DecoratedService/process_static" (:symbol %)) normalize-callers))))
+
+(deftest python-nested-local-scope-and-property-access-stay-conservative-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-nested-scope" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        decorated-units (sci/query-units storage tmp-root {:module "app.decorated_orders" :limit 20})
+        validator-units (sci/query-units storage tmp-root {:module "app.validators" :limit 20})
+        imported-validate-id (some->> validator-units
+                                      (filter #(= "app.validators/validate_order" (:symbol %)))
+                                      first
+                                      :unit_id)
+        normalize-id (some->> decorated-units
+                              (filter #(= "app.decorated_orders.DecoratedService/normalize" (:symbol %)))
+                              first
+                              :unit_id)
+        status-id (some->> decorated-units
+                           (filter #(= "app.decorated_orders.DecoratedService/status" (:symbol %)))
+                           first
+                           :unit_id)
+        validate-callers (sci/query-callers storage tmp-root imported-validate-id {:limit 20})
+        normalize-callers (sci/query-callers storage tmp-root normalize-id {:limit 20})
+        status-callers (sci/query-callers storage tmp-root status-id {:limit 20})]
+    (is imported-validate-id)
+    (is normalize-id)
+    (is status-id)
+    (is (not-any? #(= "app.decorated_orders.DecoratedService/process_nested" (:symbol %))
+                  validate-callers))
+    (is (not-any? #(= "app.decorated_orders.DecoratedService/process_nested_class" (:symbol %))
+                  normalize-callers))
+    (is (not-any? #(= "app.decorated_orders.DecoratedService/process_status" (:symbol %))
+                  status-callers))))
 
 (deftest typescript-call-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-typescript-call-test" (make-array java.nio.file.attribute.FileAttribute 0)))

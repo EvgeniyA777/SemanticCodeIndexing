@@ -2315,25 +2315,56 @@
        (remove str/blank?)
        set))
 
-(defn- extract-py-calls [body {:keys [module class-name module-aliases symbol-aliases local-call-names local-class-names]}]
+(defn- py-local-body-scope [body-lines base-indent]
+  (reduce (fn [{:keys [local-call-names local-class-names] :as acc} line]
+            (let [trimmed (str/trim line)
+                  indent (py-indent line)]
+              (cond
+                (or (str/blank? trimmed)
+                    (str/starts-with? trimmed "#")
+                    (<= indent base-indent))
+                acc
+
+                (re-find py-def-re line)
+                (let [[_ fn-name] (re-find py-def-re line)]
+                  (update acc :local-call-names conj fn-name))
+
+                (re-find py-class-re line)
+                (let [[_ cls] (re-find py-class-re line)]
+                  (update acc :local-class-names conj cls))
+
+                :else
+                acc)))
+          {:local-call-names #{}
+           :local-class-names #{}}
+          body-lines))
+
+(defn- extract-py-calls [body {:keys [module class-name module-aliases symbol-aliases local-call-names local-class-names body-local-call-names body-local-class-names]}]
   (->> (re-seq py-call-re body)
        (map second)
        (mapcat (fn [token]
-                 (let [module-alias-token (py-expand-module-alias token module-aliases)
-                       imported-symbols (py-expand-symbol-import token symbol-aliases local-call-names)
-                       self-symbols (if (and class-name module)
-                                      (py-expand-self-token token module class-name)
-                                      [])
-                       class-symbols (if module
-                                       (py-expand-local-class-token token module local-class-names)
-                                       [])
-                       tail (tail-token token)]
-                   (cond-> [token]
-                     (seq module-alias-token) (conj module-alias-token)
-                     (seq imported-symbols) (into imported-symbols)
-                     (seq self-symbols) (into self-symbols)
-                     (seq class-symbols) (into class-symbols)
-                     (and tail (not= tail token)) (conj tail)))))
+                 (let [token* (str token)
+                       local-body-class? (some->> (re-matches #"([A-Za-z_][A-Za-z0-9_]*)\.(.+)" token*)
+                                                  second
+                                                  (contains? body-local-class-names))
+                       local-body-call? (contains? body-local-call-names token*)]
+                   (if (or local-body-call? local-body-class?)
+                     []
+                     (let [module-alias-token (py-expand-module-alias token* module-aliases)
+                           imported-symbols (py-expand-symbol-import token* symbol-aliases local-call-names)
+                           self-symbols (if (and class-name module)
+                                          (py-expand-self-token token* module class-name)
+                                          [])
+                           class-symbols (if module
+                                           (py-expand-local-class-token token* module local-class-names)
+                                           [])
+                           tail (tail-token token*)]
+                       (cond-> [token*]
+                         (seq module-alias-token) (conj module-alias-token)
+                         (seq imported-symbols) (into imported-symbols)
+                         (seq self-symbols) (into self-symbols)
+                         (seq class-symbols) (into class-symbols)
+                         (and tail (not= tail token*)) (conj tail)))))))
        (remove #(contains? py-call-stop %))
        distinct
        vec))
@@ -2406,7 +2437,8 @@
                    (map (fn [[d end-line]]
                           (let [start-line (:start-line d)
                                 body-lines (subvec lines (dec start-line) end-line)
-                                body (str/join "\n" body-lines)]
+                                body (str/join "\n" body-lines)
+                                body-scope (py-local-body-scope body-lines (py-indent (safe-line lines start-line)))]
                             {:unit_id (str path "::" (:raw-symbol d))
                              :kind (:kind d)
                              :symbol (:raw-symbol d)
@@ -2423,7 +2455,9 @@
                                                            :module-aliases module-aliases
                                                            :symbol-aliases symbol-aliases
                                                            :local-call-names local-call-names
-                                                           :local-class-names local-class-names})
+                                                           :local-class-names local-class-names
+                                                           :body-local-call-names (:local-call-names body-scope)
+                                                           :body-local-class-names (:local-class-names body-scope)})
                              :parser_mode "full"})))
                    vec)]
     {:language "python"
