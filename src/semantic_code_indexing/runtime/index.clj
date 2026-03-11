@@ -251,15 +251,35 @@
         (when (seq tail) (get m tail))
         #{})))
 
-(defn- superclass-target? [caller candidate]
-  (let [super-module (some-> caller :superclass_module lower)
+(defn- module-superclass-map [units-by-id]
+  (->> (vals units-by-id)
+       (keep (fn [{:keys [module superclass_module]}]
+               (when (and (seq module) (seq superclass_module))
+                 [(lower module) (lower superclass_module)])))
+       (into {})))
+
+(defn- caller-superclass-modules [caller units-by-id]
+  (let [super-map (module-superclass-map units-by-id)]
+    (loop [current (some-> caller :superclass_module lower)
+           seen #{}
+           acc []]
+      (if (or (str/blank? current) (contains? seen current))
+        acc
+        (recur (get super-map current)
+               (conj seen current)
+               (conj acc current))))))
+
+(defn- superclass-target? [caller candidate units-by-id]
+  (let [super-modules (set (caller-superclass-modules caller units-by-id))
         candidate-scope (some-> candidate :symbol symbol-scope lower)
         candidate-module (some-> candidate :module lower)]
-    (and (seq super-module)
-         (or (= super-module candidate-scope)
-             (= super-module candidate-module)
-             (and candidate-scope (str/ends-with? candidate-scope (str "." super-module)))
-             (and candidate-module (str/ends-with? candidate-module (str "." super-module)))))))
+    (and (seq super-modules)
+         (some (fn [super-module]
+                 (or (= super-module candidate-scope)
+                     (= super-module candidate-module)
+                     (and candidate-scope (str/ends-with? candidate-scope (str "." super-module)))
+                     (and candidate-module (str/ends-with? candidate-module (str "." super-module)))))
+               super-modules))))
 
 (defn- narrow-targets [caller targets token units-by-id files-by-path]
   (let [by-id #(get units-by-id %)
@@ -278,7 +298,7 @@
                                  (seq matching) matching
                                  (contains? #{"this" "super"} owner)
                                  (let [local-matching (if (= "super" owner)
-                                                        (filter #(superclass-target? caller %) candidates)
+                                                        (filter #(superclass-target? caller % units-by-id) candidates)
                                                         (filter #(or (= (:path %) (:path caller))
                                                                      (= (:module %) (:module caller)))
                                                                 candidates))]
@@ -293,7 +313,7 @@
                              owner-filtered)
             same-path (filter #(= (:path %) (:path caller)) arity-filtered)
             same-module (filter #(= (:module %) (:module caller)) arity-filtered)
-            same-superclass (filter #(superclass-target? caller %) arity-filtered)
+            same-superclass (filter #(superclass-target? caller % units-by-id) arity-filtered)
             import-filtered (if (seq caller-imports)
                               (filter #(import-match? caller-imports %) arity-filtered)
                               arity-filtered)

@@ -1105,8 +1105,8 @@ Transport mapping for authz denials:
 
 - Clojure parser pipeline is `clj-kondo` first, with regex fallback.
 - Clojure semantic-core now carries dispatch-specific multimethod call tokens and first-class `defprotocol` method units, so literal dispatch calls and protocol-owned call sites can resolve without collapsing into generic symbol matches.
-- Java semantic-core now also tracks direct superclass ownership and method-reference call tokens, so `super.` calls, inherited unqualified calls, lambda-owned inherited calls, and `super::method` references resolve without falling back to same-name local overrides.
-- Python semantic-core now keeps decorated class/static methods attached to class-owned targets while suppressing nested local defs/classes and plain `@property` attribute reads from leaking false call edges.
+- Java semantic-core now also tracks superclass ancestry and method-reference call tokens, so `super.` calls, deeper inherited unqualified calls, lambda-owned inherited calls, and `super::method` references resolve without falling back to same-name local overrides.
+- Python semantic-core now keeps decorated class/static methods attached to class-owned targets while suppressing immediate-scope nested local defs/classes, nested local-class method tails, and plain `@property` attribute reads from leaking false call edges.
 - Elixir semantic-core now treats pipeline calls and local captures as arity-aware callers and keeps `__MODULE__.Nested.foo(...)` linked to nested local-module targets instead of flattening them into imported collisions.
 - TypeScript semantic-core now emits object-literal methods, class field arrow methods, default-export alias indirection, and direct re-export alias units through the dedicated TypeScript language module, with regex/tree-sitter parity for those advanced surfaces while still treating the overall language lane as conservative `low`-ceiling coverage.
 - Parsed files and units now also carry additive `semantic_pipeline` metadata, which is the internal anchor for the new semantic stabilization tranche; this does not change the public retrieval schema roots.

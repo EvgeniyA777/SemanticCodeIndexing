@@ -841,6 +841,22 @@
     (is (not-any? #(= "app.decorated_orders.DecoratedService/process_status" (:symbol %))
                   status-callers))))
 
+(deftest python-deeply-nested-local-def-does-not-shadow-outer-import-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-deep-nested-scope" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "app/validators.py"
+                       "def validate_order(order):\n    return bool(order)\n")
+        _ (write-file! tmp-root "app/deep_nested.py"
+                       "from app.validators import validate_order\n\nclass DeepNestedService:\n    def process(self, order):\n        def helper(payload):\n            def validate_order(value):\n                return {\"local\": value}\n\n            return validate_order(payload)\n\n        helper(order)\n        return validate_order(order)\n")
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        validator-id (some->> (sci/query-units storage tmp-root {:module "app.validators" :limit 20})
+                              (filter #(= "app.validators/validate_order" (:symbol %)))
+                              first
+                              :unit_id)
+        callers (sci/query-callers storage tmp-root validator-id {:limit 20})]
+    (is validator-id)
+    (is (some #(= "app.deep_nested.DeepNestedService/process" (:symbol %)) callers))))
+
 (deftest typescript-call-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-typescript-call-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -1632,6 +1648,25 @@
     (is (= "v1" (:semantic_pipeline py-unit)))
     (is (= "v1" (:semantic_pipeline ts-unit)))
     (is (= "typescript" (get-in ts-file [:semantic_pipeline :language])))))
+
+(deftest java-multi-level-superclass-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-java-multi-super" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "src/com/acme/BaseNormalizer.java"
+                       "package com.acme;\n\npublic class BaseNormalizer {\n  protected String normalize(String id) {\n    return id.trim();\n  }\n}\n")
+        _ (write-file! tmp-root "src/com/acme/MidNormalizer.java"
+                       "package com.acme;\n\npublic class MidNormalizer extends BaseNormalizer {\n}\n")
+        _ (write-file! tmp-root "src/com/acme/DeepNormalizer.java"
+                       "package com.acme;\n\npublic class DeepNormalizer extends MidNormalizer {\n  public String processSuper(String id) {\n    return super.normalize(id);\n  }\n\n  public String processInherited(String id) {\n    return normalize(id);\n  }\n}\n")
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        base-id (some->> (sci/query-units storage tmp-root {:module "com.acme.BaseNormalizer" :limit 20})
+                         (filter #(= "com.acme.BaseNormalizer#normalize" (:symbol %)))
+                         first
+                         :unit_id)
+        callers (sci/query-callers storage tmp-root base-id {:limit 20})]
+    (is base-id)
+    (is (some #(= "com.acme.DeepNormalizer#processSuper" (:symbol %)) callers))
+    (is (some #(= "com.acme.DeepNormalizer#processInherited" (:symbol %)) callers))))
 
 (deftest postgres-storage-roundtrip-test
   (if-let [jdbc-url (System/getenv "SCI_TEST_POSTGRES_URL")]

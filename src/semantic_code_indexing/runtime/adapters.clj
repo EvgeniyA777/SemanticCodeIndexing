@@ -2340,28 +2340,51 @@
        set))
 
 (defn- py-local-body-scope [body-lines base-indent]
-  (reduce (fn [{:keys [local-call-names local-class-names] :as acc} line]
-            (let [trimmed (str/trim line)
-                  indent (py-indent line)]
-              (cond
-                (or (str/blank? trimmed)
-                    (str/starts-with? trimmed "#")
-                    (<= indent base-indent))
-                acc
+  (loop [remaining body-lines
+         scope-stack []
+         acc {:local-call-names #{}
+              :local-class-names #{}}]
+    (if-let [line (first remaining)]
+      (let [trimmed (str/trim line)
+            indent (py-indent line)
+            scope-stack* (->> scope-stack
+                              (filter #(< (:indent %) indent))
+                              vec)]
+        (cond
+          (or (str/blank? trimmed)
+              (str/starts-with? trimmed "#")
+              (<= indent base-indent))
+          (recur (rest remaining) scope-stack* acc)
 
-                (re-find py-def-re line)
-                (let [[_ fn-name] (re-find py-def-re line)]
-                  (update acc :local-call-names conj fn-name))
+          (re-find py-def-re line)
+          (let [[_ fn-name] (re-find py-def-re line)
+                parent-scope (last scope-stack*)
+                immediate-local? (or (empty? scope-stack*)
+                                     (and (= 1 (count scope-stack*))
+                                          (= :class (:kind parent-scope))
+                                          (:immediate-local? parent-scope)))]
+            (recur (rest remaining)
+                   (conj scope-stack* {:indent indent
+                                       :kind :def
+                                       :immediate-local? immediate-local?})
+                   (if immediate-local?
+                     (update acc :local-call-names conj fn-name)
+                     acc)))
 
-                (re-find py-class-re line)
-                (let [[_ cls] (re-find py-class-re line)]
-                  (update acc :local-class-names conj cls))
+          (re-find py-class-re line)
+          (let [[_ cls] (re-find py-class-re line)
+                immediate-local? (empty? scope-stack*)]
+            (recur (rest remaining)
+                   (conj scope-stack* {:indent indent
+                                       :kind :class
+                                       :immediate-local? immediate-local?})
+                   (if immediate-local?
+                     (update acc :local-class-names conj cls)
+                     acc)))
 
-                :else
-                acc)))
-          {:local-call-names #{}
-           :local-class-names #{}}
-          body-lines))
+          :else
+          (recur (rest remaining) scope-stack* acc)))
+      acc)))
 
 (defn- extract-py-calls [body {:keys [module class-name module-aliases symbol-aliases local-call-names local-class-names body-local-call-names body-local-class-names]}]
   (->> (re-seq py-call-re body)
@@ -2389,6 +2412,15 @@
                          (seq self-symbols) (into self-symbols)
                          (seq class-symbols) (into class-symbols)
                          (and tail (not= tail token*)) (conj tail)))))))
+       (remove (fn [token]
+                 (let [token* (str token)
+                       tail (tail-token token*)
+                       local-class-owner? (some->> (re-matches #"([A-Za-z_][A-Za-z0-9_]*)\.(.+)" token*)
+                                                  second
+                                                  (contains? body-local-class-names))]
+                   (or (contains? body-local-call-names token*)
+                       (contains? body-local-call-names tail)
+                       local-class-owner?))))
        (remove #(contains? py-call-stop %))
        distinct
        vec))
@@ -2410,6 +2442,7 @@
         test-target-modules (py-test-target-modules module imports path)
         defs (loop [idx 0
                     class-stack []
+                    fn-stack []
                  out []]
                (if (>= idx line-count)
                  out
@@ -2421,7 +2454,13 @@
                                 class-stack
                                 (->> class-stack
                                      (filter #(< (:indent %) indent))
-                                     vec))]
+                                     vec))
+                       pruned-fns (if blank-or-comment?
+                                    fn-stack
+                                    (->> fn-stack
+                                         (filter #(< % indent))
+                                         vec))
+                       inside-function? (seq pruned-fns)]
                    (cond
                      (re-find py-class-re line)
                      (let [[_ cls] (re-find py-class-re line)
@@ -2429,7 +2468,9 @@
                                   :kind "class"
                                   :raw-symbol (str module "." cls)
                                   :signature (trim-signature line)}]
-                       (recur (inc idx) (conj pruned {:name cls :indent indent}) (conj out entry)))
+                       (if inside-function?
+                         (recur (inc idx) pruned (conj pruned-fns indent) out)
+                         (recur (inc idx) (conj pruned {:name cls :indent indent}) pruned-fns (conj out entry))))
 
                      (re-find py-def-re line)
                      (let [[_ fn-name] (re-find py-def-re line)
@@ -2445,10 +2486,12 @@
                                   :raw-symbol symbol
                                   :class-name class-name
                                   :signature (trim-signature line)}]
-                       (recur (inc idx) pruned (conj out entry)))
+                       (if inside-function?
+                         (recur (inc idx) pruned (conj pruned-fns indent) out)
+                         (recur (inc idx) pruned (conj pruned-fns indent) (conj out entry))))
 
                      :else
-                     (recur (inc idx) pruned out)))))
+                     (recur (inc idx) pruned pruned-fns out)))))
         local-call-names (py-local-call-names defs)
         local-class-names (->> defs
                                (filter #(= "class" (:kind %)))
@@ -2462,7 +2505,7 @@
                           (let [start-line (:start-line d)
                                 body-lines (subvec lines (dec start-line) end-line)
                                 body (str/join "\n" body-lines)
-                                body-scope (py-local-body-scope body-lines (py-indent (safe-line lines start-line)))]
+                                body-scope (py-local-body-scope body-lines (py-indent (nth lines (dec start-line))))]
                             {:unit_id (str path "::" (:raw-symbol d))
                              :kind (:kind d)
                              :symbol (:raw-symbol d)

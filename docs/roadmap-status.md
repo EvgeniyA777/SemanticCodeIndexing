@@ -53,4 +53,4 @@ The next near-term focus is the semantic stabilization tranche captured in [docs
 
 - split the current semantic adapter hotspot into thinner internal language modules
 - introduce a normalized internal semantic IR between extraction and resolver narrowing
-- stabilize TypeScript first as the Shadow IR/parity lane before the later interprocedural/dataflow tranche
+- stabilize TypeScript first as the Shadow IR/parity lane, then tighten Java superclass ancestry and Python immediate-scope local suppression before the later interprocedural/dataflow tranche
