@@ -129,7 +129,7 @@ Returns:
 Because MCP uses the same core retrieval runtime as the library and service edges, recent semantic-core improvements still flow through `resolve_context` here:
 
 - Clojure: stronger namespace/test linkage, multimethod targeting, macro-generated ownership across helper/composed/threaded expansion patterns, and conservative branch-sensitive handling for conflicting generated forms
-- Elixir: better `import` / `use` normalization, implicit imports propagated from `__using__/1`, arity-aware local shadowing, `defdelegate` linkage, and ExUnit `related_tests`
+- Elixir: better `import` / `use` normalization, implicit imports propagated from `__using__/1`, `__MODULE__` local ownership, arity-aware local shadowing, `defdelegate` linkage, and ExUnit `related_tests`
 - Java: arity-aware overload and constructor linking, better static-import/class ownership, and local `this.` / `super.` ownership preservation
 - Python: imported-symbol and module-alias resolution, `self` / `cls` and local class-qualified method ownership, explicit module-alias preservation, and Python test-file linkage
 

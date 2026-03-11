@@ -1539,6 +1539,14 @@
     (when (not= (str token) expanded)
       expanded)))
 
+(defn- ex-expand-module-self-token [token module-name]
+  (let [token* (str token)]
+    (if-let [[_ suffix] (re-matches #"__MODULE__\.(.+)" token*)]
+      (when (seq module-name)
+        [(str module-name "." suffix)
+         (str module-name "/" suffix)])
+      [])))
+
 (defn- ex-local-call-shadowed? [token arities local-call-arities]
   (let [local-arities (get local-call-arities (str token))]
     (cond
@@ -1626,14 +1634,16 @@
        distinct
        vec))
 
-(defn- extract-ex-calls [body alias-map import-modules local-call-arities call-arity-index]
+(defn- extract-ex-calls [body module-name alias-map import-modules local-call-arities call-arity-index]
   (->> (re-seq ex-call-re body)
        (map second)
        (mapcat (fn [token]
                  (let [expanded (ex-expand-alias-token token alias-map)
+                       module-self (ex-expand-module-self-token token module-name)
                        imported (ex-expand-import-token token import-modules local-call-arities call-arity-index)]
                    (cond-> [token]
                      (seq expanded) (conj expanded)
+                     (seq module-self) (into module-self)
                      (seq imported) (into imported)))))
        (mapcat (fn [token]
                  (let [tail (tail-token token)]
@@ -1732,7 +1742,7 @@
                                        :imports imports
                                        :calls (if (= "defdelegate" (:form d))
                                                 (ex-delegate-calls body alias-map)
-                                                (extract-ex-calls body alias-map call-expansion-modules local-call-arities call-arity-index))
+                                                (extract-ex-calls body module-name alias-map call-expansion-modules local-call-arities call-arity-index))
                                        :method_arity method-arity
                                        :call_arity_by_token (if (= "defdelegate" (:form d))
                                                               {}

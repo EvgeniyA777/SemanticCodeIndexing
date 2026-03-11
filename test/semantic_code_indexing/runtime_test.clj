@@ -53,6 +53,8 @@
                "defmodule MyApp.UseClient do\n  use MyApp.Formatter\n\n  def process_used(order) do\n    normalize(order)\n  end\nend\n")
   (write-file! root "lib/my_app/local_formatter.ex"
                "defmodule MyApp.LocalFormatter do\n  use MyApp.Formatter\n\n  def normalize(order) do\n    {:local, order}\n  end\n\n  def process_local(order) do\n    normalize(order)\n  end\nend\n")
+  (write-file! root "lib/my_app/module_self_formatter.ex"
+               "defmodule MyApp.ModuleSelfFormatter do\n  use MyApp.Formatter\n\n  def normalize(order) do\n    {:module_self, order}\n  end\n\n  def process_module_self(order) do\n    __MODULE__.normalize(order)\n  end\nend\n")
   (write-file! root "lib/my_app/local_overloaded_formatter.ex"
                "defmodule MyApp.LocalOverloadedFormatter do\n  use MyApp.Formatter\n\n  def normalize(order, mode) do\n    {order, mode}\n  end\n\n  def process_imported_one(order) do\n    normalize(order)\n  end\n\n  def process_local_two(order) do\n    normalize(order, :strict)\n  end\nend\n")
   (write-file! root "lib/my_app/order_case.ex"
@@ -358,6 +360,28 @@
     (is shared-normalize-id)
     (is (some #(= "MyApp.LocalFormatter/process_local" (:symbol %)) local-callers))
     (is (not-any? #(= "MyApp.LocalFormatter/process_local" (:symbol %)) shared-callers))))
+
+(deftest elixir-module-self-qualified-call-beats-imported-collision-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-module-self-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        local-units (sci/query-units storage tmp-root {:module "MyApp.ModuleSelfFormatter" :limit 20})
+        formatter-units (sci/query-units storage tmp-root {:module "MyApp.Formatter" :limit 20})
+        local-normalize-id (some->> local-units
+                                    (filter #(= "MyApp.ModuleSelfFormatter/normalize" (:symbol %)))
+                                    first
+                                    :unit_id)
+        shared-normalize-id (some->> formatter-units
+                                     (filter #(= "MyApp.Formatter/normalize" (:symbol %)))
+                                     first
+                                     :unit_id)
+        local-callers (sci/query-callers storage tmp-root local-normalize-id {:limit 20})
+        shared-callers (sci/query-callers storage tmp-root shared-normalize-id {:limit 20})]
+    (is local-normalize-id)
+    (is shared-normalize-id)
+    (is (some #(= "MyApp.ModuleSelfFormatter/process_module_self" (:symbol %)) local-callers))
+    (is (not-any? #(= "MyApp.ModuleSelfFormatter/process_module_self" (:symbol %)) shared-callers))))
 
 (deftest elixir-local-shadowing-is-arity-aware-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-local-arity-shadowing-test" (make-array java.nio.file.attribute.FileAttribute 0)))
