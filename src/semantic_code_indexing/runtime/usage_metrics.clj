@@ -32,6 +32,11 @@
     (apply str (map #(format "%02x" (bit-and % 0xff))
                     (sha256-bytes (str root-path))))))
 
+(defn- normalize-filter-opts [opts]
+  (cond-> opts
+    (and (:root_path opts) (not (:root_path_hash opts)))
+    (assoc :root_path_hash (hash-root-path (:root_path opts)))))
+
 (defn- compact-payload [payload]
   (cond
     (nil? payload) {}
@@ -128,10 +133,11 @@
     (:feedback @(:state sink))
     []))
 
-(defn- feedback-matches? [feedback {:keys [surface operation tenant_id since]}]
+(defn- feedback-matches? [feedback {:keys [surface operation tenant_id since root_path_hash]}]
   (and (if surface (= surface (:surface feedback)) true)
        (if operation (= operation (:operation feedback)) true)
        (if tenant_id (= tenant_id (:tenant_id feedback)) true)
+       (if root_path_hash (= root_path_hash (:root_path_hash feedback)) true)
        (if since
          (not (.isBefore (parse-iso-instant (:occurred_at feedback))
                          (parse-iso-instant since)))
@@ -415,10 +421,11 @@
   (when (seq (str value))
     (Instant/parse (str value))))
 
-(defn- event-matches? [event {:keys [surface operation tenant_id since]}]
+(defn- event-matches? [event {:keys [surface operation tenant_id since root_path_hash]}]
   (and (if surface (= surface (:surface event)) true)
        (if operation (= operation (:operation event)) true)
        (if tenant_id (= tenant_id (:tenant_id event)) true)
+       (if root_path_hash (= root_path_hash (:root_path_hash event)) true)
        (if since
          (not (.isBefore (parse-iso-instant (:occurred_at event))
                          (parse-iso-instant since)))
@@ -426,7 +433,7 @@
 
 (defn- postgres-events [sink opts]
   (let [ds (:datasource sink)
-        {:keys [surface operation tenant_id since]} opts
+        {:keys [surface operation tenant_id since root_path_hash]} (normalize-filter-opts opts)
         sql (str "select occurred_at, surface, operation, status, trace_id, request_id, session_id,
                          task_id, actor_id, tenant_id, root_path_hash, latency_ms, file_count,
                          unit_count, selected_units_count, selected_files_count, cache_hit,
@@ -436,12 +443,14 @@
                  (when surface " and surface = ?")
                  (when operation " and operation = ?")
                  (when tenant_id " and tenant_id = ?")
+                 (when root_path_hash " and root_path_hash = ?")
                  (when since " and occurred_at >= cast(? as timestamptz)")
                  " order by occurred_at asc")
         params (cond-> [sql]
                  surface (conj surface)
                  operation (conj operation)
                  tenant_id (conj tenant_id)
+                 root_path_hash (conj root_path_hash)
                  since (conj since))]
     (init-usage-metrics! sink)
     (->> (jdbc/execute! ds params)
@@ -473,7 +482,7 @@
 
 (defn- postgres-feedback [sink opts]
   (let [ds (:datasource sink)
-        {:keys [surface operation tenant_id since]} opts
+        {:keys [surface operation tenant_id since root_path_hash]} (normalize-filter-opts opts)
         sql (str "select occurred_at, surface, operation, trace_id, request_id, session_id,
                          task_id, actor_id, tenant_id, root_path_hash, feedback_outcome,
                          feedback_reason, followup_action, confidence_level,
@@ -483,12 +492,14 @@
                  (when surface " and surface = ?")
                  (when operation " and operation = ?")
                  (when tenant_id " and tenant_id = ?")
+                 (when root_path_hash " and root_path_hash = ?")
                  (when since " and occurred_at >= cast(? as timestamptz)")
                  " order by occurred_at asc")
         params (cond-> [sql]
                  surface (conj surface)
                  operation (conj operation)
                  tenant_id (conj tenant_id)
+                 root_path_hash (conj root_path_hash)
                  since (conj since))]
     (init-usage-metrics! sink)
     (->> (jdbc/execute! ds params)
@@ -518,28 +529,30 @@
                    :payload (parse-json (or (:semantic_usage_feedback/payload row) (:payload row)))}))))))
 
 (defn- sink-events [sink opts]
-  (cond
+  (let [opts* (normalize-filter-opts opts)]
+    (cond
     (instance? InMemoryUsageMetrics sink)
     (->> (emitted-events sink)
-         (filter #(event-matches? % opts))
+         (filter #(event-matches? % opts*))
          vec)
 
     (instance? PostgresUsageMetrics sink)
-    (postgres-events sink opts)
+    (postgres-events sink opts*)
 
-    :else []))
+    :else [])))
 
 (defn- sink-feedback [sink opts]
-  (cond
+  (let [opts* (normalize-filter-opts opts)]
+    (cond
     (instance? InMemoryUsageMetrics sink)
     (->> (emitted-feedback sink)
-         (filter #(feedback-matches? % opts))
+         (filter #(feedback-matches? % opts*))
          vec)
 
     (instance? PostgresUsageMetrics sink)
-    (postgres-feedback sink opts)
+    (postgres-feedback sink opts*)
 
-    :else []))
+    :else [])))
 
 (defn- rate [numerator denominator]
   (if (pos? denominator)
