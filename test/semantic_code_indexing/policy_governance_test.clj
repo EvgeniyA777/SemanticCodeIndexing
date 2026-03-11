@@ -166,6 +166,99 @@
                                                 "heuristic_v1"
                                                 "2026-03-10")))))))
 
+(deftest promote-policy-rejects-governance-blocked-candidates-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-promote-blocked" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        baseline-policy (rp/default-retrieval-policy)
+        blocked-candidate (assoc baseline-policy :policy_id "heuristic_v1_blocked" :version "2026-03-16")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry baseline-policy {:state "active"})
+                             (rp/registry-entry blocked-candidate {:state "shadow"
+                                                                   :governance {:promotion_mode "blocked"
+                                                                                :approval_tier "critical"}})]}
+        comparison (evaluation/compare-policies {:root_path tmp-root
+                                                 :dataset (sample-dataset)
+                                                 :baseline_policy baseline-policy
+                                                 :candidate_policy blocked-candidate})
+        promotion (evaluation/promote-policy {:registry registry
+                                              :candidate_policy_id "heuristic_v1_blocked"
+                                              :candidate_version "2026-03-16"
+                                              :comparison comparison
+                                              :manual_approval true})]
+    (is (false? (:promoted? promotion)))
+    (is (false? (get-in promotion [:decision :eligible?])))
+    (is (= "promotion_blocked" (get-in promotion [:decision :governance_reason])))
+    (is (= "blocked" (get-in promotion [:decision :promotion_mode])))
+    (is (true? (get-in promotion [:decision :manual_approval_supplied])))
+    (is (= "shadow"
+           (:state (rp/resolve-registry-entry (:registry promotion)
+                                              "heuristic_v1_blocked"
+                                              "2026-03-16"))))))
+
+(deftest promote-policy-requires-explicit-manual-approval-for-restricted-tier-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-promote-manual" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        baseline-policy (rp/default-retrieval-policy)
+        manual-candidate (assoc baseline-policy :policy_id "heuristic_v1_manual" :version "2026-03-17")
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry baseline-policy {:state "active"})
+                             (rp/registry-entry manual-candidate {:state "shadow"
+                                                                  :governance {:promotion_mode "manual_approval_required"
+                                                                               :approval_tier "restricted"}})]}
+        comparison (evaluation/compare-policies {:root_path tmp-root
+                                                 :dataset (sample-dataset)
+                                                 :baseline_policy baseline-policy
+                                                 :candidate_policy manual-candidate})
+        without-approval (evaluation/promote-policy {:registry registry
+                                                     :candidate_policy_id "heuristic_v1_manual"
+                                                     :candidate_version "2026-03-17"
+                                                     :comparison comparison})
+        with-approval (evaluation/promote-policy {:registry registry
+                                                  :candidate_policy_id "heuristic_v1_manual"
+                                                  :candidate_version "2026-03-17"
+                                                  :comparison comparison
+                                                  :manual_approval true})]
+    (testing "manual-only candidate stays shadow without explicit approval"
+      (is (false? (:promoted? without-approval)))
+      (is (false? (get-in without-approval [:decision :eligible?])))
+      (is (= "manual_approval_required" (get-in without-approval [:decision :governance_reason])))
+      (is (= "restricted" (get-in without-approval [:decision :approval_tier]))))
+    (testing "manual approval unlocks direct promotion when replay gates pass"
+      (is (:promoted? with-approval))
+      (is (true? (get-in with-approval [:decision :eligible?])))
+      (is (= "manual_approval_granted" (get-in with-approval [:decision :governance_reason])))
+      (is (= "active"
+             (:state (rp/resolve-registry-entry (:registry with-approval)
+                                                "heuristic_v1_manual"
+                                                "2026-03-17")))))))
+
+(deftest manual-approval-does-not-override-failed-replay-gates-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-promote-manual-failed-replay" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        baseline-policy (rp/default-retrieval-policy)
+        manual-candidate (-> baseline-policy
+                             (assoc :policy_id "heuristic_v1_manual_fail")
+                             (assoc :version "2026-03-18")
+                             (assoc-in [:thresholds :top_authority_min] 99999))
+        registry {:schema_version "1.0"
+                  :policies [(rp/registry-entry baseline-policy {:state "active"})
+                             (rp/registry-entry manual-candidate {:state "shadow"
+                                                                  :governance {:promotion_mode "manual_approval_required"
+                                                                               :approval_tier "restricted"}})]}
+        comparison (evaluation/compare-policies {:root_path tmp-root
+                                                 :dataset (protected-sample-dataset)
+                                                 :baseline_policy baseline-policy
+                                                 :candidate_policy manual-candidate})
+        promotion (evaluation/promote-policy {:registry registry
+                                              :candidate_policy_id "heuristic_v1_manual_fail"
+                                              :candidate_version "2026-03-18"
+                                              :comparison comparison
+                                              :manual_approval true})]
+    (is (false? (:promoted? promotion)))
+    (is (false? (get-in promotion [:decision :eligible?])))
+    (is (= "replay_gates_failed" (get-in promotion [:decision :governance_reason])))
+    (is (false? (get-in promotion [:decision :replay_eligible])))))
+
 (deftest shadow-review-reports-shadow-candidates-against-active-policy-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-shadow-review" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)

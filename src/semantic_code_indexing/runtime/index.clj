@@ -218,7 +218,16 @@
 
       :else
       (let [owner-filtered (if (re-find #"[./#/]" (str token))
-                             (filter #(owner-match? token %) candidates)
+                             (let [matching (filter #(owner-match? token %) candidates)
+                                   owner (some-> token owner-from-token lower)]
+                               (cond
+                                 (seq matching) matching
+                                 (contains? #{"this" "super"} owner)
+                                 (let [local-matching (filter #(or (= (:path %) (:path caller))
+                                                                   (= (:module %) (:module caller)))
+                                                              candidates)]
+                                   (if (seq local-matching) local-matching candidates))
+                                 :else candidates))
                              candidates)
             arity-filtered (if (seq call-arities)
                              (let [matching (filter #(or (nil? (:method_arity %))
@@ -226,12 +235,12 @@
                                                     owner-filtered)]
                                (if (seq matching) matching owner-filtered))
                              owner-filtered)
+            same-path (filter #(= (:path %) (:path caller)) arity-filtered)
+            same-module (filter #(= (:module %) (:module caller)) arity-filtered)
             import-filtered (if (seq caller-imports)
                               (filter #(import-match? caller-imports %) arity-filtered)
                               arity-filtered)
-            candidate-pool (if (seq import-filtered) import-filtered arity-filtered)
-            same-path (filter #(= (:path %) (:path caller)) candidate-pool)
-            same-module (filter #(= (:module %) (:module caller)) candidate-pool)]
+            candidate-pool (if (seq import-filtered) import-filtered arity-filtered)]
         (cond
           (seq same-path) (mapv :unit_id same-path)
           (seq same-module) (mapv :unit_id same-module)

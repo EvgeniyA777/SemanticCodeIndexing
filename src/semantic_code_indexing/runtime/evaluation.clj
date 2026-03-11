@@ -413,6 +413,38 @@
      :blocked_by_governance blocked-by-governance?
      :governance_reason reason}))
 
+(defn- promote-governance-decision [entry replay-decision manual-approval]
+  (let [replay-eligible? (:eligible? replay-decision)
+        governance (rp/effective-governance entry)
+        promotion-mode (:promotion_mode governance)
+        approval-tier (:approval_tier governance)
+        manual-approval? (boolean manual-approval)
+        governance-eligible? (cond
+                               (not replay-eligible?) false
+                               (rp/blocked? entry) false
+                               (rp/manual-approval-required? entry) manual-approval?
+                               :else true)
+        eligible? (cond
+                    (not replay-eligible?) false
+                    (rp/blocked? entry) false
+                    (rp/manual-approval-required? entry) manual-approval?
+                    :else true)
+        governance-reason (cond
+                            (not replay-eligible?) "replay_gates_failed"
+                            (rp/blocked? entry) "promotion_blocked"
+                            (and (rp/manual-approval-required? entry) (not manual-approval?)) "manual_approval_required"
+                            (and (rp/manual-approval-required? entry) manual-approval?) "manual_approval_granted"
+                            :else "auto_promotable")]
+    {:eligible? eligible?
+     :replay_eligible replay-eligible?
+     :governance_eligible governance-eligible?
+     :promotion_mode promotion-mode
+     :approval_tier approval-tier
+     :manual_approval_supplied manual-approval?
+     :governance_reason governance-reason
+     :final_outcome (if eligible? "promotion_allowed" "promotion_denied")
+     :checks (:checks replay-decision)}))
+
 (defn shadow-review-report
   [{:keys [root_path dataset parser_opts registry]
     :or {root_path "."}}]
@@ -489,17 +521,18 @@
           (:shadow_candidates report)))
 
 (defn promote-policy
-  [{:keys [registry candidate_policy_id candidate_version comparison dry_run]
+  [{:keys [registry candidate_policy_id candidate_version comparison dry_run manual_approval]
     :or {dry_run false}}]
   (let [registry* (rp/normalize-registry registry)
         candidate (rp/resolve-registry-entry registry* candidate_policy_id candidate_version)
         baseline (rp/active-registry-entry registry*)
-        decision (promotion-gate-decision comparison)]
+        replay-decision (promotion-gate-decision comparison)]
     (when-not candidate
       (throw (ex-info "candidate policy not found in registry"
                       {:type :invalid_request
                        :message "candidate policy not found in registry"})))
-    (let [eligible? (:eligible? decision)
+    (let [decision (promote-governance-decision candidate replay-decision manual_approval)
+          eligible? (:eligible? decision)
           promoted-registry
           (if (and eligible? (not dry_run))
             (let [retired (if (and baseline
@@ -518,6 +551,7 @@
                     :version (:version baseline)
                     :state_before (:state baseline)})
        :decision decision
+       :replay_decision replay-decision
        :promoted? (and eligible? (not dry_run))
        :registry promoted-registry})))
 
@@ -982,6 +1016,7 @@
           "--promotion-cooldown-runs" (recur (assoc m :promotion_cooldown_runs (Long/parseLong v)) rest)
           "--out" (recur (assoc m :out_path v) rest)
           "--write-registry" (recur (assoc m :write_registry true) rest)
+          "--manual-approval" (recur (assoc m :manual_approval true) rest)
           "--auto-promote" (recur (assoc m :auto_promote true) rest)
           "--select-best-candidate" (recur (assoc m :select_best_candidate true) rest)
           "--history-aware-selection" (recur (assoc m :history_aware_selection true) rest)
@@ -1072,9 +1107,9 @@
     (print-or-write! out_path result)
     (System/exit (if (zero? (get-in result [:summary :blocked])) 0 1))))
 
-(defn- run-promote-policy-command [{:keys [root_path dataset_path registry_path candidate_policy_id candidate_version out_path write_registry dry_run]}]
+(defn- run-promote-policy-command [{:keys [root_path dataset_path registry_path candidate_policy_id candidate_version out_path write_registry dry_run manual_approval]}]
   (when-not (and dataset_path registry_path candidate_policy_id)
-    (println "Usage: clojure -M:eval promote-policy --root <repo-root> --dataset <dataset.json> --registry <registry.edn> --candidate-policy-id <id> [--candidate-version <version>] [--write-registry] [--dry-run] [--out <output.json>]")
+    (println "Usage: clojure -M:eval promote-policy --root <repo-root> --dataset <dataset.json> --registry <registry.edn> --candidate-policy-id <id> [--candidate-version <version>] [--manual-approval] [--write-registry] [--dry-run] [--out <output.json>]")
     (System/exit 1))
   (let [dataset (read-json dataset_path)
         registry (rp/load-registry registry_path)
@@ -1094,6 +1129,7 @@
                                 :candidate_policy_id candidate_policy_id
                                 :candidate_version (or candidate_version (:version (rp/resolve-registry-entry registry candidate_policy_id candidate_version)))
                                 :comparison comparison
+                                :manual_approval manual_approval
                                 :dry_run dry_run})
         result* (assoc result :comparison comparison)]
     (when (and write_registry (:promoted? result*))

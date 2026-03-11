@@ -180,15 +180,24 @@
       focused
       selected)))
 
+(defn- file-modules-for-paths [index paths]
+  (->> paths
+       (keep #(get-in index [:files % :module]))
+       (remove nil?)
+       distinct
+       vec))
+
 (defn- build-impact-hints [index selected]
   (let [selected-ids (set (map :unit_id selected))
-        callers (->> selected
-                     (mapcat (fn [u]
-                               (map #(idx/unit-by-id index %)
-                                    (get (:callers_index index) (:unit_id u) #{}))))
-                     (remove nil?)
+        caller-units (->> selected
+                          (mapcat (fn [u]
+                                    (map #(idx/unit-by-id index %)
+                                         (get (:callers_index index) (:unit_id u) #{}))))
+                          (remove nil?)
+                          distinct
+                          vec)
+        callers (->> caller-units
                      (map #(str (:path %) "::" (:symbol %)))
-                     distinct
                      (take 12)
                      vec)
         selected-modules (->> selected (map :module) (remove nil?) distinct vec)
@@ -202,12 +211,24 @@
                                distinct
                                (take 12)
                                vec)
+        indirect-test-paths (->> (concat (file-modules-for-paths index linked-test-paths)
+                                         (->> caller-units
+                                              (filter #(or (= "test" (:kind %))
+                                                           (str/includes? (:path %) "/test/")))
+                                              (map :module)
+                                              (remove nil?)))
+                                 distinct
+                                 (mapcat #(get (:test_target_index index) % #{}))
+                                 distinct
+                                 (take 12)
+                               vec)
         related-tests (->> (idx/all-units index)
                            (filter #(or (= "test" (:kind %))
                                         (str/includes? (:path %) "/test/")))
                            (filter (fn [u]
                                      (or (contains? selected-ids (:unit_id u))
                                          (contains? (set linked-test-paths) (:path u))
+                                         (contains? (set indirect-test-paths) (:path u))
                                          (some #(= (:module u) %) selected-modules)
                                          (contains? (set callers) (str (:path u) "::" (:symbol u))))))
                            (map :path)

@@ -2,6 +2,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]
+            [clojure.set :as set]
             [clojure.string :as str]))
 
 (def ^:private clj-def-re
@@ -298,7 +299,7 @@
 
 (defn- clj-test-module? [module path]
   (let [module* (str (or module ""))]
-    (or (str/includes? (str path) "/test/")
+    (or (re-find #"(^|/)test/" (str path))
         (some #(str/ends-with? module* %) clj-test-module-suffixes))))
 
 (defn- strip-clj-test-suffix [module]
@@ -435,6 +436,9 @@
 (def ^:private clj-generated-apply-ops
   #{"apply" "clojure.core/apply"})
 
+(def ^:private clj-generated-conditional-ops
+  #{"if" "if-not" "cond" "case" "when" "when-not"})
+
 (defn- quoted-call-token [form]
   (when (and (seq? form)
              (= 'quote (first form)))
@@ -458,6 +462,51 @@
       [])))
 
 (declare generated-builder-call-tokens*)
+
+(defn- token-intersection [colls]
+  (let [sets (->> colls
+                  (map #(set (or % [])))
+                  vec)]
+    (if (seq sets)
+      (->> (apply set/intersection sets)
+           vec)
+      [])))
+
+(defn- conditional-branch-generated-tokens [op args walk helper-generated-calls*]
+  (case op
+    ("if" "if-not")
+    (let [then-node (second args)
+          else-node (nth args 2 nil)]
+      (if else-node
+        (token-intersection [(walk then-node helper-generated-calls* false)
+                             (walk else-node helper-generated-calls* false)])
+        []))
+
+    ("when" "when-not")
+    []
+
+    "cond"
+    (let [branch-nodes (->> args
+                            (partition 2 2 [])
+                            (keep second)
+                            vec)]
+      (if (>= (count branch-nodes) 2)
+        (token-intersection (map #(walk % helper-generated-calls* false) branch-nodes))
+        []))
+
+    "case"
+    (let [branch-tail (drop 1 args)
+          branch-nodes (->> branch-tail
+                            (partition 2 2 [])
+                            (mapcat (fn [pair]
+                                      (let [[_ result] pair]
+                                        (when result [result]))))
+                            vec)]
+      (if (>= (count branch-nodes) 2)
+        (token-intersection (map #(walk % helper-generated-calls* false) branch-nodes))
+        []))
+
+    []))
 
 (defn- letfn-helper-generated-calls [bindings]
   (->> bindings
@@ -511,15 +560,19 @@
                     helper-tokens (when (and generated-context?
                                              (contains? helper-generated-calls** op))
                                     (get helper-generated-calls** op))
+                    branch-tokens (when (contains? clj-generated-conditional-ops op)
+                                    (conditional-branch-generated-tokens op args walk helper-generated-calls**))
                     child-generated-context? (or generated-context?
                                                 (contains? clj-generated-builder-ops op)
                                                 (contains? clj-generated-apply-ops op))
-                    children (if (= "letfn" op)
-                               (rest args)
-                               items)]
+                    children (cond
+                               (contains? clj-generated-conditional-ops op) []
+                               (= "letfn" op) (rest args)
+                               :else items)]
                 (concat
                  (when builder-token [builder-token])
                  helper-tokens
+                 branch-tokens
                  (mapcat #(walk % helper-generated-calls** child-generated-context?) children)))
 
               (vector? node)
@@ -1005,9 +1058,11 @@
   (->> (java-call-details body)
        (map :token)
        (mapcat (fn [token]
-                 (let [tail (tail-token token)]
-                   (cond-> [token]
-                     (and tail (not= tail token)) (conj tail)))))
+                 (if (re-find #"[.#]" (str token))
+                   [token]
+                   (let [tail (tail-token token)]
+                     (cond-> [token]
+                       (and tail (not= tail token)) (conj tail))))))
        (remove #(contains? java-call-stop %))
        distinct
        vec))
@@ -1355,14 +1410,25 @@
     (when (not= (str token) expanded)
       expanded)))
 
-(defn- ex-expand-import-token [token import-modules]
-  (when-not (str/includes? (str token) ".")
-    (->> import-modules
-         (mapcat (fn [module]
-                   [(str module "." token)
-                    (str module "/" token)]))
-         distinct
-         vec)))
+(defn- ex-local-call-shadowed? [token arities local-call-arities]
+  (let [local-arities (get local-call-arities (str token))]
+    (cond
+      (empty? local-arities) false
+      (seq arities) (boolean (some #(contains? local-arities %) arities))
+      :else true)))
+
+(defn- ex-expand-import-token [token import-modules local-call-arities call-arity-index]
+  (let [arities (or (get call-arity-index (str token))
+                    (get call-arity-index (tail-token token))
+                    #{})]
+    (when-not (or (str/includes? (str token) ".")
+                  (ex-local-call-shadowed? token arities local-call-arities))
+      (->> import-modules
+           (mapcat (fn [module]
+                     [(str module "." token)
+                      (str module "/" token)]))
+           distinct
+           vec))))
 
 (defn- ex-args-arity [args-text]
   (let [s (str/trim (or args-text ""))]
@@ -1425,12 +1491,12 @@
            vec))
     []))
 
-(defn- extract-ex-calls [body alias-map import-modules]
+(defn- extract-ex-calls [body alias-map import-modules local-call-arities call-arity-index]
   (->> (re-seq ex-call-re body)
        (map second)
        (mapcat (fn [token]
                  (let [expanded (ex-expand-alias-token token alias-map)
-                       imported (ex-expand-import-token token import-modules)]
+                       imported (ex-expand-import-token token import-modules local-call-arities call-arity-index)]
                    (cond-> [token]
                      (seq expanded) (conj expanded)
                      (seq imported) (into imported)))))
@@ -1492,6 +1558,13 @@
                                :method_arity (ex-def-arity line)
                                :signature (trim-signature line)}))))
                   vec)
+        local-call-arities (->> defs
+                                (keep (fn [{:keys [raw-symbol method_arity]}]
+                                        (when-let [fn-name (some-> raw-symbol str (str/split #"/" 2) last)]
+                                          [fn-name method_arity])))
+                                (reduce (fn [acc [fn-name arity]]
+                                          (update acc fn-name (fnil conj #{}) arity))
+                                        {}))
         ends (->> defs
                   (map-indexed
                    (fn [idx d]
@@ -1505,7 +1578,10 @@
                           (let [start-line (:start-line d)
                                 body-lines (subvec lines (dec start-line) end-line)
                                 body (str/join "\n" body-lines)
-                                method-arity (:method_arity d)]
+                                method-arity (:method_arity d)
+                                call-arity-index (if (= "defdelegate" (:form d))
+                                                   {}
+                                                   (ex-call-arity-index body))]
                             {:unit_id (cond-> (str path "::" (:raw-symbol d))
                                         (some? method-arity) (str "$arity" method-arity))
                              :kind (:kind d)
@@ -1520,11 +1596,11 @@
                              :imports imports
                              :calls (if (= "defdelegate" (:form d))
                                       (ex-delegate-calls body alias-map)
-                                      (extract-ex-calls body alias-map call-expansion-modules))
+                                      (extract-ex-calls body alias-map call-expansion-modules local-call-arities call-arity-index))
                              :method_arity method-arity
                              :call_arity_by_token (if (= "defdelegate" (:form d))
                                                     {}
-                                                    (ex-call-arity-index body))
+                                                    call-arity-index)
                              :ex_form (:form d)
                              :parser_mode "full"})))
                    vec)]
@@ -1621,27 +1697,30 @@
         [(str base "." suffix) (str base "/" suffix)])
       [])))
 
-(defn- py-expand-symbol-import [token symbol-aliases]
-  (when-let [resolved (get symbol-aliases (str token))]
-    [(str resolved)
-     (str/replace (str resolved) #"/" ".")]))
+(defn- py-expand-symbol-import [token symbol-aliases local-call-names]
+  (when (not (contains? local-call-names (str token)))
+    (when-let [resolved (get symbol-aliases (str token))]
+      [(str resolved)
+       (str/replace (str resolved) #"/" ".")])))
 
-(defn- py-test-target-modules [module imports path]
-  (if (py-test-path? path)
-    (->> (concat [(py-strip-test-module module)] imports)
-         (remove #(or (str/blank? %)
-                      (= % "unittest")
-                      (= % "pytest")))
-         distinct
-         vec)
-    []))
+(defn- py-local-call-names [defs]
+  (->> defs
+       (keep :raw-symbol)
+       (map (fn [symbol]
+              (let [s (str symbol)]
+                (cond
+                  (str/includes? s "/") (last (str/split s #"/" 2))
+                  (str/includes? s ".") (last (str/split s #"\."))
+                  :else s))))
+       (remove str/blank?)
+       set))
 
-(defn- extract-py-calls [body {:keys [module class-name module-aliases symbol-aliases]}]
+(defn- extract-py-calls [body {:keys [module class-name module-aliases symbol-aliases local-call-names]}]
   (->> (re-seq py-call-re body)
        (map second)
        (mapcat (fn [token]
                  (let [module-alias-token (py-expand-module-alias token module-aliases)
-                       imported-symbols (py-expand-symbol-import token symbol-aliases)
+                       imported-symbols (py-expand-symbol-import token symbol-aliases local-call-names)
                        self-symbols (if (and class-name module)
                                       (py-expand-self-token token module class-name)
                                       [])
@@ -1654,6 +1733,15 @@
        (remove #(contains? py-call-stop %))
        distinct
        vec))
+(defn- py-test-target-modules [module imports path]
+  (if (py-test-path? path)
+    (->> (concat [(py-strip-test-module module)] imports)
+         (remove #(or (str/blank? %)
+                      (= % "unittest")
+                      (= % "pytest")))
+         distinct
+         vec)
+    []))
 
 (defn- parse-python [path lines]
   (let [line-count (count lines)
@@ -1702,6 +1790,7 @@
 
                      :else
                      (recur (inc idx) pruned out)))))
+        local-call-names (py-local-call-names defs)
         starts (mapv :start-line defs)
         ends (unit-end-lines starts line-count)
         units (->> (map vector defs ends)
@@ -1723,7 +1812,8 @@
                              :calls (extract-py-calls body {:module module
                                                            :class-name (:class-name d)
                                                            :module-aliases module-aliases
-                                                           :symbol-aliases symbol-aliases})
+                                                           :symbol-aliases symbol-aliases
+                                                           :local-call-names local-call-names})
                              :parser_mode "full"})))
                    vec)]
     {:language "python"

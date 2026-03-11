@@ -16,16 +16,26 @@
                "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n(defn process-order [ctx order]\n  (validate-order order)\n  (str/join \"-\" [\"ok\" (:id order)]))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n")
   (write-file! root "test/my/app/order_test.clj"
                "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
+  (write-file! root "test/my/app/order_support.clj"
+               "(ns my.app.order-support\n  (:require [my.app.order :as order]))\n\n(defn run-order-helper []\n  (order/process-order {} {:id 1}))\n")
+  (write-file! root "test/my/app/order_support_test.clj"
+               "(ns my.app.order-support-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order-support :as support]))\n\n(deftest support-wraps-order-processing\n  (is (string? (support/run-order-helper))))\n")
+  (write-file! root "src/my/app/alt_order.clj"
+               "(ns my.app.alt-order)\n\n(defn validate-order [order]\n  (assoc order :alt true))\n")
+  (write-file! root "src/my/app/alias_workflow.clj"
+               "(ns my.app.alias-workflow\n  (:require [my.app.order :as primary]\n            [my.app.alt-order :as alternate]))\n\n(defn prepare-primary [order]\n  (primary/validate-order order))\n\n(defn prepare-alternate [order]\n  (alternate/validate-order order))\n")
   (write-file! root "src/my/app/macros.clj"
-               "(ns my.app.macros\n  (:require [my.app.order :as order]))\n\n(comment\n  (defn hidden-helper [order]\n    (:id order)))\n\n(defn macro-helper [order]\n  order)\n\n(defmacro with-order [order & body]\n  `(let [current-order# ~order]\n     ~@body))\n\n(defmacro with-validated-order [order & body]\n  (macro-helper order)\n  `(let [validated-order# (order/validate-order ~order)]\n     ~@body))\n\n(defmacro with-prepared-order [order & body]\n  `(with-validated-order ~order\n     ~@body))\n\n(defmacro with-listed-validation [order & body]\n  (list 'do\n        (list 'order/validate-order order)\n        (cons 'do body)))\n\n(defmacro with-listed-prepared [order & body]\n  (list 'with-listed-validation order\n        (cons 'do body)))\n\n(defmacro with-composed-validation [order & body]\n  (concat (list 'do)\n          (list (list 'order/validate-order order))\n          body))\n\n(defmacro with-branching-validation [order mode & body]\n  (if (= mode :apply)\n    (apply list 'do\n           (concat (list (list 'order/validate-order order))\n                   body))\n    (concat (list 'do)\n            (into []\n                  (concat [(list 'order/validate-order order)]\n                          body)))))\n\n(defmacro with-letfn-validation [order & body]\n  (letfn [(emit-validation []\n            (list 'order/validate-order order))]\n    (apply list 'do\n           (concat [(emit-validation)]\n                   body))))\n\n(defmacro with-side-effect-helper [order & body]\n  (letfn [(emit-validation []\n            (list 'order/validate-order order))]\n    (emit-validation)\n    `(do ~@body)))\n\n(defn visible-helper [order]\n  (with-order order\n    (:id order)))\n")
+               "(ns my.app.macros\n  (:require [my.app.order :as order]\n            [my.app.alt-order :as alt-order]))\n\n(comment\n  (defn hidden-helper [order]\n    (:id order)))\n\n(defn macro-helper [order]\n  order)\n\n(defmacro with-order [order & body]\n  `(let [current-order# ~order]\n     ~@body))\n\n(defmacro with-validated-order [order & body]\n  (macro-helper order)\n  `(let [validated-order# (order/validate-order ~order)]\n     ~@body))\n\n(defmacro with-prepared-order [order & body]\n  `(with-validated-order ~order\n     ~@body))\n\n(defmacro with-listed-validation [order & body]\n  (list 'do\n        (list 'order/validate-order order)\n        (cons 'do body)))\n\n(defmacro with-listed-prepared [order & body]\n  (list 'with-listed-validation order\n        (cons 'do body)))\n\n(defmacro with-composed-validation [order & body]\n  (concat (list 'do)\n          (list (list 'order/validate-order order))\n          body))\n\n(defmacro with-branching-validation [order mode & body]\n  (if (= mode :apply)\n    (apply list 'do\n           (concat (list (list 'order/validate-order order))\n                   body))\n    (concat (list 'do)\n            (into []\n                  (concat [(list 'order/validate-order order)]\n                          body)))))\n\n(defmacro with-ambiguous-branch-validation [order mode & body]\n  (if (= mode :primary)\n    (apply list 'do\n           (concat (list (list 'order/validate-order order))\n                   body))\n    (apply list 'do\n           (concat (list (list 'alt-order/validate-order order))\n                   body))))\n\n(defmacro with-letfn-validation [order & body]\n  (letfn [(emit-validation []\n            (list 'order/validate-order order))]\n    (apply list 'do\n           (concat [(emit-validation)]\n                   body))))\n\n(defmacro with-side-effect-helper [order & body]\n  (letfn [(emit-validation []\n            (list 'order/validate-order order))]\n    (emit-validation)\n    `(do ~@body)))\n\n(defn visible-helper [order]\n  (with-order order\n    (:id order)))\n")
   (write-file! root "src/my/app/workflow.clj"
-               "(ns my.app.workflow\n  (:require [my.app.macros :refer [with-validated-order with-prepared-order with-listed-prepared with-composed-validation with-branching-validation with-letfn-validation with-side-effect-helper]]))\n\n(defn prepare-order [order]\n  (with-validated-order order\n    {:prepared true}))\n\n(defn prepare-prevalidated-order [order]\n  (with-prepared-order order\n    {:prepared true :mode :nested}))\n\n(defn prepare-listed-order [order]\n  (with-listed-prepared order\n    {:prepared true :mode :list-generated}))\n\n(defn prepare-composed-order [order]\n  (with-composed-validation order\n    {:prepared true :mode :concat-generated}))\n\n(defn prepare-branching-order [order]\n  (with-branching-validation order :apply\n    {:prepared true :mode :branch-generated}))\n\n(defn prepare-letfn-order [order]\n  (with-letfn-validation order\n    {:prepared true :mode :letfn-generated}))\n\n(defn prepare-side-effect-order [order]\n  (with-side-effect-helper order\n    {:prepared true :mode :helper-side-effect}))\n")
+               "(ns my.app.workflow\n  (:require [my.app.macros :refer [with-validated-order with-prepared-order with-listed-prepared with-composed-validation with-branching-validation with-ambiguous-branch-validation with-letfn-validation with-side-effect-helper]]))\n\n(defn prepare-order [order]\n  (with-validated-order order\n    {:prepared true}))\n\n(defn prepare-prevalidated-order [order]\n  (with-prepared-order order\n    {:prepared true :mode :nested}))\n\n(defn prepare-listed-order [order]\n  (with-listed-prepared order\n    {:prepared true :mode :list-generated}))\n\n(defn prepare-composed-order [order]\n  (with-composed-validation order\n    {:prepared true :mode :concat-generated}))\n\n(defn prepare-branching-order [order]\n  (with-branching-validation order :apply\n    {:prepared true :mode :branch-generated}))\n\n(defn prepare-ambiguous-order [order]\n  (with-ambiguous-branch-validation order :primary\n    {:prepared true :mode :branch-ambiguous}))\n\n(defn prepare-letfn-order [order]\n  (with-letfn-validation order\n    {:prepared true :mode :letfn-generated}))\n\n(defn prepare-side-effect-order [order]\n  (with-side-effect-helper order\n    {:prepared true :mode :helper-side-effect}))\n")
   (write-file! root "src/my/app/shipping.clj"
                "(ns my.app.shipping)\n\n(defmulti route-order (fn [mode payload] mode))\n\n(defn pickup-stop [payload]\n  (:pickup payload))\n\n(defn delivery-stop [payload]\n  (:delivery payload))\n\n(defmethod route-order :pickup [_ payload]\n  (pickup-stop payload))\n\n(defmethod route-order :delivery [_ payload]\n  (delivery-stop payload))\n\n(defn plan-route [mode payload]\n  (route-order mode payload))\n")
   (write-file! root "src/com/acme/CheckoutService.java"
                "package com.acme;\n\nimport java.util.Objects;\nimport static com.acme.IdNormalizer.normalizeImported;\n\npublic class CheckoutService {\n  public String processOrder(String id) {\n    return normalize(id, true);\n  }\n\n  public String processImported(String id) {\n    return normalizeImported(id);\n  }\n\n  public String processImportedStrict(String id) {\n    return normalizeImported(id, true);\n  }\n\n  private String normalize(String id) {\n    return normalize(id, false);\n  }\n\n  private String normalize(String id, boolean strict) {\n    String base = Objects.requireNonNull(id).trim();\n    return strict ? base : base.toLowerCase();\n  }\n}\n")
   (write-file! root "src/com/acme/IdNormalizer.java"
                "package com.acme;\n\npublic class IdNormalizer {\n  public static String normalizeImported(String id) {\n    return id.trim();\n  }\n\n  public static String normalizeImported(String id, boolean strict) {\n    String base = id.trim();\n    return strict ? base : base.toLowerCase();\n  }\n}\n")
+  (write-file! root "src/com/acme/AuditService.java"
+               "package com.acme;\n\nimport static com.acme.IdNormalizer.normalizeImported;\n\npublic class AuditService {\n  public String processLocalCollision(String id) {\n    return normalizeImported(id);\n  }\n\n  public String processThisCollision(String id) {\n    return this.normalizeImported(id);\n  }\n\n  public String processImportedCollision(String id) {\n    return IdNormalizer.normalizeImported(id);\n  }\n\n  private String normalizeImported(String id) {\n    return \"[\" + id.trim() + \"]\";\n  }\n}\n")
   (write-file! root "lib/my_app/order.ex"
                "defmodule MyApp.Order do\n  import MyApp.Validator\n  alias MyApp.{Validator, Payments.Adapter}\n  alias Adapter.Client, as: BillingClient\n  alias Validator, as: V\n\n  def process_order(ctx, order) do\n    validate(order)\n    Adapter.charge(order)\n    BillingClient.charge(order)\n    {:ok, order}\n  end\n\n  def process_with_alias(ctx, order) do\n    V.validate(order)\n    {:ok, order}\n  end\n\n  defp to_status(order) do\n    Map.get(order, :status, :new)\n  end\n\n  defdelegate charge(order), to: MyApp.Validator\nend\n")
   (write-file! root "lib/my_app/validator.ex"
@@ -38,12 +48,18 @@
                "defmodule MyApp.Formatter do\n  defmacro __using__(_opts) do\n    quote do\n      import MyApp.Formatter\n    end\n  end\n\n  def normalize(order) do\n    {:ok, order}\n  end\nend\n")
   (write-file! root "lib/my_app/use_client.ex"
                "defmodule MyApp.UseClient do\n  use MyApp.Formatter\n\n  def process_used(order) do\n    normalize(order)\n  end\nend\n")
+  (write-file! root "lib/my_app/local_formatter.ex"
+               "defmodule MyApp.LocalFormatter do\n  use MyApp.Formatter\n\n  def normalize(order) do\n    {:local, order}\n  end\n\n  def process_local(order) do\n    normalize(order)\n  end\nend\n")
+  (write-file! root "lib/my_app/local_overloaded_formatter.ex"
+               "defmodule MyApp.LocalOverloadedFormatter do\n  use MyApp.Formatter\n\n  def normalize(order, mode) do\n    {order, mode}\n  end\n\n  def process_imported_one(order) do\n    normalize(order)\n  end\n\n  def process_local_two(order) do\n    normalize(order, :strict)\n  end\nend\n")
   (write-file! root "lib/my_app/overloads.ex"
                "defmodule MyApp.Overloads do\n  def normalize(order) do\n    normalize(order, :default)\n  end\n\n  def normalize(order, mode) do\n    {order, mode}\n  end\n\n  def call_one(order) do\n    normalize(order)\n  end\n\n  def call_two(order) do\n    normalize(order, :strict)\n  end\nend\n")
   (write-file! root "test/my_app/order_test.exs"
                "defmodule MyApp.OrderTest do\n  use ExUnit.Case\n  alias MyApp.Order\n\n  test \"process order stays linked to source module\" do\n    assert {:ok, %{id: 1}} = {:ok, Order.process_order(%{}, %{id: 1})}\n  end\nend\n")
   (write-file! root "app/orders.py"
                "from app.validators import validate_order\nimport app.validators as validators\n\nclass OrderService:\n    def process_order(self, order):\n        return validate_order(order)\n\n    def process_alias(self, order):\n        return validators.validate_order(order)\n\n    def process_local(self, order):\n        return self.validate_local(order)\n\n    def validate_local(self, order):\n        return bool(order)\n\n\ndef validate_local(order):\n    return bool(order)\n")
+  (write-file! root "app/collision_orders.py"
+               "from app.validators import validate_order\nimport app.validators as validators\n\nclass CollisionService:\n    def validate_order(self, order):\n        return {\"local\": bool(order)}\n\n    def process_method(self, order):\n        return self.validate_order(order)\n\n    def process_module_alias(self, order):\n        return validators.validate_order(order)\n\n\ndef validate_order(order):\n    return {\"top_level\": bool(order)}\n\n\ndef process_top_level(order):\n    return validate_order(order)\n")
   (write-file! root "app/validators.py"
                "def validate_order(order):\n    return bool(order and order.get(\"id\"))\n")
   (write-file! root "app/orders_test.py"
@@ -174,6 +190,14 @@
         result (sci/resolve-context index sample-query)
         related-tests (get-in result [:context_packet :impact_hints :related_tests])]
     (is (some #{"test/my/app/order_test.clj"} related-tests))))
+
+(deftest clojure-related-tests-link-via-indirect-test-helper-namespace-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-clj-indirect-related-tests" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        result (sci/resolve-context index sample-query)
+        related-tests (get-in result [:context_packet :impact_hints :related_tests])]
+    (is (some #{"test/my/app/order_support_test.clj"} related-tests))))
 
 (deftest retrieval-policy-can-change-ranking-band-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-policy-test" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -310,6 +334,52 @@
     (is normalize-id)
     (is (some #(= "MyApp.UseClient/process_used" (:symbol %)) callers))))
 
+(deftest elixir-local-function-beats-use-expanded-import-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-local-precedence-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        local-units (sci/query-units storage tmp-root {:module "MyApp.LocalFormatter" :limit 20})
+        formatter-units (sci/query-units storage tmp-root {:module "MyApp.Formatter" :limit 20})
+        local-normalize-id (some->> local-units
+                                    (filter #(= "MyApp.LocalFormatter/normalize" (:symbol %)))
+                                    first
+                                    :unit_id)
+        shared-normalize-id (some->> formatter-units
+                                     (filter #(= "MyApp.Formatter/normalize" (:symbol %)))
+                                     first
+                                     :unit_id)
+        local-callers (sci/query-callers storage tmp-root local-normalize-id {:limit 20})
+        shared-callers (sci/query-callers storage tmp-root shared-normalize-id {:limit 20})]
+    (is local-normalize-id)
+    (is shared-normalize-id)
+    (is (some #(= "MyApp.LocalFormatter/process_local" (:symbol %)) local-callers))
+    (is (not-any? #(= "MyApp.LocalFormatter/process_local" (:symbol %)) shared-callers))))
+
+(deftest elixir-local-shadowing-is-arity-aware-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-local-arity-shadowing-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        overloaded-units (sci/query-units storage tmp-root {:module "MyApp.LocalOverloadedFormatter" :limit 20})
+        formatter-units (sci/query-units storage tmp-root {:module "MyApp.Formatter" :limit 20})
+        local-normalize-2-id (some->> overloaded-units
+                                       (filter #(and (= "MyApp.LocalOverloadedFormatter/normalize" (:symbol %))
+                                                     (= 2 (:method_arity %))))
+                                       first
+                                       :unit_id)
+        formatter-normalize-1-id (some->> formatter-units
+                                          (filter #(= "MyApp.Formatter/normalize" (:symbol %)))
+                                          first
+                                          :unit_id)
+        local-callers (sci/query-callers storage tmp-root local-normalize-2-id {:limit 20})
+        formatter-callers (sci/query-callers storage tmp-root formatter-normalize-1-id {:limit 20})]
+    (is local-normalize-2-id)
+    (is formatter-normalize-1-id)
+    (is (some #(= "MyApp.LocalOverloadedFormatter/process_local_two" (:symbol %)) local-callers))
+    (is (not-any? #(= "MyApp.LocalOverloadedFormatter/process_imported_one" (:symbol %)) local-callers))
+    (is (some #(= "MyApp.LocalOverloadedFormatter/process_imported_one" (:symbol %)) formatter-callers))))
+
 (deftest elixir-arity-aware-caller-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-elixir-arity-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -398,6 +468,32 @@
     (is (not-any? #(= "com.acme.CheckoutService#processImportedStrict" (:symbol %)) callers-1))
     (is (some #(= "com.acme.CheckoutService#processImportedStrict" (:symbol %)) callers-2))))
 
+(deftest java-local-method-beats-static-import-on-same-name-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-java-collision-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        audit-units (sci/query-units storage tmp-root {:module "com.acme.AuditService" :limit 20})
+        normalizer-units (sci/query-units storage tmp-root {:module "com.acme.IdNormalizer" :limit 20})
+        local-normalize-id (some->> audit-units
+                                    (filter #(= "com.acme.AuditService#normalizeImported" (:symbol %)))
+                                    first
+                                    :unit_id)
+        imported-normalize-id (some->> normalizer-units
+                                       (filter #(and (= "com.acme.IdNormalizer#normalizeImported" (:symbol %))
+                                                     (= 1 (:method_arity %))))
+                                       first
+                                       :unit_id)
+        local-callers (sci/query-callers storage tmp-root local-normalize-id {:limit 20})
+        imported-callers (sci/query-callers storage tmp-root imported-normalize-id {:limit 20})]
+    (is local-normalize-id)
+    (is imported-normalize-id)
+    (is (some #(= "com.acme.AuditService#processLocalCollision" (:symbol %)) local-callers))
+    (is (some #(= "com.acme.AuditService#processThisCollision" (:symbol %)) local-callers))
+    (is (not-any? #(= "com.acme.AuditService#processImportedCollision" (:symbol %)) local-callers))
+    (is (some #(= "com.acme.AuditService#processImportedCollision" (:symbol %)) imported-callers))
+    (is (not-any? #(= "com.acme.AuditService#processLocalCollision" (:symbol %)) imported-callers))))
+
 (deftest python-import-and-self-call-resolution-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-callers-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -414,6 +510,36 @@
     (is (some #(= "app.orders.OrderService/process_order" (:symbol %)) validate-callers))
     (is (some #(= "app.orders.OrderService/process_alias" (:symbol %)) validate-callers))
     (is (some #(= "app.orders.OrderService/process_local" (:symbol %)) local-callers))))
+
+(deftest python-local-function-and-method-beat-imported-symbols-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-collision-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        collision-units (sci/query-units storage tmp-root {:module "app.collision_orders" :limit 20})
+        validator-units (sci/query-units storage tmp-root {:module "app.validators" :limit 20})
+        local-top-level-id (some->> collision-units
+                                    (filter #(= "app.collision_orders/validate_order" (:symbol %)))
+                                    first
+                                    :unit_id)
+        local-method-id (some->> collision-units
+                                 (filter #(= "app.collision_orders.CollisionService/validate_order" (:symbol %)))
+                                 first
+                                 :unit_id)
+        imported-validator-id (some->> validator-units
+                                       (filter #(= "app.validators/validate_order" (:symbol %)))
+                                       first
+                                       :unit_id)
+        top-level-callers (sci/query-callers storage tmp-root local-top-level-id {:limit 20})
+        method-callers (sci/query-callers storage tmp-root local-method-id {:limit 20})
+        imported-callers (sci/query-callers storage tmp-root imported-validator-id {:limit 20})]
+    (is local-top-level-id)
+    (is local-method-id)
+    (is imported-validator-id)
+    (is (some #(= "app.collision_orders/process_top_level" (:symbol %)) top-level-callers))
+    (is (some #(= "app.collision_orders.CollisionService/process_method" (:symbol %)) method-callers))
+    (is (some #(= "app.collision_orders.CollisionService/process_module_alias" (:symbol %)) imported-callers))
+    (is (not-any? #(= "app.collision_orders/process_top_level" (:symbol %)) imported-callers))))
 
 (deftest python-related-tests-link-via-test-module-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-python-related-tests" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -544,6 +670,30 @@
     (is (some #(= "my.app.order/process-order" (:symbol %)) callers))
     (is (some #(= "my.app.order-test/process-order-test" (:symbol %)) callers))))
 
+(deftest clojure-alias-heavy-same-name-var-resolution-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-alias-same-name-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        primary-units (sci/query-units storage tmp-root {:module "my.app.order" :limit 20})
+        alternate-units (sci/query-units storage tmp-root {:module "my.app.alt-order" :limit 20})
+        primary-validate-id (some->> primary-units
+                                     (filter #(= "my.app.order/validate-order" (:symbol %)))
+                                     first
+                                     :unit_id)
+        alternate-validate-id (some->> alternate-units
+                                       (filter #(= "my.app.alt-order/validate-order" (:symbol %)))
+                                       first
+                                       :unit_id)
+        primary-callers (sci/query-callers storage tmp-root primary-validate-id {:limit 20})
+        alternate-callers (sci/query-callers storage tmp-root alternate-validate-id {:limit 20})]
+    (is primary-validate-id)
+    (is alternate-validate-id)
+    (is (some #(= "my.app.alias-workflow/prepare-primary" (:symbol %)) primary-callers))
+    (is (not-any? #(= "my.app.alias-workflow/prepare-alternate" (:symbol %)) primary-callers))
+    (is (some #(= "my.app.alias-workflow/prepare-alternate" (:symbol %)) alternate-callers))
+    (is (not-any? #(= "my.app.alias-workflow/prepare-primary" (:symbol %)) alternate-callers))))
+
 (deftest clojure-regex-parser-ignores-nested-comment-defs-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-regex-macro-boundaries" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -559,6 +709,7 @@
     (is (= #{"my.app.macros/macro-helper"
              "my.app.macros/with-letfn-validation"
              "my.app.macros/with-branching-validation"
+             "my.app.macros/with-ambiguous-branch-validation"
              "my.app.macros/with-composed-validation"
              "my.app.macros/with-order"
              "my.app.macros/with-listed-prepared"
@@ -617,6 +768,28 @@
     (is validate-unit-id)
     (is (some #(= "my.app.workflow/prepare-composed-order" (:symbol %)) callers))
     (is (some #(= "my.app.workflow/prepare-branching-order" (:symbol %)) callers))))
+
+(deftest clojure-ambiguous-branch-generated-ownership-stays-conservative-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-ambiguous-branch-ownership" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage (sci/in-memory-storage)
+        _index (sci/create-index {:root_path tmp-root :storage storage})
+        primary-units (sci/query-units storage tmp-root {:module "my.app.order" :limit 20})
+        alternate-units (sci/query-units storage tmp-root {:module "my.app.alt-order" :limit 20})
+        primary-validate-id (some->> primary-units
+                                     (filter #(= "my.app.order/validate-order" (:symbol %)))
+                                     first
+                                     :unit_id)
+        alternate-validate-id (some->> alternate-units
+                                       (filter #(= "my.app.alt-order/validate-order" (:symbol %)))
+                                       first
+                                       :unit_id)
+        primary-callers (sci/query-callers storage tmp-root primary-validate-id {:limit 20})
+        alternate-callers (sci/query-callers storage tmp-root alternate-validate-id {:limit 20})]
+    (is primary-validate-id)
+    (is alternate-validate-id)
+    (is (not-any? #(= "my.app.workflow/prepare-ambiguous-order" (:symbol %)) primary-callers))
+    (is (not-any? #(= "my.app.workflow/prepare-ambiguous-order" (:symbol %)) alternate-callers))))
 
 (deftest clojure-letfn-helper-generated-ownership-adds-caller-edge-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-clj-letfn-macro-ownership" (make-array java.nio.file.attribute.FileAttribute 0)))
