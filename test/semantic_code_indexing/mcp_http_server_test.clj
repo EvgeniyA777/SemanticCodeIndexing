@@ -154,6 +154,32 @@
                    (get-in resolve-response [:body :result :structuredContent :query_ingress_mode])))
             (is (= ["paths"]
                    (get-in resolve-response [:body :result :structuredContent :normalized_query_summary :target_keys])))))
+        (testing "invalid shorthand returns repair-oriented error over streamable HTTP"
+          (let [create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 41
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path tmp-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 42
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :query {}}}}
+                                           {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status resolve-response)))
+            (is (true? (get-in resolve-response [:body :result :isError])))
+            (is (= "invalid_query"
+                   (get-in resolve-response [:body :result :structuredContent :details :code])))
+            (is (= "retry_resolve_context_with_structured_query"
+                   (get-in resolve-response [:body :result :structuredContent :details :details :recommended_next_step])))))
         (testing "missing session is rejected for non-initialize calls"
           (let [missing-session (request! "POST"
                                           (str base-url "/mcp")

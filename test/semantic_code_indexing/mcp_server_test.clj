@@ -368,6 +368,20 @@
                    (get-in resolve-data [:normalized_query_summary :target_keys])))
             (is (string? (:selection_id resolve-data)))))
 
+        (testing "invalid shorthand returns a repair-oriented error"
+          (let [resolve-response (call-tool! handle 67 "resolve_context" {:index_id index-id
+                                                                          :query {}})
+                result (:result resolve-response)]
+            (is (true? (:isError result)))
+            (is (= "invalid_query"
+                   (get-in result [:structuredContent :details :code])))
+            (is (= "retry_resolve_context_with_structured_query"
+                   (get-in result [:structuredContent :details :details :recommended_next_step])))
+            (is (= #{"schema_version" "intent" "targets" "constraints" "hints" "options" "trace"}
+                   (set (get-in result [:structuredContent :details :details :missing_sections]))))
+            (is (= "code_understanding"
+                   (get-in result [:structuredContent :details :details :minimal_query_skeleton :intent :purpose])))))
+
         (testing "expand_context and fetch_context_detail return staged artifacts"
           (let [resolve-response (call-tool! handle 61 "resolve_context" {:index_id index-id
                                                                           :query sample-query})

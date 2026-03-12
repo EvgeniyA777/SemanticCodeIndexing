@@ -98,6 +98,9 @@
    :include_impact_hints true
    :allow_raw_code_escalation false})
 
+(def ^:private required-query-sections
+  [:schema_version :intent :targets :constraints :hints :options :trace])
+
 (defn now-ms []
   (System/currentTimeMillis))
 
@@ -503,6 +506,38 @@
 
     :else nil))
 
+(defn- minimal-retrieval-query-skeleton []
+  {:api_version "1.0"
+   :schema_version "1.0"
+   :intent {:purpose "code_understanding"
+            :details "Describe the coding task or repository question here."}
+   :targets {:paths ["."]}
+   :constraints {:token_budget 1600
+                 :max_raw_code_level "enclosing_unit"
+                 :freshness "current_snapshot"}
+   :hints {:prefer_definitions_over_callers true
+           :prefer_breadth_over_depth true}
+   :options {:include_tests false
+             :include_impact_hints true
+             :allow_raw_code_escalation false}
+   :trace {:trace_id "00000000-0000-4000-8000-000000000000"
+           :request_id "retry-resolve-context-001"
+           :actor_id "mcp_client"}})
+
+(defn- missing-query-sections [query]
+  (->> required-query-sections
+       (remove #(contains? (or query {}) %))
+       vec))
+
+(defn- enrich-invalid-query [message query]
+  (ex-info message
+           {:type :invalid_query
+            :message message
+            :details {:missing_sections (missing-query-sections query)
+                      :invalid_field_paths []
+                      :minimal_query_skeleton (minimal-retrieval-query-skeleton)
+                      :recommended_next_step "retry_resolve_context_with_structured_query"}}))
+
 (defn tool-repo-map [state args]
   (when-not (map? args)
     (invalid-request "repo_map arguments must be an object"))
@@ -533,27 +568,39 @@
         retrieval-policy (ensure-map-or-nil (:retrieval_policy args) "retrieval_policy")]
     (when-not query
       (invalid-request "query is required"))
-    (let [{:keys [query query_normalized query_ingress_mode normalized_query_summary]
+    (let [normalized (normalize-mcp-query state query)
+          {:keys [query query_normalized query_ingress_mode normalized_query_summary]
            :or {query_normalized false
                 query_ingress_mode "canonical"}}
-          (or (normalize-mcp-query state query)
+          (or normalized
               {:query query
                :query_normalized false
                :query_ingress_mode "canonical"})]
+      (when (and (not normalized)
+                 (not (canonical-query-shape? query)))
+        (throw (enrich-invalid-query
+                "resolve_context query shorthand could not be normalized safely"
+                query)))
       (activation/ensure-request-languages-active!
        {:active_languages (get-in entry [:index :active_languages])
         :supported_languages (get-in entry [:index :supported_languages])}
        {:query query})
-      (let [result (-> (cond-> (sci/resolve-context (:index entry)
-                                                    query
-                                                    {:suppress_usage_metrics true
-                                                     :retrieval_policy retrieval-policy
-                                                     :policy_registry (:policy_registry @state)})
-                             true (assoc :index_id (:index_id entry)
-                                         :project_context (project-context-for-entry entry)
-                                         :query_normalized query_normalized
-                                         :query_ingress_mode query_ingress_mode)
-                             normalized_query_summary (assoc :normalized_query_summary normalized_query_summary))
+      (let [resolved (try
+                       (sci/resolve-context (:index entry)
+                                            query
+                                            {:suppress_usage_metrics true
+                                             :retrieval_policy retrieval-policy
+                                             :policy_registry (:policy_registry @state)})
+                       (catch Exception e
+                         (if (= :invalid_query (:type (ex-data e)))
+                           (throw (enrich-invalid-query "invalid retrieval query" query))
+                           (throw e))))
+            result (-> (cond-> resolved
+                         true (assoc :index_id (:index_id entry)
+                                     :project_context (project-context-for-entry entry)
+                                     :query_normalized query_normalized
+                                     :query_ingress_mode query_ingress_mode)
+                         normalized_query_summary (assoc :normalized_query_summary normalized_query_summary))
                        (add-next-step-guidance "expand_context"))
             result-meta (meta result)]
         (with-usage-event
