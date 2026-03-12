@@ -92,6 +92,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Enable HTTP/gRPC usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:runtime-http` or `clojure -M:runtime-grpc`
 - Summarize compact normalized MCP retrieval memory from a usage-metrics sink in library code: `(sci/compact-mcp-query-memory usage-metrics-sink {:surface "mcp"})`
 - If `SCI_MCP_ALLOWED_ROOTS` is missing, the MCP server now defaults the allowlist to the current `cwd` and prints a warning with explicit override examples; it does not prompt interactively because MCP uses stdio transport
+- Client-facing MCP responses do not echo the configured allowlist values: `health` omits `allowed_roots`, and `forbidden_root` errors return only the requested `root_path` plus a remediation hint
 - MCP HTTP server defaults to `127.0.0.1` and supports `--transport-mode dual|streamable|sse`; Streamable HTTP uses `POST /mcp` with `Mcp-Session-Id`, while legacy SSE uses `GET /mcp/sse` plus `POST /mcp/messages`
 - Run minimal HTTP edge: `clojure -M:runtime-http --host 127.0.0.1 --port 8787`
 - Run minimal gRPC edge: `clojure -M:runtime-grpc --host 127.0.0.1 --port 8789`

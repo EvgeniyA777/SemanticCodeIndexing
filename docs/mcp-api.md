@@ -37,6 +37,11 @@ The server does not prompt interactively for this choice because `stdin`/`stdout
 
 The MCP server exposes only `tools` capability in v1 and keeps cached indexes in-process for the lifetime of the server/session.
 
+Client-facing MCP payloads do not echo the configured allowlist values. In particular:
+
+- `health` does not return `allowed_roots`
+- `forbidden_root` errors return the requested `root_path` plus a remediation hint, but not the configured allowlist
+
 `stdio` stays session-scoped to the local process. `mcp-http` adds in-memory sessions with:
 
 - `Mcp-Session-Id` for Streamable HTTP after `initialize`
@@ -341,6 +346,7 @@ Returns:
 
 - Every `root_path` must be inside `SCI_MCP_ALLOWED_ROOTS`.
 - `paths` must be relative and must not contain traversal segments such as `..`.
+- Client-facing MCP responses do not disclose the configured `SCI_MCP_ALLOWED_ROOTS` values.
 - Cached indexes are evicted by LRU when the process exceeds `SCI_MCP_MAX_INDEXES`.
 - If an `index_id` is evicted or unknown, the server returns an `index_not_found` tool error and the client should call `create_index` again.
 - `selection_id` artifacts are snapshot-bound. Reusing a selection with the wrong `snapshot_id` returns `snapshot_mismatch`.
