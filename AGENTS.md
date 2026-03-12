@@ -12,6 +12,14 @@
 
 ## MCP-First Workflow For This Repo
 
+## Mandatory CCC Bootstrap
+
+- Before first-pass repo exploration, check `docs/code-context.md` and `.ccc/state.edn`.
+- If both exist, read `docs/code-context.md` first and treat it as the architecture-summary layer before broader exploration.
+- If either file is missing, run `./scripts/agent-bootstrap.sh` before any broader exploration.
+- `./scripts/agent-bootstrap.sh` is the canonical bootstrap entrypoint; it runs `clojure -M:ccc init --root . --skip-hook` only when the CCC artifacts are missing.
+- Do not refresh CCC artifacts on every task by default; only refresh them when a task explicitly needs regenerated compression outputs or when the user asks for it.
+
 - If the `semantic-code-indexing` MCP server is available, do not begin with `Analyze`, directory listing, wildcard search, or broad manual file crawling.
 - Use MCP before manual file crawling.
 - First-pass flow is strict:

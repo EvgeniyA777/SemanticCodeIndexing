@@ -18,11 +18,12 @@
           "--format" (recur (assoc m :format (keyword (first more))) (rest more))
           "--changed" (recur (assoc m :changed_only true) more)
           "--force-hook" (recur (assoc m :force true) more)
+          "--skip-hook" (recur (assoc m :install_hook false) more)
           (recur (update m :positionals conj k) more))))))
 
 (defn- usage! []
   (binding [*out* *err*]
-    (println "Usage: clojure -M:ccc <init|refresh|check|summary|export> [--root <repo-root>] [--changed] [--out <path>] [--format markdown|json|edn|dot]")
+    (println "Usage: clojure -M:ccc <init|refresh|check|summary|export> [--root <repo-root>] [--changed] [--skip-hook] [--out <path>] [--format markdown|json|edn|dot]")
     (flush))
   (System/exit 1))
 
@@ -41,9 +42,10 @@
   (some-> path java.io.File. .getParentFile .mkdirs)
   (spit path content))
 
-(defn- command-init [{:keys [root_path force]}]
+(defn- command-init [{:keys [root_path force install_hook]}]
   (let [index (build-index root_path)
-        result (sci/init-project-compression! index {:force force})]
+        result (sci/init-project-compression! index {:force force
+                                                     :install_hook install_hook})]
     (println (str "compression " (get-in result [:refresh :status]) " at " (get-in result [:refresh :paths :markdown_path])))
     (println (str "hook " (if (get-in result [:hook :installed?]) "installed" "skipped")
                   " (" (get-in result [:hook :reason]) ")"))

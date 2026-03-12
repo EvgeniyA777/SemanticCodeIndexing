@@ -1,5 +1,15 @@
 # Project Instructions
 
+## Mandatory CCC bootstrap
+
+Before first-pass repo exploration:
+
+1. Check whether `docs/code-context.md` exists.
+2. Check whether `.ccc/state.edn` exists.
+3. If both exist, read `docs/code-context.md` first and treat it as the architecture summary layer.
+4. If either file is missing, run `./scripts/agent-bootstrap.sh` before broader exploration.
+5. Do not regenerate CCC artifacts by default once they exist unless the task explicitly requires a refresh.
+
 ## MCP-first workflow (mandatory)
 
 When `semantic-code-indexing` MCP is available, ALWAYS use it as the primary codebase exploration tool.

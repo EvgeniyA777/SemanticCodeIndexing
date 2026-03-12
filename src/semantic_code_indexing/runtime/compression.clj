@@ -301,7 +301,7 @@
                                      ["- none"])))
                                 (take 12 namespace-entries))]
     (vec
-      (concat
+     (concat
       [(str "# Code Context: " (:project_name artifact))
        ""
        (str "- fingerprint: " (:source_fingerprint artifact))
@@ -452,6 +452,10 @@
   ([index] (init-project-compression! index {}))
   ([index opts]
    (let [refresh-result (refresh-project-compression index opts)
-         hook-result (install-pre-push-hook! (:root_path index) opts)]
+         install-hook? (not (false? (:install_hook opts)))
+         hook-result (if install-hook?
+                       (install-pre-push-hook! (:root_path index) opts)
+                       {:installed? false
+                        :reason "hook_skipped"})]
      {:refresh refresh-result
       :hook hook-result})))
