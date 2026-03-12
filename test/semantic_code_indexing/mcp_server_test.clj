@@ -350,6 +350,14 @@
             (is (= "completed" (:result_status resolve-data)))
             (is (vector? (:focus resolve-data)))
             (is (= "expand_context" (:recommended_next_step resolve-data)))
+            (is (= "selection_artifact"
+                   (get-in resolve-data [:compact_continuation :continuation_mode])))
+            (is (= (:selection_id resolve-data)
+                   (get-in resolve-data [:compact_continuation :selection_id])))
+            (is (= (:snapshot_id resolve-data)
+                   (get-in resolve-data [:compact_continuation :snapshot_id])))
+            (is (= "expand_context"
+                   (get-in resolve-data [:compact_continuation :next_tool])))
             (is (= ["expand_context" "fetch_context_detail"]
                    (get-in resolve-data [:next_step :available_actions])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
@@ -400,11 +408,23 @@
             (is (seq (:skeletons expand-data)))
             (is (map? (:impact_hints expand-data)))
             (is (= "fetch_context_detail" (:recommended_next_step expand-data)))
+            (is (= "fetch_context_detail"
+                   (get-in expand-data [:compact_continuation :next_tool])))
+            (is (= selection-id
+                   (get-in expand-data [:compact_continuation :selection_id])))
+            (is (= snapshot-id
+                   (get-in expand-data [:compact_continuation :snapshot_id])))
             (is (= index-id (:index_id detail-data)))
             (is (map? (:context_packet detail-data)))
             (is (map? (:guardrail_assessment detail-data)))
             (is (vector? (:stage_events detail-data)))
             (is (= "resolve_context" (:recommended_next_step detail-data)))
+            (is (= "resolve_context"
+                   (get-in detail-data [:compact_continuation :next_tool])))
+            (is (= selection-id
+                   (get-in detail-data [:compact_continuation :selection_id])))
+            (is (= snapshot-id
+                   (get-in detail-data [:compact_continuation :snapshot_id])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (get-in detail-data [:context_packet :relevant_units])))))
 

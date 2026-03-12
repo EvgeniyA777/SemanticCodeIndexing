@@ -152,6 +152,10 @@
             (is (true? (get-in resolve-response [:body :result :structuredContent :query_normalized])))
             (is (= "mcp_shorthand"
                    (get-in resolve-response [:body :result :structuredContent :query_ingress_mode])))
+            (is (= "selection_artifact"
+                   (get-in resolve-response [:body :result :structuredContent :compact_continuation :continuation_mode])))
+            (is (= "expand_context"
+                   (get-in resolve-response [:body :result :structuredContent :compact_continuation :next_tool])))
             (is (= ["paths"]
                    (get-in resolve-response [:body :result :structuredContent :normalized_query_summary :target_keys])))))
         (testing "invalid shorthand returns repair-oriented error over streamable HTTP"

@@ -438,6 +438,16 @@
          :recommended_flow canonical-mcp-flow
          :usage_hint mcp-first-usage-hint))
 
+(defn- compact-continuation
+  ([selection-id snapshot-id next-tool]
+   (compact-continuation selection-id snapshot-id next-tool nil))
+  ([selection-id snapshot-id next-tool query-summary]
+   (cond-> {:continuation_mode "selection_artifact"
+            :selection_id selection-id
+            :snapshot_id snapshot-id
+            :next_tool next-tool}
+     query-summary (assoc :query_summary query-summary))))
+
 (defn- canonical-query-shape? [query]
   (and (map? query)
        (string? (:schema_version query))
@@ -595,12 +605,19 @@
                          (if (= :invalid_query (:type (ex-data e)))
                            (throw (enrich-invalid-query "invalid retrieval query" query))
                            (throw e))))
+            continuation-summary (or normalized_query_summary
+                                     (normalized-query-summary query))
             result (-> (cond-> resolved
                          true (assoc :index_id (:index_id entry)
                                      :project_context (project-context-for-entry entry)
                                      :query_normalized query_normalized
-                                     :query_ingress_mode query_ingress_mode)
-                         normalized_query_summary (assoc :normalized_query_summary normalized_query_summary))
+                                     :query_ingress_mode query_ingress_mode
+                                     :compact_continuation (compact-continuation
+                                                           (:selection_id resolved)
+                                                           (:snapshot_id resolved)
+                                                           "expand_context"
+                                                           continuation-summary))
+                         continuation-summary (assoc :normalized_query_summary continuation-summary))
                        (add-next-step-guidance "expand_context"))
             result-meta (meta result)]
         (with-usage-event
@@ -621,7 +638,10 @@
                       :policy_version (get-in result-meta [:retrieval_policy :version])
                       :query_ingress_mode query_ingress_mode
                       :query_normalized query_normalized
-                      :normalized_query_summary normalized_query_summary
+                      :normalized_query_summary continuation-summary
+                      :continuation_artifact {:selection_id (:selection_id result)
+                                              :snapshot_id (:snapshot_id result)
+                                              :next_tool "expand_context"}
                       :recommended_action (get-in result [:next_step :recommended_action])}}))))))
 
 (defn tool-expand-context [state args]
@@ -639,7 +659,11 @@
                                         :include_impact_hints include-impact-hints}
                                        {:suppress_usage_metrics true})
                    (assoc :index_id (:index_id entry)
-                          :project_context (project-context-for-entry entry))
+                          :project_context (project-context-for-entry entry)
+                          :compact_continuation (compact-continuation
+                                                selection-id
+                                                snapshot-id
+                                                "fetch_context_detail"))
                    (add-next-step-guidance "fetch_context_detail"))]
     (with-usage-event
       result
@@ -648,6 +672,9 @@
        :payload {:index_id (:index_id entry)
                  :selection_id selection-id
                  :snapshot_id snapshot-id
+                 :continuation_artifact {:selection_id selection-id
+                                         :snapshot_id snapshot-id
+                                         :next_tool "fetch_context_detail"}
                  :estimated_tokens (get-in result [:budget_summary :estimated_tokens])
                  :include_impact_hints (boolean include-impact-hints)
                  :impact_related_tests (count (get-in result [:impact_hints :related_tests]))}})))
@@ -667,7 +694,11 @@
                                               :detail_level detail-level}
                                              {:suppress_usage_metrics true})
                    (assoc :index_id (:index_id entry)
-                          :project_context (project-context-for-entry entry))
+                          :project_context (project-context-for-entry entry)
+                          :compact_continuation (compact-continuation
+                                                selection-id
+                                                snapshot-id
+                                                "resolve_context"))
                    (add-next-step-guidance "resolve_context"))]
     (with-usage-event
       result
@@ -681,6 +712,9 @@
        :payload {:index_id (:index_id entry)
                  :selection_id selection-id
                  :snapshot_id snapshot-id
+                 :continuation_artifact {:selection_id selection-id
+                                         :snapshot_id snapshot-id
+                                         :next_tool "resolve_context"}
                  :warning_count (count (get-in result [:diagnostics_trace :warnings]))
                  :degradation_count (count (get-in result [:diagnostics_trace :degradations]))
                  :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])}})))
