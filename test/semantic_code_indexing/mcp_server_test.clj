@@ -310,6 +310,15 @@
           (is (= ["purpose"] (get-in resolve-tool [:inputSchema :properties :query :properties :intent :required])))
           (is (= "object" (get-in resolve-tool [:inputSchema :properties :query :properties :targets :type])))))
 
+      (testing "health omits internal allowlist paths"
+        (let [health-response (call-tool! handle 101 "health" {})
+              health-data (get-in health-response [:result :structuredContent])]
+          (is (= "ok" (:status health-data)))
+          (is (string? (:session_id health-data)))
+          (is (integer? (:uptime_ms health-data)))
+          (is (contains? health-data :index_count))
+          (is (not (contains? health-data :allowed_roots)))))
+
       (let [create-response (call-tool! handle 3 "create_index" {:root_path tmp-root})
             create-data (get-in create-response [:result :structuredContent])
             index-id (:index_id create-data)]
@@ -461,12 +470,17 @@
 
         (testing "root allowlist is enforced"
           (let [forbidden-response (call-tool! handle 11 "create_index" {:root_path forbidden-root})
-                result (:result forbidden-response)]
+                result (:result forbidden-response)
+                error-details (get-in result [:structuredContent :details :details])]
             (is (true? (:isError result)))
             (is (= "forbidden_root"
                    (get-in result [:structuredContent :details :code])))
             (is (= "auth"
-                   (get-in result [:structuredContent :details :category])))))
+                   (get-in result [:structuredContent :details :category])))
+            (is (= (.getCanonicalPath (io/file forbidden-root))
+                   (:root_path error-details)))
+            (is (string? (:hint error-details)))
+            (is (not (contains? error-details :allowed_roots)))))
 
         (testing "invalid selectors are surfaced as tool errors"
           (let [bad-selector-response (call-tool! handle 12 "skeletons" {:index_id index-id})

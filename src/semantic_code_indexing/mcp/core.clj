@@ -153,7 +153,8 @@
                   {:type :forbidden_root
                    :message "root_path is outside SCI_MCP_ALLOWED_ROOTS"
                    :details {:root_path root-path
-                             :allowed_roots allowed-roots}})))
+                             :hint (str "Restart the MCP server with SCI_MCP_ALLOWED_ROOTS or --allowed-roots "
+                                        "including the requested root_path.")}})))
 
 (defn index-not-found [index-id]
   (throw (ex-info "index_id not found"
@@ -845,8 +846,7 @@
      :server_version server-version
      :session_id session-id
      :uptime_ms (- (now-ms) (or (:started_at state*) (now-ms)))
-     :index_count index-count
-     :allowed_roots (:allowed-roots state*)}))
+     :index_count index-count}))
 
 (def tool-handlers
   {"create_index" tool-create-index
