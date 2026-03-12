@@ -130,6 +130,59 @@ Returns compact map-level view of indexed repository.
 (sci/repo-map index {:max_files 20 :max_modules 20})
 ```
 
+### `compress-project`
+
+Returns a bounded architecture/compression artifact for the indexed repository.
+
+```clojure
+(sci/compress-project index)
+```
+
+Returned keys include:
+
+- `:project_name`
+- `:snapshot_id`
+- `:source_fingerprint`
+- `:tree_lines`
+- `:namespaces`
+- `:dependency_edges`
+- `:entrypoints`
+- `:domain_model`
+- `:namespace_categories`
+- `:summary_markdown`
+
+### `refresh-project-compression`
+
+Writes/updates the committed and local compression artifacts for the indexed repository.
+
+```clojure
+(sci/refresh-project-compression index)
+(sci/refresh-project-compression index {:changed_only true})
+```
+
+Current default artifact paths:
+
+- `docs/code-context.md`
+- `.ccc/repo-map.json`
+- `.ccc/dependency-graph.dot`
+- `.ccc/cache.edn`
+- `.ccc/state.edn`
+
+### `compression-drift-report`
+
+Compares the current repository state against the committed code-context summary.
+
+```clojure
+(sci/compression-drift-report index)
+```
+
+Returned keys include:
+
+- `:stale?`
+- `:artifact`
+- `:expected_markdown`
+- `:actual_markdown`
+
 ### `resolve-context`
 
 Canonical public retrieval starts here.

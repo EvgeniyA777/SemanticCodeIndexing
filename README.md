@@ -16,6 +16,7 @@ The project defines how a host system should request code context, how retrieval
 - mirrors contracts in Clojure (`malli`) for runtime validation
 - provides a local and CI gate to prevent contract drift
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `expand-context`, `fetch-context-detail`, `resolve-context-detail`, `impact-analysis`, `skeletons`
+- provides a Clojure-first `Code Context Compressor` lane for bounded architecture summaries, dependency-graph export, committed repo context docs, and pre-push/CI drift checks
 - includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript` and emits diagnostics/guardrails outputs
 - supports versioned retrieval policy overrides plus emitted capability metadata for replayable ranking behavior
 - supports optional persistence adapters (`in-memory`, `PostgreSQL`) with snapshot + graph projection storage for PostgreSQL
@@ -81,6 +82,11 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Emit the aggregate Phase 5 status report over retained review, governance, and queue artifacts: `clojure -M:eval phase5-status-report --artifacts-dir "${TMPDIR:-.tmp}/policy-review" --limit 20 --out "${TMPDIR:-.tmp}/sci-phase5-status-report.json"`
 - Resolve context from query file: `clojure -M:runtime --root . --query contracts/examples/queries/symbol-target.json --out "${TMPDIR:-.tmp}/sci.json"`
 - Run stdio MCP server: `SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" clojure -M:mcp`
+- Initialize committed code-context artifacts plus pre-push hook: `clojure -M:ccc init --root .`
+- Refresh code-context artifacts only when relevant files changed: `clojure -M:ccc refresh --root . --changed`
+- Check whether committed code-context artifacts are stale: `clojure -M:ccc check --root .`
+- Print bounded code-context summary to stdout: `clojure -M:ccc summary --root .`
+- Export code-context artifact on demand: `clojure -M:ccc export --root . --format markdown|json|edn|dot --out path/to/file`
 - Run MCP over local Streamable HTTP + SSE: `SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" clojure -M:mcp-http --host 127.0.0.1 --port 8791`
 - Enable MCP usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:mcp`
 - Enable HTTP/gRPC usage metrics persistence: `SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index clojure -M:runtime-http` or `clojure -M:runtime-grpc`

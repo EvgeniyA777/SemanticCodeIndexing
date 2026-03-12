@@ -1,5 +1,6 @@
 (ns semantic-code-indexing.core
-  (:require [semantic-code-indexing.runtime.index :as idx]
+  (:require [semantic-code-indexing.runtime.compression :as compression]
+            [semantic-code-indexing.runtime.index :as idx]
             [semantic-code-indexing.runtime.errors :as errors]
             [semantic-code-indexing.runtime.retrieval :as retrieval]
             [semantic-code-indexing.runtime.retrieval-policy :as rp]
@@ -132,7 +133,7 @@
         (throw (errors/normalize-exception e))))))
 
 (defn repo-map
-  "Return compact repository map from current index." 
+  "Return compact repository map from current index."
   ([index] (repo-map index {}))
   ([index opts]
    (let [sink (resolve-usage-metrics index opts)
@@ -166,6 +167,34 @@
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload (error-payload e)})))
          (throw (errors/normalize-exception e)))))))
+
+(defn compress-project
+  "Return a bounded architecture/compression artifact for the indexed repository."
+  ([index]
+   (compress-project index {}))
+  ([index opts]
+   (compression/compress-project index opts)))
+
+(defn refresh-project-compression
+  "Write/update committed and local compression artifacts for the indexed repository."
+  ([index]
+   (refresh-project-compression index {}))
+  ([index opts]
+   (compression/refresh-project-compression index opts)))
+
+(defn compression-drift-report
+  "Compare the current repository state to the committed compression summary."
+  ([index]
+   (compression-drift-report index {}))
+  ([index opts]
+   (compression/compression-drift-report index opts)))
+
+(defn init-project-compression!
+  "Initialize compression artifacts and install the optional pre-push hook."
+  ([index]
+   (init-project-compression! index {}))
+  ([index opts]
+   (compression/init-project-compression! index opts)))
 
 (defn resolve-context
   "Resolve compact staged selection for a retrieval query."
@@ -292,10 +321,10 @@
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :selected_units_count (count (get-in packet [:relevant_units]))
-                   :selected_files_count (get-in diagnostics [:result :selected_files_count])
-                   :confidence_level (get-in packet [:confidence :level])
-                   :autonomy_posture (:autonomy_posture guardrails)
-                   :result_status (get-in diagnostics [:result :result_status])
+                    :selected_files_count (get-in diagnostics [:result :selected_files_count])
+                    :confidence_level (get-in packet [:confidence :level])
+                    :autonomy_posture (:autonomy_posture guardrails)
+                    :result_status (get-in diagnostics [:result :result_status])
                     :raw_fetch_level (get-in diagnostics [:result :raw_fetch_level_reached])
                     :payload {:selection_id (:selection_id result)
                               :snapshot_id (:snapshot_id result)

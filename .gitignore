@@ -14,6 +14,7 @@ classes/
 .calva/
 .cider-repl-history
 .lein-failures
+.ccc/
 
 # Logs and temp files
 *.log

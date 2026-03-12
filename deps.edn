@@ -13,6 +13,8 @@
   {:main-opts ["-m" "semantic-code-indexing.contracts.cli"]}
   :runtime
   {:main-opts ["-m" "semantic-code-indexing.runtime.cli"]}
+  :ccc
+  {:main-opts ["-m" "semantic-code-indexing.runtime.compression-cli"]}
   :mcp
   {:main-opts ["-m" "semantic-code-indexing.mcp.server"]}
   :mcp-http
