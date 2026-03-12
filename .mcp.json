@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "semantic-code-indexing": {
+      "command": "clojure",
+      "args": ["-M:mcp"],
+      "cwd": "/Users/ae/workspaces/SemanticCodeIndexing",
+      "env": {
+        "SCI_MCP_ALLOWED_ROOTS": "/Users/ae/workspaces/SemanticCodeIndexing"
+      }
+    }
+  }
+}

@@ -85,9 +85,17 @@
    :additionalProperties false})
 
 (def ^:private mcp-query-default-constraints
-  {:token_budget 1600
+  {:token_budget 3200
    :max_raw_code_level "enclosing_unit"
    :freshness "current_snapshot"})
+
+(def ^:private purpose-token-budgets
+  {"code_understanding" 3200
+   "change_impact"      2400
+   "edit_preparation"   1600
+   "test_targeting"     2400
+   "review_support"     3200
+   "bug_investigation"  2400})
 
 (def ^:private mcp-query-default-hints
   {:prefer_definitions_over_callers true
@@ -501,11 +509,14 @@
 
     (map? query)
     (when-let [intent-map (shorthand-intent->map (:intent query))]
-      (let [normalized {:api_version (or (:api_version query) "1.0")
+      (let [purpose (:purpose intent-map)
+            adaptive-budget (get purpose-token-budgets purpose (:token_budget mcp-query-default-constraints))
+            base-constraints (assoc mcp-query-default-constraints :token_budget adaptive-budget)
+            normalized {:api_version (or (:api_version query) "1.0")
                         :schema_version (or (:schema_version query) "1.0")
                         :intent intent-map
                         :targets (or (:targets query) {:paths ["."]})
-                        :constraints (merge mcp-query-default-constraints (:constraints query))
+                        :constraints (merge base-constraints (:constraints query))
                         :hints (merge mcp-query-default-hints (:hints query))
                         :options (merge mcp-query-default-options (:options query))
                         :trace (fill-trace-defaults state (:trace query))}]
@@ -522,7 +533,7 @@
    :intent {:purpose "code_understanding"
             :details "Describe the coding task or repository question here."}
    :targets {:paths ["."]}
-   :constraints {:token_budget 1600
+   :constraints {:token_budget 3200
                  :max_raw_code_level "enclosing_unit"
                  :freshness "current_snapshot"}
    :hints {:prefer_definitions_over_callers true
@@ -759,7 +770,7 @@
 
 (def tool-definitions
   [{:name "create_index"
-    :description "Index a repository root or reuse a cached index. Call this first, then call repo_map. Prefer this over manual directory listing, wildcard search, or broad file reading when the server is available."
+    :description "Index a repository root or reuse a cached index. ALWAYS call this first before any codebase exploration. Returns an index_id for all subsequent calls. Use INSTEAD OF directory listing or glob search."
     :inputSchema {:type "object"
                   :properties {"root_path" {:type "string"}
                                "paths" {:type "array" :items {:type "string"}}
@@ -769,7 +780,7 @@
                   :required ["root_path"]
                   :additionalProperties false}}
    {:name "repo_map"
-    :description "Return a compact repository map for high-level codebase navigation. Call this immediately after create_index and prefer it over manual structure crawling for first-pass project overview."
+    :description "Return a compact repository map: files, modules, and structure. Call immediately after create_index. Use INSTEAD OF manual directory crawling or file listing for project overview."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "max_files" {:type "integer"}
@@ -777,7 +788,7 @@
                   :required ["index_id"]
                   :additionalProperties false}}
    {:name "resolve_context"
-    :description "Return a compact shortlist of the most relevant units for a coding task. Prefer this over broad file search or reading; use expand_context for structural widening and fetch_context_detail only when richer evidence or raw code is needed."
+    :description "Find the most relevant code units for a task. Returns a compact selection (not full code). Use INSTEAD OF grep or broad file reading. Pass result's selection_id to expand_context or fetch_context_detail for deeper inspection."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "query" mcp-retrieval-query-schema
@@ -785,7 +796,7 @@
                   :required ["index_id" "query"]
                   :additionalProperties false}}
    {:name "expand_context"
-    :description "Expand a prior resolve_context selection with lightweight skeletons and optional impact hints. Use this only after resolve_context when you need broader structure without raw code."
+    :description "Widen a resolve_context selection with lightweight skeletons and impact hints. Use INSTEAD OF reading multiple files manually. Requires selection_id and snapshot_id from resolve_context."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "selection_id" {:type "string"}
@@ -795,7 +806,7 @@
                   :required ["index_id" "selection_id" "snapshot_id"]
                   :additionalProperties false}}
    {:name "fetch_context_detail"
-    :description "Fetch raw code snippets and the full evidence packet for a prior resolve_context selection. Use this as the late detail stage after resolve_context or expand_context, not as the first repository-browsing step."
+    :description "Fetch raw code and full evidence for a selection. Use as the LAST resort before raw file access. Requires selection_id and snapshot_id from resolve_context. Returns code snippets, confidence assessment, and guardrail hints."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "selection_id" {:type "string"}
@@ -805,20 +816,37 @@
                   :required ["index_id" "selection_id" "snapshot_id"]
                   :additionalProperties false}}
    {:name "impact_analysis"
-    :description "Estimate which files, symbols, or semantic units are likely affected by a proposed change, bug fix, refactor, or target query."
+    :description "Estimate blast radius: which files, symbols, and tests are affected by a proposed change. Use for change planning, refactoring scope, or bug triage."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "query" {:type "object"}}
                   :required ["index_id" "query"]
                   :additionalProperties false}}
    {:name "skeletons"
-    :description "Return lightweight code skeletons for selected files or semantic units so an agent can inspect structure and signatures without loading full source files."
+    :description "Return lightweight code skeletons (signatures, structure) for files or units. Use INSTEAD OF reading full source files when you only need API shapes."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
                                "paths" {:type "array" :items {:type "string"}}
                                "unit_ids" {:type "array" :items {:type "string"}}}
                   :required ["index_id"]
+                  :additionalProperties false}}
+   {:name "health"
+    :description "Check if the SCI MCP server is alive and ready. Returns immediately with server status and uptime. Use to verify MCP availability before starting a workflow."
+    :inputSchema {:type "object"
+                  :properties {}
                   :additionalProperties false}}])
+
+(defn tool-health [state _args]
+  (let [state* @state
+        index-count (count (:indexes-by-id state*))
+        session-id (:session_id state*)]
+    {:status "ok"
+     :server_name server-name
+     :server_version server-version
+     :session_id session-id
+     :uptime_ms (- (now-ms) (or (:started_at state*) (now-ms)))
+     :index_count index-count
+     :allowed_roots (:allowed-roots state*)}))
 
 (def tool-handlers
   {"create_index" tool-create-index
@@ -827,7 +855,8 @@
    "expand_context" tool-expand-context
    "fetch_context_detail" tool-fetch-context-detail
    "impact_analysis" tool-impact-analysis
-   "skeletons" tool-skeletons})
+   "skeletons" tool-skeletons
+   "health" tool-health})
 
 (defn format-json [payload]
   (json/write-str payload :escape-slash false))
@@ -955,6 +984,7 @@
                  :policy_registry policy-registry
                  :selection_cache (atom {})
                  :session_id session-id
+                 :started_at (now-ms)
                  :usage_metrics usage-metrics
                  :indexes-by-id {}
                  :cache-key->index-id {}}

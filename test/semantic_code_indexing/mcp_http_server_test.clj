@@ -113,7 +113,7 @@
             (is (seq (get-in list-response [:body :result :tools])))
             (is (= "create_index"
                    (get-in list-response [:body :result :tools 0 :name])))
-            (is (re-find #"then call repo_map"
+            (is (re-find #"ALWAYS call this first"
                          (get-in list-response [:body :result :tools 0 :description])))))
         (testing "tools/call create_index works over streamable HTTP"
           (let [create-response (request! "POST"
@@ -241,7 +241,7 @@
             (is (= 202 (:status list-response)))
             (is (= "message" (:event list-event)))
             (is (seq (get-in list-event [:payload :result :tools])))
-            (is (re-find #"manual structure crawling"
+            (is (re-find #"INSTEAD OF manual directory crawling"
                          (get-in list-event [:payload :result :tools 1 :description]))))))
       (finally
         (close-sse! sse)

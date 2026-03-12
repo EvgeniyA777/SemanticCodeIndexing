@@ -288,13 +288,13 @@
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons"}
+          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons" "health"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
                                       first
                                       :description)
-                             "then call repo_map"))
+                             "ALWAYS call this first"))
           (is (str/includes? (some->> tools
                                       (filter #(= "repo_map" (:name %)))
                                       first
@@ -304,7 +304,7 @@
                                       (filter #(= "resolve_context" (:name %)))
                                       first
                                       :description)
-                             "Prefer this over broad file search"))
+                             "INSTEAD OF grep"))
           (is (= "object" (get-in resolve-tool [:inputSchema :properties :query :type])))
           (is (= ["intent"] (get-in resolve-tool [:inputSchema :properties :query :required])))
           (is (= ["purpose"] (get-in resolve-tool [:inputSchema :properties :query :properties :intent :required])))
@@ -561,7 +561,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons"}
+        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons" "health"}
                tool-names)))
       (finally
         (destroy-process! handle)))))
