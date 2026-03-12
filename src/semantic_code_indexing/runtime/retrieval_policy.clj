@@ -13,6 +13,11 @@
              :target_module_match 70
              :target_test_match 50
              :dispatch_value_match 25
+             :graph_callee_neighbor 44
+             :graph_caller_neighbor 32
+             :graph_module_neighbor 18
+             :graph_path_neighbor 16
+             :graph_related_test_neighbor 28
              :hint_preferred_path 15
              :hint_preferred_module 10
              :lexical_overlap 8
@@ -232,7 +237,7 @@
 
 (defn upsert-registry-entry [registry entry]
   (let [entry* (registry-entry entry (merge {:state (:state entry)}
-                                           (select-keys entry registry-metadata-keys)))
+                                            (select-keys entry registry-metadata-keys)))
         entries (list-registry-entries registry)
         replaced? (volatile! false)
         policies (mapv (fn [existing]

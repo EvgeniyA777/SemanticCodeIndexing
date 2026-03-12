@@ -369,6 +369,16 @@
      {}
      units)))
 
+(defn- build-callees-index [callers-index]
+  (reduce-kv
+   (fn [acc callee-id caller-ids]
+     (reduce (fn [a caller-id]
+               (update a caller-id (fnil conj #{}) callee-id))
+             acc
+             caller-ids))
+   {}
+   callers-index))
+
 (defn- build-module-dependents [files]
   (reduce
    (fn [acc {:keys [module imports]}]
@@ -414,7 +424,9 @@
   ([root-path files-data lifecycle-opts]
    (let [units (:units files-data)
          units-by-id (into {} (map (juxt :unit_id identity) units))
-         activation-metadata (:activation_metadata lifecycle-opts)]
+         activation-metadata (:activation_metadata lifecycle-opts)
+         callers-index (build-callers-index units (:files files-data))
+         callees-index (build-callees-index callers-index)]
      (attach-lifecycle
       {:root_path root-path
        :snapshot_id (uuid)
@@ -426,7 +438,8 @@
        :symbol_index (build-symbol-index units)
        :path_index (index-by :path units)
        :module_index (index-by :module units)
-       :callers_index (build-callers-index units (:files files-data))
+       :callers_index callers-index
+       :callees_index callees-index
        :module_dependents (build-module-dependents (:files files-data))
        :test_target_index (build-test-target-index (:files files-data))
        :detected_languages (:detected_languages activation-metadata)

@@ -97,7 +97,8 @@
     capped-fallback))
 
 (defn- include-tests? [query]
-  (true? (get-in query [:options :include_tests])))
+  (or (true? (get-in query [:options :include_tests]))
+      (true? (get-in query [:hints :focus_on_tests]))))
 
 (defn- allowed-path? [path allowed-prefixes]
   (or (empty? allowed-prefixes)
@@ -123,44 +124,190 @@
                        (contains? explicitly-targeted-tests (:path u)))))
          vec)))
 
-(defn- collect-candidates [index query policy]
-  (let [units (query-visible-units index query)
-        target-symbols (get-in query [:targets :symbols] [])
+(def ^:private graph-traversal-codes
+  #{"graph_callee_neighbor"
+    "graph_caller_neighbor"})
+
+(defn- add-scored-reason [score-map uid tier points code summary]
+  (let [already-present? (some #(= code (:code %))
+                               (get-in score-map [uid :reasons]))]
+    (if (and (pos? (long (or points 0)))
+             (not already-present?))
+      (add-tier score-map uid tier points (coded code summary))
+      score-map)))
+
+(defn- structural-seed-reasons [u query tokens]
+  (let [target-symbols (get-in query [:targets :symbols] [])
         target-paths (set (get-in query [:targets :paths] []))
         target-modules (get-in query [:targets :modules] [])
         target-tests (set (get-in query [:targets :tests] []))
         changed-spans (get-in query [:targets :changed_spans] [])
-        tokens (lexical-tokens query)
-        hints (:hints query)
+        by-symbol (some #(= (:symbol u) %) target-symbols)
+        by-path (contains? target-paths (:path u))
+        by-module (some #(module-prefix-match? u %) target-modules)
+        by-test (contains? target-tests (:path u))
+        by-span (some #(overlap-span? u %) changed-spans)
+        by-dispatch (dispatch-match? u tokens)]
+    (cond-> []
+      by-symbol (conj [:tier1 "exact_target_resolved" "Tier1: target symbol resolved to unit."])
+      by-path (conj [:tier1 "target_path_match" "Tier1: unit path directly targeted by query."])
+      by-span (conj [:tier1 "diff_overlap_direct" "Tier1: changed span overlaps this unit."])
+      by-module (conj [:tier2 "target_module_match" "Tier2: unit module targeted by query."])
+      by-test (conj [:tier2 "target_test_match" "Tier2: unit appears in explicitly requested tests."])
+      by-dispatch (conj [:tier2 "dispatch_value_match" "Tier2: multimethod dispatch value matches the query intent."]))))
+
+(defn- lexical-seed-units [units tokens]
+  (->> units
+       (filter #(or (lexical-match? % tokens)
+                    (dispatch-match? % tokens)))
+       (sort-by (juxt :path :start_line))
+       (take 6)
+       vec))
+
+(defn- related-test-unit-ids [index module]
+  (if (seq module)
+    (->> (get (:test_target_index index) module #{})
+         (mapcat #(map :unit_id (idx/units-for-path index %)))
+         distinct
+         vec)
+    []))
+
+(defn- graph-neighbor-groups [index unit query]
+  (let [unit-id (:unit_id unit)
+        path-neighbor-ids (->> (idx/units-for-path index (:path unit))
+                               (map :unit_id)
+                               (remove #(= unit-id %))
+                               distinct
+                               vec)
+        module-neighbor-ids (if-let [module (:module unit)]
+                              (->> (idx/units-for-module index module)
+                                   (map :unit_id)
+                                   (remove #(= unit-id %))
+                                   distinct
+                                   vec)
+                              [])
+        related-test-ids (if (include-tests? query)
+                           (->> (related-test-unit-ids index (:module unit))
+                                (remove #(= unit-id %))
+                                distinct
+                                vec)
+                           [])]
+    [["graph_callee_neighbor" "Tier2: graph expansion followed outbound call edges from a seeded unit." (vec (get (:callees_index index) unit-id #{}))]
+     ["graph_caller_neighbor" "Tier2: graph expansion followed inbound caller edges from a seeded unit." (vec (get (:callers_index index) unit-id #{}))]
+     ["graph_module_neighbor" "Tier3: graph expansion pulled structurally adjacent units from the same module." module-neighbor-ids]
+     ["graph_path_neighbor" "Tier3: graph expansion pulled neighboring units from the same file." path-neighbor-ids]
+     ["graph_related_test_neighbor" "Tier3: graph expansion linked related tests for the seeded unit's module." related-test-ids]]))
+
+(defn- graph-neighbor-points [policy code depth prefer-definitions-over-callers?]
+  (let [base (rp/weight policy code)
+        caller-penalty (if (and prefer-definitions-over-callers?
+                                (= code "graph_caller_neighbor"))
+                         8
+                         0)
+        decayed (- base caller-penalty (* depth 10))]
+    (max 0 decayed)))
+
+(defn- apply-global-boosts [units query policy score-map]
+  (let [hints (:hints query)
         preferred-paths (set (:preferred_paths hints))
-        preferred-modules (:preferred_modules hints)
-        score-map (reduce
-                   (fn [acc u]
-                     (let [uid (:unit_id u)
-                           by-symbol (some #(= (:symbol u) %) target-symbols)
-                           by-path (contains? target-paths (:path u))
-                           by-module (some #(module-prefix-match? u %) target-modules)
-                           by-test (contains? target-tests (:path u))
-                           by-span (some #(overlap-span? u %) changed-spans)
-                           by-pref-path (contains? preferred-paths (:path u))
-                           by-pref-module (some #(module-prefix-match? u %) preferred-modules)
-                           by-dispatch (dispatch-match? u tokens)
-                           by-parser-fallback (= "fallback" (:parser_mode u))
-                           by-lexical (lexical-match? u tokens)
-                           acc1 (cond-> acc
-                                  by-symbol (add-tier uid :tier1 (rp/weight policy "exact_target_resolved") (coded "exact_target_resolved" "Tier1: target symbol resolved to unit."))
-                                  by-path (add-tier uid :tier1 (rp/weight policy "target_path_match") (coded "target_path_match" "Tier1: unit path directly targeted by query."))
-                                  by-span (add-tier uid :tier1 (rp/weight policy "diff_overlap_direct") (coded "diff_overlap_direct" "Tier1: changed span overlaps this unit."))
-                                  by-module (add-tier uid :tier2 (rp/weight policy "target_module_match") (coded "target_module_match" "Tier2: unit module targeted by query."))
-                                  by-test (add-tier uid :tier2 (rp/weight policy "target_test_match") (coded "target_test_match" "Tier2: unit appears in explicitly requested tests."))
-                                  by-dispatch (add-tier uid :tier2 (rp/weight policy "dispatch_value_match") (coded "dispatch_value_match" "Tier2: multimethod dispatch value matches the query intent."))
-                                  by-pref-path (add-tier uid :tier3 (rp/weight policy "hint_preferred_path") (coded "hint_preferred_path" "Tier3: preferred path hint boosted unit."))
-                                  by-pref-module (add-tier uid :tier3 (rp/weight policy "hint_preferred_module") (coded "hint_preferred_module" "Tier3: preferred module hint boosted unit."))
-                                  by-lexical (add-tier uid :tier4 (rp/weight policy "lexical_overlap") (coded "lexical_overlap" "Tier4: lexical overlap with query detail."))
-                                  by-parser-fallback (add-tier uid :tier3 (rp/weight policy "parser_fallback") (coded "parser_fallback" "Fallback parser contributes limited-confidence evidence.")))]
-                       (if (contains? acc1 uid) acc1 (assoc acc1 uid (tiered-entry)))))
-                   {}
-                   units)
+        preferred-modules (:preferred_modules hints)]
+    (reduce
+     (fn [acc u]
+       (let [uid (:unit_id u)
+             by-pref-path (contains? preferred-paths (:path u))
+             by-pref-module (some #(module-prefix-match? u %) preferred-modules)
+             by-parser-fallback (= "fallback" (:parser_mode u))]
+         (cond-> acc
+           by-pref-path (add-scored-reason uid :tier3 (rp/weight policy "hint_preferred_path") "hint_preferred_path" "Tier3: preferred path hint boosted unit.")
+           by-pref-module (add-scored-reason uid :tier3 (rp/weight policy "hint_preferred_module") "hint_preferred_module" "Tier3: preferred module hint boosted unit.")
+           by-parser-fallback (add-scored-reason uid :tier3 (rp/weight policy "parser_fallback") "parser_fallback" "Fallback parser contributes limited-confidence evidence."))))
+     score-map
+     units)))
+
+(defn- expand-graph-score-map [index units query policy score-map seed-ids]
+  (let [visible-by-id (into {} (map (juxt :unit_id identity) units))
+        visible-id-set (set (keys visible-by-id))
+        max-depth (if (true? (get-in query [:hints :prefer_breadth_over_depth])) 3 2)
+        prefer-definitions-over-callers? (true? (get-in query [:hints :prefer_definitions_over_callers]))]
+    (loop [frontier (vec (distinct seed-ids))
+           visited (set seed-ids)
+           depth 0
+           acc score-map]
+      (if (or (empty? frontier) (>= depth max-depth))
+        acc
+        (let [[acc* next-frontier visited*]
+              (reduce
+               (fn [[score-map next-frontier visited] unit-id]
+                 (if-let [unit (get visible-by-id unit-id)]
+                   (reduce
+                    (fn [[score-map next-frontier visited] [code summary neighbor-ids]]
+                      (reduce
+                       (fn [[score-map next-frontier visited] neighbor-id]
+                         (if (or (not (contains? visible-id-set neighbor-id))
+                                 (= neighbor-id unit-id))
+                           [score-map next-frontier visited]
+                           (let [tier (if (contains? graph-traversal-codes code) :tier2 :tier3)
+                                 points (graph-neighbor-points policy code depth prefer-definitions-over-callers?)
+                                 score-map* (add-scored-reason score-map neighbor-id tier points code summary)
+                                 traversable? (contains? graph-traversal-codes code)
+                                 next? (and traversable?
+                                            (< (inc depth) max-depth)
+                                            (not (contains? visited neighbor-id)))]
+                             [score-map*
+                              (cond-> next-frontier next? (conj neighbor-id))
+                              (cond-> visited next? (conj neighbor-id))])))
+                       [score-map next-frontier visited]
+                       neighbor-ids))
+                    [score-map next-frontier visited]
+                    (graph-neighbor-groups index unit query))
+                   [score-map next-frontier visited]))
+               [acc [] visited]
+               frontier)]
+          (recur (vec (distinct next-frontier)) visited* (inc depth) acc*))))))
+
+(defn- collect-candidates [index query policy]
+  (let [units (query-visible-units index query)
+        tokens (lexical-tokens query)
+        seed-pairs (->> units
+                        (map (fn [u]
+                               [u (structural-seed-reasons u query tokens)]))
+                        vec)
+        structural-seed-ids (->> seed-pairs
+                                 (keep (fn [[u reasons]]
+                                         (when (seq reasons)
+                                           (:unit_id u))))
+                                 distinct
+                                 vec)
+        seeded-score-map (reduce (fn [acc [u reasons]]
+                                   (reduce (fn [score-map [tier code summary]]
+                                             (add-scored-reason score-map
+                                                                (:unit_id u)
+                                                                tier
+                                                                (rp/weight policy code)
+                                                                code
+                                                                summary))
+                                           acc
+                                           reasons))
+                                 {}
+                                 seed-pairs)
+        lexical-seeds (if (seq structural-seed-ids)
+                        []
+                        (lexical-seed-units units tokens))
+        lexical-seed-ids (mapv :unit_id lexical-seeds)
+        lexical-score-map (reduce (fn [acc u]
+                                    (add-scored-reason acc
+                                                       (:unit_id u)
+                                                       :tier4
+                                                       (rp/weight policy "lexical_overlap")
+                                                       "lexical_overlap"
+                                                       "Tier4: lexical overlap seeded retrieval because structural seeds were absent."))
+                                  seeded-score-map
+                                  lexical-seeds)
+        seed-ids (vec (distinct (concat structural-seed-ids lexical-seed-ids)))
+        graph-score-map (if (seq seed-ids)
+                          (expand-graph-score-map index units query policy lexical-score-map seed-ids)
+                          lexical-score-map)
+        score-map (apply-global-boosts units query policy graph-score-map)
         scored (->> units
                     (map (fn [u]
                            (let [{:keys [tier1 tier2 tier3 tier4 reasons] :as entry}
@@ -172,10 +319,10 @@
                                     :selection_reasons reasons))))
                     (filter #(pos? (:score %)))
                     (sort-by (juxt (comp - :score) :path :start_line))
-                    vec)
-        final-scored scored]
-    {:scored final-scored
-     :tokens tokens}))
+                    vec)]
+    {:scored scored
+     :tokens tokens
+     :seed_ids seed-ids}))
 
 (defn- with-rank-band [units policy]
   (mapv #(assoc % :rank_band (rp/rank-band policy (:score %))) units))
@@ -308,7 +455,7 @@
                                  (mapcat #(get (:test_target_index index) % #{}))
                                  distinct
                                  (take 12)
-                               vec)
+                                 vec)
         related-tests (->> (idx/all-units index)
                            (filter #(or (= "test" (:kind %))
                                         (str/includes? (:path %) "/test/")))
@@ -536,8 +683,8 @@
          :warnings [(coded "raw_fetch_budget_exhausted" "No budget remained for late raw-code fetch.")]
          :degradations []}
         (let [max-units 6
-            max-bytes (* 4 (max 200 requested-token-budget))
-            chosen (take max-units selected)]
+              max-bytes (* 4 (max 200 requested-token-budget))
+              chosen (take max-units selected)]
           (loop [units chosen
                  requests 0
                  snippets 0
@@ -763,10 +910,10 @@
 
 (defn- compact-item-estimate [u]
   (int (Math/ceil (/ (double (+ (count (or (:symbol u) ""))
-                                 (count (or (:path u) ""))
-                                 (count (or (:unit_id u) ""))
-                                 24))
-                    4.0))))
+                                (count (or (:path u) ""))
+                                (count (or (:unit_id u) ""))
+                                24))
+                     4.0))))
 
 (defn- fit-focus [selected selection-budget]
   (loop [remaining selected
@@ -1143,8 +1290,8 @@
          bound-index (:bound_index selection)
          cache-key (detail-cache-key {:unit_ids unit_ids
                                       :detail_level (or detail_level
-                                                       (get-in selection [:query :constraints :max_raw_code_level])
-                                                       "enclosing_unit")})]
+                                                        (get-in selection [:query :constraints :max_raw_code_level])
+                                                        "enclosing_unit")})]
      (or (cached-detail-result index selection_id cache-key)
          (->> (build-detail-response bound-index selection selector)
               (cache-detail-result! index selection_id cache-key))))))
