@@ -13,13 +13,6 @@
 (def ^:private default-host "127.0.0.1")
 (def ^:private default-port 8791)
 
-(defn- normalized-allowed-roots [allowed-roots]
-  (when (seq allowed-roots)
-    (->> allowed-roots
-         (map core/canonical-path)
-         distinct
-         vec)))
-
 (defn- parse-args [args]
   (loop [m {:host default-host
             :port default-port
@@ -30,7 +23,6 @@
         (case k
           "--host" (recur (assoc m :host (or v default-host)) rest)
           "--port" (recur (assoc m :port (or (some-> v parse-long) default-port)) rest)
-          "--allowed-roots" (recur (assoc m :allowed_roots v) rest)
           "--max-indexes" (recur (assoc m :max_indexes (or (some-> v parse-long)
                                                            core/default-max-indexes)) rest)
           "--policy-registry-file" (recur (assoc m :policy_registry_file v) rest)
@@ -119,9 +111,8 @@
 (defn- invalid-jsonrpc! [^HttpExchange exchange id message]
   (write-json! exchange 400 (jsonrpc-error-body id -32600 message)))
 
-(defn- create-session! [{:keys [session-registry allowed-roots max-indexes policy-registry]}]
-  (sessions/create-session! session-registry {:allowed-roots allowed-roots
-                                              :max-indexes max-indexes
+(defn- create-session! [{:keys [session-registry max-indexes policy-registry]}]
+  (sessions/create-session! session-registry {:max-indexes max-indexes
                                               :policy-registry policy-registry}))
 
 (defn- ensure-session! [server-state session-id]
@@ -256,15 +247,14 @@
           (write-json! exchange 500 (jsonrpc-error-body nil -32603 (.getMessage e))))))))
 
 (defn start-http-server!
-  [{:keys [host port allowed-roots max-indexes policy-registry transport-mode session-registry]
+  [{:keys [host port max-indexes policy-registry transport-mode session-registry]
     :or {host default-host
          port default-port
          max-indexes core/default-max-indexes
          transport-mode "dual"}}]
   (let [server (HttpServer/create (InetSocketAddress. ^String host (int port)) 0)
         executor (Executors/newCachedThreadPool)
-        server-state {:allowed-roots (normalized-allowed-roots allowed-roots)
-                      :max-indexes max-indexes
+        server-state {:max-indexes max-indexes
                       :policy-registry policy-registry
                       :transport-mode transport-mode
                       :session-registry (or session-registry (sessions/new-registry))}]
@@ -287,8 +277,7 @@
     (.shutdownNow executor)))
 
 (defn -main [& args]
-  (let [{:keys [host port allowed_roots max_indexes policy_registry_file transport_mode]} (parse-args args)
-        allowed-roots (core/resolve-allowed-roots allowed_roots)
+  (let [{:keys [host port max_indexes policy_registry_file transport_mode]} (parse-args args)
         policy-registry (core/load-policy-registry (or policy_registry_file
                                                        (System/getenv "SCI_MCP_POLICY_REGISTRY_FILE")))
         max-indexes (or max_indexes
@@ -298,11 +287,9 @@
     (core/log! "semantic_code_indexing_mcp_http_started" {:host host
                                                           :port port
                                                           :transport_mode transport-mode
-                                                          :allowed_roots allowed-roots
                                                           :max_indexes max-indexes})
     (start-http-server! {:host host
                          :port port
-                         :allowed-roots allowed-roots
                          :max-indexes max-indexes
                          :policy-registry policy-registry
                          :transport-mode transport-mode})

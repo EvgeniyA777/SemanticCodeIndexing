@@ -148,61 +148,36 @@
                             :message message
                             :details details}))))
 
-(defn forbidden-root [root-path allowed-roots]
-  (throw (ex-info "root_path is outside SCI_MCP_ALLOWED_ROOTS"
-                  {:type :forbidden_root
-                   :message "root_path is outside SCI_MCP_ALLOWED_ROOTS"
-                   :details {:root_path root-path
-                             :hint (str "Restart the MCP server with SCI_MCP_ALLOWED_ROOTS or --allowed-roots "
-                                        "including the requested root_path.")}})))
-
 (defn index-not-found [index-id]
   (throw (ex-info "index_id not found"
                   {:type :index_not_found
                    :message "index_id not found"
                    :details {:index_id index-id}})))
 
-(defn parse-allowed-roots [value]
-  (let [separator (System/getProperty "path.separator")]
-    (->> (str/split (or value "") (re-pattern (java.util.regex.Pattern/quote separator)))
-         (remove str/blank?)
-         vec)))
-
 (defn canonical-path [path]
   (.getCanonicalPath (io/file path)))
 
-(defn current-working-directory []
-  (canonical-path (System/getProperty "user.dir" ".")))
-
-(defn default-allowed-roots-warning []
-  (str
-   "SCI_MCP_ALLOWED_ROOTS is not set; MCP root_path allowlist enforcement is disabled.\n"
-   "Any existing directory path may be indexed by this MCP process.\n"
-   "Set SCI_MCP_ALLOWED_ROOTS or pass --allowed-roots to re-enable repository scoping.\n"
-   "The server does not prompt interactively because stdin/stdout are reserved for the MCP protocol."))
-
-(defn resolve-allowed-roots [allowed-roots-arg]
-  (let [configured (->> (parse-allowed-roots (or allowed-roots-arg
-                                                 (System/getenv "SCI_MCP_ALLOWED_ROOTS")))
-                        (map canonical-path)
-                        distinct
-                        vec)]
-    (when-not (seq configured)
-      (log! (default-allowed-roots-warning)))
-    (when (seq configured)
-      configured)))
-
-(defn normalize-rel-path [path]
-  (let [normalized (-> (str path)
-                       (str/replace "\\" "/")
-                       (str/replace #"^\./" ""))]
-    (when (str/blank? normalized)
-      (invalid-request "paths entries must be non-empty strings"))
-    (when (str/starts-with? normalized "/")
-      (invalid-request "paths entries must be relative paths"))
-    (when (re-find #"(^|/)\.\.(/|$)" normalized)
-      (invalid-request "paths entries must not contain '..' traversal segments"))
-    normalized))
+(defn normalize-rel-path
+  ([path] (normalize-rel-path path nil))
+  ([path root-path]
+   (let [normalized (-> (str path)
+                        (str/replace "\\" "/")
+                        (str/replace #"^\./" ""))]
+     (when (str/blank? normalized)
+       (invalid-request "paths entries must be non-empty strings"))
+     (let [normalized (if (and (str/starts-with? normalized "/") root-path)
+                        (let [canon (canonical-path normalized)
+                              root-canon (str root-path
+                                              (when-not (str/ends-with? root-path "/") "/"))]
+                          (if (str/starts-with? canon root-canon)
+                            (subs canon (count root-canon))
+                            normalized))
+                        normalized)]
+       (when (str/starts-with? normalized "/")
+         (invalid-request "paths entries must be relative paths"))
+       (when (re-find #"(^|/)\.\.(/|$)" normalized)
+         (invalid-request "paths entries must not contain '..' traversal segments"))
+       normalized))))
 
 (defn ensure-string [value field-name]
   (when-not (string? value)
@@ -231,12 +206,14 @@
           (ensure-string entry field-name))
         value))
 
-(defn normalize-paths [paths]
-  (when (some? paths)
-    (->> (ensure-string-coll paths "paths")
-         (map normalize-rel-path)
-         distinct
-         vec)))
+(defn normalize-paths
+  ([paths] (normalize-paths paths nil))
+  ([paths root-path]
+   (when (some? paths)
+     (->> (ensure-string-coll paths "paths")
+          (map #(normalize-rel-path % root-path))
+          distinct
+          vec))))
 
 (defn normalize-unit-ids [unit-ids]
   (when (some? unit-ids)
@@ -283,15 +260,11 @@
 (defn validate-root-path! [state root-path]
   (let [provided (ensure-string root-path "root_path")
         canonical (canonical-path provided)
-        file (io/file canonical)
-        allowed-roots (:allowed-roots @state)]
+        file (io/file canonical)]
     (when-not (.exists file)
       (invalid-request "root_path must exist"))
     (when-not (.isDirectory file)
       (invalid-request "root_path must be a directory"))
-    (when (seq allowed-roots)
-      (when-not (some #(path-within-root? % canonical) allowed-roots)
-        (forbidden-root canonical allowed-roots)))
     canonical))
 
 (defn index-summary [entry cache-hit?]
@@ -389,7 +362,7 @@
   (when-not (map? args)
     (invalid-request "create_index arguments must be an object"))
   (let [root-path (validate-root-path! state (or (:root_path args) "."))
-        paths (normalize-paths (:paths args))
+        paths (normalize-paths (:paths args) root-path)
         parser-opts (normalize-parser-opts (:parser_opts args))
         language-policy (normalize-language-policy (:language_policy args))
         force-rebuild (boolean (ensure-boolean-or-nil (:force_rebuild args) "force_rebuild"))
@@ -544,12 +517,58 @@
        (remove #(contains? (or query {}) %))
        vec))
 
+(defn- invalid-field-paths [query]
+  (let [q (or query {})]
+    (cond-> []
+      (and (contains? q :intent)
+           (not (string? (:intent q)))
+           (not (map? (:intent q))))
+      (conj {:path "intent"
+             :error "must be a string or an object with {purpose, details}"})
+
+      (and (contains? q :intent)
+           (map? (:intent q))
+           (not (string? (:purpose (:intent q)))))
+      (conj {:path "intent.purpose"
+             :error "must be a string (e.g. \"code_understanding\", \"bug_triage\", \"refactoring\")"})
+
+      (and (contains? q :targets)
+           (not (map? (:targets q))))
+      (conj {:path "targets"
+             :error "must be an object with at least one of: symbols, paths, modules, tests"})
+
+      (and (contains? q :targets)
+           (map? (:targets q))
+           (empty? (select-keys (:targets q) [:symbols :paths :modules :tests])))
+      (conj {:path "targets"
+             :error "must contain at least one of: symbols, paths, modules, tests"})
+
+      (and (contains? q :constraints)
+           (not (map? (:constraints q))))
+      (conj {:path "constraints"
+             :error "must be an object with token_budget, max_raw_code_level, freshness"})
+
+      (and (contains? q :hints)
+           (not (map? (:hints q))))
+      (conj {:path "hints"
+             :error "must be an object"})
+
+      (and (contains? q :options)
+           (not (map? (:options q))))
+      (conj {:path "options"
+             :error "must be an object"})
+
+      (and (contains? q :trace)
+           (not (map? (:trace q))))
+      (conj {:path "trace"
+             :error "must be an object with trace_id, request_id, actor_id"}))))
+
 (defn- enrich-invalid-query [message query]
   (ex-info message
            {:type :invalid_query
             :message message
             :details {:missing_sections (missing-query-sections query)
-                      :invalid_field_paths []
+                      :invalid_field_paths (invalid-field-paths query)
                       :minimal_query_skeleton (minimal-retrieval-query-skeleton)
                       :recommended_next_step "retry_resolve_context_with_structured_query"}}))
 
@@ -579,18 +598,26 @@
   (when-not (map? args)
     (invalid-request "resolve_context arguments must be an object"))
   (let [entry (resolve-entry! state args)
+        intent-promoted? (and (string? (:intent args))
+                              (not (contains? args :query)))
+        args (if intent-promoted?
+               (assoc args :query {:intent (:intent args)})
+               args)
         query (ensure-map-or-nil (:query args) "query")
         retrieval-policy (ensure-map-or-nil (:retrieval_policy args) "retrieval_policy")]
     (when-not query
-      (invalid-request "query is required"))
+      (invalid-request "either intent (string) or query (object) is required"))
     (let [normalized (normalize-mcp-query state query)
-          {:keys [query query_normalized query_ingress_mode normalized_query_summary]
-           :or {query_normalized false
-                query_ingress_mode "canonical"}}
+          {:keys [query query_normalized normalized_query_summary]
+           :or {query_normalized false}}
           (or normalized
               {:query query
                :query_normalized false
-               :query_ingress_mode "canonical"})]
+               :query_ingress_mode "canonical"})
+          query_ingress_mode (if intent-promoted?
+                               "intent_shorthand"
+                               (or (:query_ingress_mode (or normalized {}))
+                                   "canonical"))]
       (when (and (not normalized)
                  (not (canonical-query-shape? query)))
         (throw (enrich-invalid-query
@@ -684,6 +711,15 @@
                  :include_impact_hints (boolean include-impact-hints)
                  :impact_related_tests (count (get-in result [:impact_hints :related_tests]))}})))
 
+(def ^:private valid-detail-levels
+  #{"none" "target_span" "enclosing_unit" "local_neighborhood" "whole_file"})
+
+(defn- validate-detail-level [detail-level]
+  (when (and detail-level (not (valid-detail-levels detail-level)))
+    (invalid-request (str "detail_level must be one of: "
+                          (pr-str (sort valid-detail-levels))
+                          ", got: " (pr-str detail-level)))))
+
 (defn tool-fetch-context-detail [state args]
   (when-not (map? args)
     (invalid-request "fetch_context_detail arguments must be an object"))
@@ -692,6 +728,7 @@
         snapshot-id (ensure-string (:snapshot_id args) "snapshot_id")
         unit-ids (normalize-unit-ids (:unit_ids args))
         detail-level (some-> (:detail_level args) (ensure-string "detail_level"))
+        _ (validate-detail-level detail-level)
         result (-> (sci/fetch-context-detail (:index entry)
                                              {:selection_id selection-id
                                               :snapshot_id snapshot-id
@@ -782,12 +819,14 @@
                   :required ["index_id"]
                   :additionalProperties false}}
    {:name "resolve_context"
-    :description "Find the most relevant code units for a task. Returns a compact selection (not full code). Use INSTEAD OF grep or broad file reading. Pass result's selection_id to expand_context or fetch_context_detail for deeper inspection."
+    :description "Find the most relevant code units for a task. Pass EITHER `intent` (a plain string describing your task — simplest) OR `query` (a structured retrieval object). Use INSTEAD OF grep or broad file reading. Pass result's selection_id to expand_context or fetch_context_detail for deeper inspection."
     :inputSchema {:type "object"
                   :properties {"index_id" {:type "string"}
+                               "intent" {:type "string"
+                                         :description "Plain-text task description. Simplest way to call this tool. Mutually exclusive with query."}
                                "query" mcp-retrieval-query-schema
                                "retrieval_policy" {:type "object"}}
-                  :required ["index_id" "query"]
+                  :required ["index_id"]
                   :additionalProperties false}}
    {:name "expand_context"
     :description "Widen a resolve_context selection with lightweight skeletons and impact hints. Use INSTEAD OF reading multiple files manually. Requires selection_id and snapshot_id from resolve_context."
@@ -806,7 +845,8 @@
                                "selection_id" {:type "string"}
                                "snapshot_id" {:type "string"}
                                "unit_ids" {:type "array" :items {:type "string"}}
-                               "detail_level" {:type "string"}}
+                               "detail_level" {:type "string"
+                                                :enum ["none" "target_span" "enclosing_unit" "local_neighborhood" "whole_file"]}}
                   :required ["index_id" "selection_id" "snapshot_id"]
                   :additionalProperties false}}
    {:name "impact_analysis"
@@ -967,12 +1007,11 @@
         (when (contains? message :id)
           (jsonrpc-error id -32601 (str "method not found: " method)))))))
 
-(defn new-session-state [{:keys [allowed-roots max-indexes usage-metrics policy-registry session-id transport-format tenant-id]
+(defn new-session-state [{:keys [max-indexes usage-metrics policy-registry session-id transport-format tenant-id]
                           :or {max-indexes default-max-indexes
                                session-id (str (UUID/randomUUID))}}]
   (atom (cond-> {:initialized? false
                  :transport-format transport-format
-                 :allowed-roots allowed-roots
                  :max-indexes max-indexes
                  :policy_registry policy-registry
                  :selection_cache (atom {})

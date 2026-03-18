@@ -82,7 +82,6 @@
         _ (create-sample-repo! tmp-root)
         server (mcp-http/start-http-server! {:host "127.0.0.1"
                                              :port 0
-                                             :allowed-roots [tmp-root]
                                              :transport-mode "dual"})
         base-url (str "http://127.0.0.1:" (:port server))]
     (try
@@ -158,6 +157,31 @@
                    (get-in resolve-response [:body :result :structuredContent :compact_continuation :next_tool])))
             (is (= ["paths"]
                    (get-in resolve-response [:body :result :structuredContent :normalized_query_summary :target_keys])))))
+        (testing "intent string shorthand works over streamable HTTP"
+          (let [create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 51
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path tmp-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 52
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :intent "Find the main orchestration flow."}}}
+                                           {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status resolve-response)))
+            (is (true? (get-in resolve-response [:body :result :structuredContent :query_normalized])))
+            (is (= "intent_shorthand"
+                   (get-in resolve-response [:body :result :structuredContent :query_ingress_mode])))
+            (is (string? (get-in resolve-response [:body :result :structuredContent :selection_id])))))
         (testing "invalid shorthand returns repair-oriented error over streamable HTTP"
           (let [create-response (request! "POST"
                                           (str base-url "/mcp")
@@ -202,7 +226,6 @@
         _ (create-sample-repo! tmp-root)
         server (mcp-http/start-http-server! {:host "127.0.0.1"
                                              :port 0
-                                             :allowed-roots [tmp-root]
                                              :transport-mode "dual"})
         base-url (str "http://127.0.0.1:" (:port server))
         sse (open-sse! (str base-url "/mcp/sse"))]

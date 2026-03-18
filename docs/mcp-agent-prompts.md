@@ -36,8 +36,8 @@ Wire-shape requirements:
 - Send `tools/call.arguments` as a JSON object, not a JSON-encoded string.
 
 Retrieval-query rule:
-- The canonical `resolve_context` payload is a structured retrieval query.
-- For first contact, MCP also accepts one narrow shorthand form such as `{"query":{"intent":"Find the main orchestration flow."}}`.
+- `resolve_context` accepts a top-level `intent` string (simplest): `{"index_id": "...", "intent": "Describe your task"}`. The full structured `query` object is also supported for advanced use.
+- For first contact, prefer the flat `intent` form. MCP also accepts `{"query":{"intent":"Find the main orchestration flow."}}`.
 - After a successful `resolve_context`, keep the context compact by reusing `selection_id` and `snapshot_id` for `expand_context` / `fetch_context_detail` instead of restating a larger prompt.
 ```
 
@@ -65,7 +65,7 @@ Behavior rules:
 Protocol rules:
 - `initialize.params.clientInfo` must be an object.
 - `tools/call.arguments` must be a JSON object.
-- Prefer a structured `resolve_context` query; a narrow MCP shorthand with `query.intent` is accepted for first contact.
+- `resolve_context` accepts a flat `intent` string (simplest): `{"index_id": "...", "intent": "your task"}`. The structured `query` object is also supported.
 - After a successful `resolve_context`, continue with `selection_id` + `snapshot_id` rather than rebuilding a larger prompt.
 ```
 
@@ -96,7 +96,7 @@ Fallback:
 Protocol constraints:
 - `clientInfo` must be an object
 - `tools/call.arguments` must be an object
-- `resolve_context` should use the structured retrieval contract; the only accepted shorthand is a narrow `query.intent` form
+- `resolve_context` accepts a flat `intent` string (simplest): `{"index_id": "...", "intent": "your task"}`. The structured `query` object is also supported.
 - after `resolve_context`, continue through `selection_id` / `snapshot_id` instead of broadening the prompt
 ```
 
@@ -105,7 +105,7 @@ Protocol constraints:
 ```text
 Use semantic-code-indexing in MCP-first mode: do not start with Analyze, directory listing, wildcard search, or broad manual repo browsing. Call create_index, then repo_map, then use resolve_context -> expand_context -> fetch_context_detail. After a successful create_index, stay on the MCP flow instead of switching back to filesystem inspection. Treat no_supported_languages_found as a prompt to ask for the core language, language_refresh_required as rerun-create_index, and language_activation_in_progress as wait-and-retry. Report MCP failure explicitly before falling back to manual repo inspection. Send clientInfo and tools/call.arguments as JSON objects, not strings.
 
-For first contact, `resolve_context` may use the narrow shorthand `{"query":{"intent":"..."}}`, but the structured retrieval contract remains canonical.
+`resolve_context` accepts a flat `intent` string (simplest): `{"index_id": "...", "intent": "your task"}`. The structured `query` object is also supported for advanced use.
 ```
 
 ## Antigravity / MCP-Only Prompt
@@ -126,7 +126,7 @@ If create_index succeeds, stay on the MCP flow and do not switch back to filesys
 Only use manual repository inspection after you explicitly report an MCP failure.
 If language_refresh_required is returned, rerun create_index.
 If language_activation_in_progress is returned, wait briefly and retry the same request.
-For resolve_context, prefer the structured retrieval contract; the only accepted shorthand is a narrow `query.intent` form.
+`resolve_context` accepts a flat `intent` string (simplest): `{"index_id": "...", "intent": "your task"}`. The structured `query` object is also supported.
 After resolve_context succeeds, continue with `selection_id` and `snapshot_id` instead of sending a larger follow-up prompt.
 ```
 

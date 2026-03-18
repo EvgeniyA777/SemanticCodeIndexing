@@ -1025,9 +1025,12 @@
                           (:selected selection))
         requested (get-in query [:constraints :token_budget] 1800)
         detail-budget (get-in selection [:budget :reserved_budget :detail_tokens] requested)
-        detail-level (or (:detail_level selector)
-                         (get-in query [:constraints :max_raw_code_level])
-                         "enclosing_unit")
+        raw-detail-level (or (:detail_level selector)
+                             (get-in query [:constraints :max_raw_code_level])
+                             "enclosing_unit")
+        detail-level (if (contains? raw-level-order raw-detail-level)
+                       raw-detail-level
+                       "enclosing_unit")
         query* (-> query
                    (assoc-in [:options :allow_raw_code_escalation] true)
                    (assoc-in [:constraints :max_raw_code_level] detail-level))

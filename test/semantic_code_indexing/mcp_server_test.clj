@@ -48,6 +48,9 @@
 (def sample-shorthand-query
   {:intent "Find the main orchestration flow and key entrypoints."})
 
+(def sample-intent-shorthand
+  "Find the main orchestration flow and key entrypoints.")
+
 (defn- headers-complete? [^bytes bytes]
   (let [n (alength bytes)]
     (and (>= n 4)
@@ -200,22 +203,18 @@
            (swap! lines #(->> (conj % line) (take-last 200) vec))
            (log-step! "server-stderr" line))))}))
 
-(defn- start-mcp-process! [opts-or-root]
-  (let [{:keys [directory allowed-root]
+(defn- start-mcp-process! [opts]
+  (let [{:keys [directory legacy-allowed-root-env]
          :as opts
-         :or {directory "."}}
-        (if (map? opts-or-root)
-          opts-or-root
-          {:directory "."
-           :allowed-root opts-or-root})
+         :or {directory "."}} opts
         builder (ProcessBuilder. ["clojure" "-M:mcp"])
         env (.environment builder)]
     (.directory builder (io/file directory))
     (if-let [user-dir (:user-dir opts)]
       (.put env "JAVA_TOOL_OPTIONS" (str "-Duser.dir=" user-dir))
       (.remove env "JAVA_TOOL_OPTIONS"))
-    (if allowed-root
-      (.put env "SCI_MCP_ALLOWED_ROOTS" allowed-root)
+    (if legacy-allowed-root-env
+      (.put env "SCI_MCP_ALLOWED_ROOTS" legacy-allowed-root-env)
       (.remove env "SCI_MCP_ALLOWED_ROOTS"))
     (if-let [policy-registry-file (:policy-registry-file opts)]
       (.put env "SCI_MCP_POLICY_REGISTRY_FILE" policy-registry-file)
@@ -223,7 +222,7 @@
     (.put env "SCI_MCP_MAX_INDEXES" "4")
     (log-step! "start-process"
                (pr-str {:directory (.getPath (io/file directory))
-                        :allowed-root allowed-root
+                        :legacy-allowed-root-env legacy-allowed-root-env
                         :policy-registry-file (:policy-registry-file opts)
                         :user-dir (:user-dir opts)
                         :max-indexes "4"}))
@@ -272,9 +271,10 @@
 
 (deftest runtime-mcp-server-conformance-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        forbidden-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-forbidden-test" (make-array java.nio.file.attribute.FileAttribute 0)))
+        external-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-external-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
-        handle (start-mcp-process! tmp-root)]
+        _ (create-sample-repo! external-root)
+        handle (start-mcp-process! {:directory "."})]
     (try
       (testing "initialize and tools/list"
         (let [init-response (initialize! handle)]
@@ -305,12 +305,14 @@
                                       first
                                       :description)
                              "INSTEAD OF grep"))
+          (is (= "string" (get-in resolve-tool [:inputSchema :properties :intent :type])))
+          (is (= ["index_id"] (get-in resolve-tool [:inputSchema :required])))
           (is (= "object" (get-in resolve-tool [:inputSchema :properties :query :type])))
           (is (= ["intent"] (get-in resolve-tool [:inputSchema :properties :query :required])))
           (is (= ["purpose"] (get-in resolve-tool [:inputSchema :properties :query :properties :intent :required])))
           (is (= "object" (get-in resolve-tool [:inputSchema :properties :query :properties :targets :type])))))
 
-      (testing "health omits internal allowlist paths"
+      (testing "health omits internal root restrictions"
         (let [health-response (call-tool! handle 101 "health" {})
               health-data (get-in health-response [:result :structuredContent])]
           (is (= "ok" (:status health-data)))
@@ -333,6 +335,14 @@
           (is (= ["create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail"]
                  (:recommended_flow create-data)))
           (is (string? (:usage_hint create-data))))
+
+        (testing "create_index auto-relativizes absolute paths"
+          (let [abs-path (str tmp-root "/src/my/app/order.clj")
+                abs-response (call-tool! handle 40 "create_index" {:root_path tmp-root
+                                                                    :paths [abs-path]})
+                abs-data (get-in abs-response [:result :structuredContent])]
+            (is (string? (:index_id abs-data)))
+            (is (not (true? (:isError (:result abs-response)))))))
 
         (testing "cache hits reuse the same index_id"
           (let [cached-response (call-tool! handle 4 "create_index" {:root_path tmp-root})
@@ -398,6 +408,56 @@
                    (set (get-in result [:structuredContent :details :details :missing_sections]))))
             (is (= "code_understanding"
                    (get-in result [:structuredContent :details :details :minimal_query_skeleton :intent :purpose])))))
+
+        (testing "invalid shorthand with malformed fields returns invalid_field_paths"
+          (let [resolve-response (call-tool! handle 68 "resolve_context" {:index_id index-id
+                                                                          :query {:intent 42
+                                                                                  :targets "not-a-map"}})
+                result (:result resolve-response)]
+            (is (true? (:isError result)))
+            (is (seq (get-in result [:structuredContent :details :details :invalid_field_paths])))
+            (is (some #(= "intent" (:path %))
+                      (get-in result [:structuredContent :details :details :invalid_field_paths])))
+            (is (some #(= "targets" (:path %))
+                      (get-in result [:structuredContent :details :details :invalid_field_paths])))))
+
+        (testing "resolve_context accepts top-level intent string shorthand"
+          (let [resolve-response (call-tool! handle 75 "resolve_context" {:index_id index-id
+                                                                          :intent sample-intent-shorthand})
+                resolve-data (get-in resolve-response [:result :structuredContent])]
+            (is (= index-id (:index_id resolve-data)))
+            (is (true? (:query_normalized resolve-data)))
+            (is (= "intent_shorthand" (:query_ingress_mode resolve-data)))
+            (is (string? (:selection_id resolve-data)))))
+
+        (testing "resolve_context rejects missing both intent and query"
+          (let [resolve-response (call-tool! handle 76 "resolve_context" {:index_id index-id})
+                result (:result resolve-response)]
+            (is (true? (:isError result)))
+            (is (str/includes? (get-in result [:structuredContent :message])
+                               "either intent (string) or query (object) is required"))))
+
+        (testing "resolve_context prefers query over intent when both provided"
+          (let [resolve-response (call-tool! handle 77 "resolve_context" {:index_id index-id
+                                                                          :intent "ignored"
+                                                                          :query sample-query})
+                resolve-data (get-in resolve-response [:result :structuredContent])]
+            (is (= "canonical" (:query_ingress_mode resolve-data)))))
+
+        (testing "fetch_context_detail rejects invalid detail_level"
+          (let [resolve-response (call-tool! handle 69 "resolve_context" {:index_id index-id
+                                                                          :query sample-query})
+                resolve-data (get-in resolve-response [:result :structuredContent])
+                detail-response (call-tool! handle 70 "fetch_context_detail" {:index_id index-id
+                                                                              :selection_id (:selection_id resolve-data)
+                                                                              :snapshot_id (:snapshot_id resolve-data)
+                                                                              :detail_level "full"})
+                result (:result detail-response)]
+            (is (true? (:isError result)))
+            (is (= "invalid_request"
+                   (get-in result [:structuredContent :details :code])))
+            (is (str/includes? (get-in result [:structuredContent :message])
+                               "detail_level"))))
 
         (testing "expand_context and fetch_context_detail return staged artifacts"
           (let [resolve-response (call-tool! handle 61 "resolve_context" {:index_id index-id
@@ -468,19 +528,13 @@
             (is (= "not_found"
                    (get-in result [:structuredContent :details :category])))))
 
-        (testing "root allowlist is enforced"
-          (let [forbidden-response (call-tool! handle 11 "create_index" {:root_path forbidden-root})
-                result (:result forbidden-response)
-                error-details (get-in result [:structuredContent :details :details])]
-            (is (true? (:isError result)))
-            (is (= "forbidden_root"
-                   (get-in result [:structuredContent :details :code])))
-            (is (= "auth"
-                   (get-in result [:structuredContent :details :category])))
-            (is (= (.getCanonicalPath (io/file forbidden-root))
-                   (:root_path error-details)))
-            (is (string? (:hint error-details)))
-            (is (not (contains? error-details :allowed_roots)))))
+        (testing "create_index accepts another root without MCP allowlist checks"
+          (let [external-response (call-tool! handle 11 "create_index" {:root_path external-root})
+                external-data (get-in external-response [:result :structuredContent])]
+            (is (false? (:cache_hit external-data)))
+            (is (string? (:index_id external-data)))
+            (is (= (.getCanonicalPath (io/file external-root))
+                   (:root_path external-data)))))
 
         (testing "invalid selectors are surfaced as tool errors"
           (let [bad-selector-response (call-tool! handle 12 "skeletons" {:index_id index-id})
@@ -513,7 +567,7 @@
         _ (spit registry-path (pr-str {:schema_version "1.0"
                                        :policies [active-policy shadow-policy]}))
         handle (start-mcp-process! {:directory "."
-                                    :allowed-root tmp-root
+                                    :legacy-allowed-root-env tmp-root
                                     :policy-registry-file registry-path})]
     (try
       (initialize! handle)
@@ -553,7 +607,7 @@
 (deftest runtime-mcp-server-line-transport-compatibility-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-line-test" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
-        handle (start-mcp-process! tmp-root)]
+        handle (start-mcp-process! {:directory "."})]
     (try
       (send-line-message! handle {:jsonrpc "2.0"
                                   :id 1
@@ -583,7 +637,7 @@
 (deftest runtime-mcp-no-language-guidance-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-no-lang" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (write-file! tmp-root "README.md" "# none")
-        handle (start-mcp-process! tmp-root)]
+        handle (start-mcp-process! {:directory "."})]
     (try
       (initialize! handle)
       (let [create-response (call-tool! handle 71 "create_index" {:root_path tmp-root})
@@ -599,7 +653,7 @@
 (deftest runtime-mcp-language-refresh-required-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-refresh" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (write-file! tmp-root "app/main.py" "def run(value):\n    return value\n")
-        handle (start-mcp-process! tmp-root)]
+        handle (start-mcp-process! {:directory "."})]
     (try
       (initialize! handle)
       (let [create-response (call-tool! handle 81 "create_index" {:root_path tmp-root})
@@ -625,31 +679,26 @@
       (finally
         (destroy-process! handle)))))
 
-(deftest resolve-allowed-roots-defaults-to-unrestricted-mode-test
-  (testing "blank allowlist config disables MCP root_path enforcement"
-    (is (nil? (#'mcp-server/resolve-allowed-roots "")))))
-
-(deftest runtime-mcp-server-without-allowlist-allows-external-root-test
+(deftest runtime-mcp-server-ignores-legacy-allowed-roots-env-test
   (let [target-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-unrestricted-root" (make-array java.nio.file.attribute.FileAttribute 0)))
+        legacy-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-legacy-env-root" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! target-root)
-        handle (start-mcp-process! {:directory "."})]
+        handle (start-mcp-process! {:directory "."
+                                    :legacy-allowed-root-env legacy-root})]
     (try
       (initialize! handle)
       (let [create-response (call-tool! handle 901 "create_index" {:root_path target-root})
             create-data (get-in create-response [:result :structuredContent])]
-        (testing "create_index succeeds for a directory outside the MCP process cwd when no allowlist is configured"
+        (testing "create_index succeeds even when a stale SCI_MCP_ALLOWED_ROOTS env var is present"
           (is (string? (:index_id create-data)))
           (is (= (.getCanonicalPath (io/file target-root))
-                 (:root_path create-data))))
-        (testing "server logs the unrestricted-mode warning"
-          (is (some #(str/includes? % "allowlist enforcement is disabled")
-                    @(:stderr-lines handle)))))
+                 (:root_path create-data)))))
       (finally
         (destroy-process! handle)))))
 
 (deftest initialize-preserves-client-protocol-version-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! tmp-root)]
+        handle (start-mcp-process! {:directory "."})]
     (try
       (testing "legacy Codex protocol version is preserved"
         (is (= "2024-11-05"
@@ -657,7 +706,7 @@
       (finally
         (destroy-process! handle))))
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! tmp-root)]
+        handle (start-mcp-process! {:directory "."})]
     (try
       (testing "arbitrary newer protocol version is echoed back"
         (is (= "2026-02-18"

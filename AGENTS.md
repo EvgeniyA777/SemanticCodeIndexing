@@ -32,7 +32,7 @@
 - Treat `language_refresh_required` as a signal to rerun `create_index`, not as a reason to abandon MCP.
 - Treat `language_activation_in_progress` as a wait-and-retry signal for the same request.
 - A successful `create_index` is not a reason to switch to filesystem browsing; continue with `repo_map` and semantic retrieval.
-- For `resolve_context`, the canonical request is the structured retrieval query. A narrow first-contact shorthand with `query.intent` is accepted, but nothing broader should be guessed.
+- `resolve_context` accepts a flat top-level `intent` string (simplest: `{"index_id": "...", "intent": "your task"}`), a `query.intent` shorthand, or the full structured `query` object.
 - After a successful `resolve_context`, keep the context compact: continue with `selection_id` and `snapshot_id` for `expand_context` / `fetch_context_detail` instead of restating a larger prompt.
 - Do not silently fall back to manual inspection if MCP fails; state that MCP failed, then continue manually if needed.
 - MCP wire-shape requirements:

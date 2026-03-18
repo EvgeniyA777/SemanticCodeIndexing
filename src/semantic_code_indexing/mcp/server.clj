@@ -10,16 +10,12 @@
 
 (def ^:private default-max-indexes core/default-max-indexes)
 
-(defn- resolve-allowed-roots [allowed-roots-arg]
-  (core/resolve-allowed-roots allowed-roots-arg))
-
 (defn- parse-args [args]
   (loop [m {} xs args]
     (if (empty? xs)
       m
       (let [[k v & rest] xs]
         (case k
-          "--allowed-roots" (recur (assoc m :allowed_roots v) rest)
           "--max-indexes" (recur (assoc m :max_indexes (or (some-> v parse-long)
                                                            default-max-indexes))
                                  rest)
@@ -151,10 +147,9 @@
       (.write output-stream body-bytes)
       (.flush output-stream))))
 
-(defn start-server-loop! [{:keys [allowed-roots max-indexes usage_metrics policy_registry]
+(defn start-server-loop! [{:keys [max-indexes usage_metrics policy_registry]
                            :or {max-indexes default-max-indexes}}]
-  (let [state (core/new-session-state {:allowed-roots allowed-roots
-                                       :max-indexes max-indexes
+  (let [state (core/new-session-state {:max-indexes max-indexes
                                        :policy-registry policy_registry
                                        :usage-metrics usage_metrics})
         input-stream (PushbackInputStream. System/in 8)
@@ -183,8 +178,7 @@
           (recur))))))
 
 (defn -main [& args]
-  (let [{:keys [allowed_roots max_indexes policy_registry_file]} (parse-args args)
-        allowed-roots (resolve-allowed-roots allowed_roots)
+  (let [{:keys [max_indexes policy_registry_file]} (parse-args args)
         max-indexes (or max_indexes
                         (some-> (System/getenv "SCI_MCP_MAX_INDEXES") parse-long)
                         default-max-indexes)
@@ -196,15 +190,12 @@
                         (sci/postgres-usage-metrics {:jdbc-url jdbc-url
                                                      :user (System/getenv "SCI_USAGE_METRICS_DB_USER")
                                                      :password (System/getenv "SCI_USAGE_METRICS_DB_PASSWORD")}))]
-    (core/log! "semantic_code_indexing_mcp_started" {:allowed_roots allowed-roots
-                                                     :max_indexes max-indexes})
+    (core/log! "semantic_code_indexing_mcp_started" {:max_indexes max-indexes})
     (when usage-metrics
       (usage/safe-record-event! usage-metrics {:surface "mcp"
                                                :operation "server_start"
                                                :status "success"
-                                               :payload {:allowed_root_count (count allowed-roots)
-                                                         :max_indexes max-indexes}}))
-    (start-server-loop! {:allowed-roots allowed-roots
-                         :max-indexes max-indexes
+                                               :payload {:max_indexes max-indexes}}))
+    (start-server-loop! {:max-indexes max-indexes
                          :policy_registry policy-registry
                          :usage_metrics usage-metrics})))

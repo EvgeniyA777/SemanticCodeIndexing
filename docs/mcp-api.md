@@ -11,18 +11,11 @@
 ```bash
 clojure -M:mcp
 
-SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" \
-clojure -M:mcp
-
-clojure -M:mcp-http --host 127.0.0.1 --port 8791 --transport-mode dual
-
-SCI_MCP_ALLOWED_ROOTS="<repo-a-root>:<repo-b-root>" \
 clojure -M:mcp-http --host 127.0.0.1 --port 8791 --transport-mode dual
 ```
 
 Environment and flags:
 
-- `SCI_MCP_ALLOWED_ROOTS` - optional allowlist of canonical repository roots; use the platform path separator (`:` on macOS/Linux, `;` on Windows)
 - `SCI_MCP_MAX_INDEXES` - optional in-memory LRU cache size; default `8`
 - `SCI_MCP_POLICY_REGISTRY_FILE` - optional EDN policy registry file used for active-policy defaults and selector-based `resolve_context` lookup
 - `SCI_USAGE_METRICS_JDBC_URL` - optional PostgreSQL JDBC URL for MCP usage metrics
@@ -31,19 +24,13 @@ Environment and flags:
 - `--host` / `--port` - only for `clojure -M:mcp-http`; defaults `127.0.0.1:8791`
 - `--transport-mode dual|streamable|sse` - only for `clojure -M:mcp-http`; default `dual`
 
-If `SCI_MCP_ALLOWED_ROOTS` is missing, the server does not enforce a `root_path` allowlist and prints a warning explaining that:
-
-- any existing directory visible to the MCP process may be indexed
-- setting `SCI_MCP_ALLOWED_ROOTS` or `--allowed-roots` re-enables repository scoping
-
-The server does not prompt interactively for this choice because `stdin`/`stdout` are reserved for MCP transport.
+The MCP server does not enforce a `root_path` allowlist. Any existing directory visible to the MCP process may be indexed, and stale `SCI_MCP_ALLOWED_ROOTS` / `--allowed-roots` launcher config is ignored.
 
 The MCP server exposes only `tools` capability in v1 and keeps cached indexes in-process for the lifetime of the server/session.
 
-Client-facing MCP payloads do not echo the configured allowlist values. In particular:
+Client-facing MCP payloads do not expose internal root restriction state. In particular:
 
 - `health` does not return `allowed_roots`
-- `forbidden_root` errors return the requested `root_path` plus a remediation hint, but not the configured allowlist
 
 `stdio` stays session-scoped to the local process. `mcp-http` adds in-memory sessions with:
 
@@ -209,18 +196,31 @@ Find the most relevant files and symbols for a coding task or question and retur
 Inputs:
 
 - `index_id`
-- `query`
+- `intent` - plain-text task description string (simplest way to call this tool; mutually exclusive with `query`)
+- `query` - structured retrieval query object (advanced; see below)
 - `retrieval_policy` - optional registry-backed selector object such as `{ "policy_id": "...", "version": "..." }`
+
+Either `intent` or `query` must be provided. If both are present, `query` takes precedence.
+
+**Simplest form (recommended for first contact):**
+
+```json
+{"index_id": "abc", "intent": "Find the MCP query normalization code"}
+```
+
+**Shorthand via `query.intent`:**
+
+```json
+{"index_id": "abc", "query": {"intent": "Find the main orchestration flow."}}
+```
+
+**Full structured query:**
 
 Canonical `query` shape is the same structured retrieval contract used by the library/runtime surfaces.
 
-MCP-only shorthand is intentionally narrow:
+When shorthand is used (either top-level `intent` or `query.intent`), MCP fills deterministic defaults for `api_version`, `schema_version`, `targets.paths`, `constraints`, `hints`, `options`, and `trace`.
 
-- `query.intent` may be a string, for example `{ "intent": "Find the main orchestration flow." }`
-- `query.intent` may be a partial object such as `{ "intent": { "purpose": "code_understanding", "details": "..." } }`
-- when shorthand is used, MCP fills deterministic defaults for `api_version`, `schema_version`, `targets.paths`, `constraints`, `hints`, `options`, and `trace`
-
-MCP does not support an open-ended natural-language query language beyond this narrow shorthand.
+MCP does not support an open-ended natural-language query language beyond these narrow shorthand forms.
 
 Returns:
 
@@ -347,9 +347,9 @@ Returns:
 
 ## Operational Notes
 
-- When `SCI_MCP_ALLOWED_ROOTS` is configured, every `root_path` must be inside that allowlist.
+- MCP does not enforce a root allowlist; `create_index` accepts any existing directory visible to the MCP process.
 - `paths` must be relative and must not contain traversal segments such as `..`.
-- Client-facing MCP responses do not disclose the configured `SCI_MCP_ALLOWED_ROOTS` values.
+- Client-facing MCP responses do not expose internal root restriction state.
 - Cached indexes are evicted by LRU when the process exceeds `SCI_MCP_MAX_INDEXES`.
 - If an `index_id` is evicted or unknown, the server returns an `index_not_found` tool error and the client should call `create_index` again.
 - `selection_id` artifacts are snapshot-bound. Reusing a selection with the wrong `snapshot_id` returns `snapshot_mismatch`.

@@ -31,7 +31,7 @@ Read raw files only when the staged retrieval flow is exhausted or returns an er
 
 ### Query format
 
-- Use the structured retrieval contract for `resolve_context`. Only the narrow `query.intent` shorthand is accepted for first contact.
+- `resolve_context` accepts a flat top-level `intent` string (simplest: `{"index_id": "...", "intent": "your task"}`), a `query.intent` shorthand, or the full structured `query` object.
 - After `resolve_context` succeeds, continue with `selection_id` and `snapshot_id` — do not expand the prompt manually.
 - Send `clientInfo` as an object and `tools/call.arguments` as an object.
 
