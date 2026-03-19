@@ -68,7 +68,7 @@ Tree-sitter extraction path (optional):
                                        :typescript ".tree-sitter-grammars/tree-sitter-typescript/typescript"}}})
 ```
 
-Bootstrap pinned grammar checkouts under `.tree-sitter-grammars/`:
+Bootstrap grammar checkouts under `.tree-sitter-grammars/`:
 
 ```bash
 ./scripts/setup-tree-sitter-grammars.sh

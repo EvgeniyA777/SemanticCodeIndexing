@@ -60,7 +60,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - MCP `resolve_context` accepts a flat top-level `intent` string (simplest: `{"index_id": "...", "intent": "your task"}`), a `query.intent` shorthand, or the full structured `query` object, and returns `compact_continuation` so later MCP stages can reuse `selection_id` + `snapshot_id` instead of growing the prompt
 - `resolve-context-detail` remains a convenience helper for callers that still need a one-shot rich result
 - Unit/integration tests: `clojure -M:test`
-- Setup tree-sitter grammars (optional but reproducible; Clojure/Java/TypeScript): `./scripts/setup-tree-sitter-grammars.sh`
+- Setup tree-sitter grammars (optional; Clojure/Elixir/Java/TypeScript): `./scripts/setup-tree-sitter-grammars.sh`
 - Scaffold new language adapter onboarding: `./scripts/new-language-adapter.sh <language> --ext .ext1,.ext2`
 - Validate language onboarding checklist and gates: `./scripts/validate-language-onboarding.sh <language>` (`--skip-gates` for fast checks)
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh`
