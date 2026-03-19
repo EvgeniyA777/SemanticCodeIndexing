@@ -110,5 +110,8 @@ Delivered scope:
 The next tranche after this delivered plan should focus on:
 
 - deeper interprocedural/dataflow-sensitive semantic resolution
-- stronger tree-sitter/compiler-grade ownership in the non-Clojure lanes
+- stronger tree-sitter/compiler-grade ownership in the non-Clojure lanes, prioritized by `ADR-028`
+- `Elixir` as the highest-priority next tree-sitter lane
+- `Python` as the next structural-parser decision, without prematurely locking into tree-sitter over native AST
+- `Lua` remaining on bounded regex-first parsing until its supported surface expands materially
 - continued operational/docs alignment as those deeper semantic capabilities land
