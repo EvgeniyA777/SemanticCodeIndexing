@@ -61,3 +61,6 @@ The next near-term focus is now beyond this delivered stabilization slice:
 - deeper shared-helper extraction out of the remaining adapter hotspot
 - interprocedural/dataflow-sensitive semantic resolution
 - continued benchmark/replay-driven validation as deeper semantic layers land
+- Elixir tree-sitter readiness is now tracked by [notes/2026-03-26-1800-13931a71-c700-4f43-84d0-701ff08273b8.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1800-13931a71-c700-4f43-84d0-701ff08273b8.md) and benchmark delta evidence by [notes/2026-03-26-1839-abc6454d-f08a-44ae-abe2-dba1557049d6.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-abc6454d-f08a-44ae-abe2-dba1557049d6.md)
+- Python parser-strategy frontier is now tracked in [notes/2026-03-26-1839-7815c5cd-3357-4776-a628-71dc7f695ee8.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-7815c5cd-3357-4776-a628-71dc7f695ee8.md)
+- Interprocedural/dataflow v1 frontier is now tracked in [notes/2026-03-26-1839-152b99e3-3b4b-4feb-93a9-957f43950934.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-152b99e3-3b4b-4feb-93a9-957f43950934.md)
