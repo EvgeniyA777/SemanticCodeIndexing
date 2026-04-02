@@ -22,6 +22,9 @@
 
 - If the `semidx` MCP server is available, do not begin with `Analyze`, directory listing, wildcard search, or broad manual file crawling.
 - Use MCP before manual file crawling.
+- When implementation work requires reading code before edits, use `semidx` retrieval first instead of manual file reads.
+- Use `resolve_context`, `expand_context`, `fetch_context_detail`, and `skeletons` to read code shape and details before patching files.
+- Use manual file reads only as a fallback when `semidx` fails or when exact line-level confirmation is still needed after MCP retrieval.
 - First-pass flow is strict:
   1. `create_index`
   2. `repo_map`
