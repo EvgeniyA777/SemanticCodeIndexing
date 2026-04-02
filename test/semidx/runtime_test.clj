@@ -1150,7 +1150,7 @@
                        "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n(defn process-order [ctx order]\n  (validate-order order)\n  (str \"ok-\" (:id order)))\n\n(defn validate-order [payload]\n  (if (:id payload)\n    payload\n    (throw (ex-info \"invalid\" {}))))\n\n(defn normalize-order [order]\n  (assoc order :normalized true))\n")
         _ (write-file! tmp-root
                        "src/my/app/alt_order.clj"
-                       "(ns my.app.alt-order)\n\n(defn validate-alt-order [order]\n  (assoc order :alt true))\n")
+                       "(ns my.app.alt-order-v2)\n\n(defn validate-order [order]\n  (assoc order :alt true))\n")
         _ (write-file! tmp-root
                        "test/my/app/order_support.clj"
                        "(ns my.app.order-support\n  (:require [my.app.order :as order]))\n")
@@ -1182,14 +1182,34 @@
         (is (false? (get-in change [:classification_basis :same_public_shape])))))
     (testing "rename-like changes pair removed and added units by implementation fingerprint"
       (let [change (first (get changes-by-type :moved_or_renamed))]
-        (is (= "my.app.alt-order/validate-alt-order" (:symbol change)))
+        (is (= "my.app.alt-order-v2/validate-order" (:symbol change)))
         (is (= "my.app.alt-order/validate-order" (:baseline_symbol change)))
-        (is (= :semantic_fingerprint (get-in change [:classification_basis :matched_on])))))
+        (is (= :semantic_fingerprint_with_symbol_local_name
+               (get-in change [:classification_basis :matched_on])))))
     (testing "added and removed changes remain explicit"
       (is (= #{"my.app.order/normalize-order"}
              (set (map :symbol (get changes-by-type :added)))))
       (is (= #{"my.app.order-support/run-order-helper"}
              (set (map :baseline_symbol (get changes-by-type :removed))))))))
+
+(deftest snapshot-diff-keeps-unrelated-identical-bodies-as-add-and-remove-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-no-false-rename" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        baseline (sci/create-index {:root_path tmp-root
+                                    :storage storage-adapter})
+        _ (write-file! tmp-root
+                       "src/my/app/alt_order.clj"
+                       "(ns my.app.alt-order)\n\n(defn validate-alt-order [order]\n  (assoc order :alt true))\n")
+        updated (sci/update-index baseline {:changed_paths ["src/my/app/alt_order.clj"]
+                                            :storage storage-adapter})
+        diff (sci/snapshot-diff updated)
+        changes-by-type (group-by :change_type (:changes diff))]
+    (is (empty? (get changes-by-type :moved_or_renamed)))
+    (is (= #{"my.app.alt-order/validate-alt-order"}
+           (set (map :symbol (get changes-by-type :added)))))
+    (is (= #{"my.app.alt-order/validate-order"}
+           (set (map :baseline_symbol (get changes-by-type :removed)))))))
 
 (deftest snapshot-diff-explicit-baseline-and-path-filter-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-filter" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -1362,6 +1382,40 @@
     (is (str/includes? (:content literal-old) "str/join"))
     (is (not (str/includes? (:content literal-old) ":mutated")))
     (is (str/includes? (:content literal-current) ":mutated"))))
+
+(deftest literal-file-slice-stays-snapshot-bound-across-live-file-changes-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-snapshot-bound" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  :mutated)\n\n(defn validate-order [order]\n  :mutated)\n")
+        result (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                              :path "src/my/app/order.clj"
+                                              :start_line 4
+                                              :end_line 6})]
+    (is (str/includes? (:content result) "process-order"))
+    (is (str/includes? (:content result) "str/join"))
+    (is (not (str/includes? (:content result) ":mutated")))))
+
+(deftest literal-file-slice-rejects-current-snapshot-read-when-file-snapshots-are-missing-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-missing-file-snapshots" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (-> (sci/create-index {:root_path tmp-root})
+                  (dissoc :file_snapshots))
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  :mutated)\n")]
+    (try
+      (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                     :path "src/my/app/order.clj"
+                                     :start_line 3
+                                     :end_line 4})
+      (is false "expected invalid_request")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= :invalid_request (:type (ex-data e))))
+        (is (= :file_snapshots_unavailable
+               (get-in (ex-data e) [:details :reason])))))))
 
 (deftest literal-file-slice-clamps-large-line-spans-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-truncation" (make-array java.nio.file.attribute.FileAttribute 0)))

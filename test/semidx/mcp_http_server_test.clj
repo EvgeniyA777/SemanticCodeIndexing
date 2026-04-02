@@ -212,6 +212,43 @@
                    (get-in resolve-response [:body :result :structuredContent :details :code])))
             (is (= "retry_resolve_context_with_structured_query"
                    (get-in resolve-response [:body :result :structuredContent :details :details :recommended_next_step])))))
+        (testing "canonical invalid query preserves validation details over streamable HTTP"
+          (let [create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 43
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path tmp-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 44
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :query {:api_version "1.0"
+                                                                         :schema_version "1.0"
+                                                                         :intent {:purpose "code_understanding"
+                                                                                  :details "Locate process-order authority."}
+                                                                         :targets {:symbols ["my.app.order/process-order"]
+                                                                                   :paths ["src/my/app/order.clj"]}
+                                                                         :constraints {:token_budget "oops"
+                                                                                       :max_raw_code_level "enclosing_unit"
+                                                                                       :freshness "current_snapshot"}
+                                                                         :hints {:prefer_definitions_over_callers true}
+                                                                         :options {:allow_raw_code_escalation false}
+                                                                         :trace {:trace_id "44444444-4444-4444-8444-444444444444"
+                                                                                 :request_id "http-invalid-query-001"}}}}}
+                                           {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status resolve-response)))
+            (is (true? (get-in resolve-response [:body :result :isError])))
+            (is (map? (get-in resolve-response [:body :result :structuredContent :details :details :validation_errors])))
+            (is (contains? (get-in resolve-response [:body :result :structuredContent :details :details :validation_errors])
+                           :constraints))))
         (testing "snapshot_diff works over streamable HTTP"
           (let [baseline-response (request! "POST"
                                             (str base-url "/mcp")

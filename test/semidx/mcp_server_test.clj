@@ -425,6 +425,19 @@
             (is (some #(= "targets" (:path %))
                       (get-in result [:structuredContent :details :details :invalid_field_paths])))))
 
+        (testing "canonical invalid query preserves schema validation details"
+          (let [resolve-response (call-tool! handle 78 "resolve_context" {:index_id index-id
+                                                                          :query (assoc-in sample-query
+                                                                                           [:constraints :token_budget]
+                                                                                           "oops")})
+                result (:result resolve-response)]
+            (is (true? (:isError result)))
+            (is (= "invalid_query"
+                   (get-in result [:structuredContent :details :code])))
+            (is (map? (get-in result [:structuredContent :details :details :validation_errors])))
+            (is (contains? (get-in result [:structuredContent :details :details :validation_errors])
+                           :constraints))))
+
         (testing "resolve_context accepts top-level intent string shorthand"
           (let [resolve-response (call-tool! handle 75 "resolve_context" {:index_id index-id
                                                                           :intent sample-intent-shorthand})

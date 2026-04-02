@@ -99,6 +99,18 @@
           {:files {} :units [] :diagnostics []})
          enrich-elixir-use-imports)))
 
+(defn- snapshot-file-lines [root-path path]
+  (let [f (io/file root-path path)]
+    (if (.exists f)
+      (-> f slurp str/split-lines vec)
+      [])))
+
+(defn- build-file-snapshots [root-path files]
+  (reduce-kv (fn [acc path _]
+               (assoc acc path (snapshot-file-lines root-path path)))
+             {}
+             files))
+
 (defn- lower [s]
   (some-> s str/lower-case))
 
@@ -430,10 +442,11 @@
          callers-index (build-callers-index units (:files files-data))
          callees-index (build-callees-index callers-index)]
      (attach-lifecycle
-      {:root_path root-path
+     {:root_path root-path
        :snapshot_id (uuid)
        :indexed_at (now-iso)
        :files (:files files-data)
+       :file_snapshots (build-file-snapshots root-path (:files files-data))
        :diagnostics (:diagnostics files-data)
        :units units-by-id
        :unit_order (mapv :unit_id units)

@@ -565,14 +565,18 @@
       (conj {:path "trace"
              :error "must be an object with trace_id, request_id, actor_id"}))))
 
-(defn- enrich-invalid-query [message query]
+(defn- enrich-invalid-query
+  ([message query]
+   (enrich-invalid-query message query nil))
+  ([message query cause-data]
   (ex-info message
            {:type :invalid_query
             :message message
             :details {:missing_sections (missing-query-sections query)
                       :invalid_field_paths (invalid-field-paths query)
+                      :validation_errors (:errors cause-data)
                       :minimal_query_skeleton (minimal-retrieval-query-skeleton)
-                      :recommended_next_step "retry_resolve_context_with_structured_query"}}))
+                      :recommended_next_step "retry_resolve_context_with_structured_query"}})))
 
 (defn tool-repo-map [state args]
   (when-not (map? args)
@@ -637,7 +641,7 @@
                                              :policy_registry (:policy_registry @state)})
                        (catch Exception e
                          (if (= :invalid_query (:type (ex-data e)))
-                           (throw (enrich-invalid-query "invalid retrieval query" query))
+                           (throw (enrich-invalid-query "invalid retrieval query" query (ex-data e)))
                            (throw e))))
             continuation-summary (or normalized_query_summary
                                      (normalized-query-summary query))

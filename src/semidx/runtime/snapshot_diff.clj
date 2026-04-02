@@ -67,19 +67,57 @@
 (defn- usage-key [unit]
   [(:semantic_id unit) (:semantic_fingerprint unit)])
 
+(defn- symbol-owner [symbol]
+  (let [symbol* (str (or symbol ""))]
+    (cond
+      (str/includes? symbol* "/") (first (str/split symbol* #"/" 2))
+      (str/includes? symbol* "#") (first (str/split symbol* #"#" 2))
+      :else nil)))
+
+(defn- symbol-local-name [symbol]
+  (some-> symbol str (str/split #"[#/]") last))
+
+(defn- rename-anchor [unit]
+  {:owner (or (:module unit) (symbol-owner (:symbol unit)))
+   :symbol_local_name (symbol-local-name (:symbol unit))
+   :kind (:kind unit)
+   :form_operator (:form_operator unit)
+   :dispatch_value (:dispatch_value unit)
+   :method_arity (:method_arity unit)
+   :method_signature_key (:method_signature_key unit)})
+
+(defn- strong-rename-match? [baseline current]
+  (let [baseline-anchor (rename-anchor baseline)
+        current-anchor (rename-anchor current)]
+    (and (= (:semantic_fingerprint baseline) (:semantic_fingerprint current))
+         (= (dissoc baseline-anchor :owner :symbol_local_name)
+            (dissoc current-anchor :owner :symbol_local_name))
+         (seq (:symbol_local_name baseline-anchor))
+         (= (:symbol_local_name baseline-anchor)
+            (:symbol_local_name current-anchor)))))
+
+(defn- remove-first-by-unit-id [units unit-id]
+  (let [[before after] (split-with #(not= unit-id (:unit_id %)) units)]
+    (vec (concat before (rest after)))))
+
 (defn- one-to-one-matches [baseline-units current-units]
   (let [baseline-groups (group-by :semantic_fingerprint baseline-units)
         current-groups (group-by :semantic_fingerprint current-units)]
     (reduce-kv
      (fn [acc fingerprint baseline-group]
-       (let [current-group (get current-groups fingerprint)
-             match-count (min (count baseline-group) (count current-group))]
-         (if (pos? match-count)
-           (into acc
-                 (map vector
-                      (take match-count (sort-by usage-key baseline-group))
-                      (take match-count (sort-by usage-key current-group))))
-           acc)))
+       (let [current-group (vec (sort-by usage-key (get current-groups fingerprint)))]
+         (loop [remaining-baseline (sort-by usage-key baseline-group)
+                remaining-current current-group
+                matches acc]
+           (if-let [baseline (first remaining-baseline)]
+             (if-let [current (first (filter #(strong-rename-match? baseline %) remaining-current))]
+               (recur (rest remaining-baseline)
+                      (remove-first-by-unit-id remaining-current (:unit_id current))
+                      (conj matches [baseline current]))
+               (recur (rest remaining-baseline)
+                      remaining-current
+                      matches))
+             matches))))
      []
      baseline-groups)))
 
@@ -94,9 +132,10 @@
    :semantic_id (:semantic_id current)
    :baseline_semantic_id (:semantic_id baseline)
    :semantic_fingerprint (:semantic_fingerprint current)
-   :classification_basis {:matched_on :semantic_fingerprint
+   :classification_basis {:matched_on :semantic_fingerprint_with_symbol_local_name
                           :same_public_shape (= (public-shape-fingerprint baseline)
                                                 (public-shape-fingerprint current))
+                          :symbol_local_name (symbol-local-name (:symbol current))
                           :baseline_snapshot_slot (:semantic_id baseline)
                           :current_snapshot_slot (:semantic_id current)}})
 
