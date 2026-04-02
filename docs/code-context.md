@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: ff726185d71e3a450a07365a2ad2bf40c15aa387
+- fingerprint: 47d7408cf716c9aaeeb248cc93dd6f80ca4f5802
 
 ## Tree
 ```text
@@ -102,7 +102,7 @@ semidx
 - semidx.core -> semidx.runtime.retrieval-policy
 - semidx.core -> semidx.runtime.semantic-quality
 - semidx.core -> semidx.runtime.snapshot-diff
-- ... +216 more
+- ... +215 more
 
 ## Namespaces
 ### semidx.contracts.cli
