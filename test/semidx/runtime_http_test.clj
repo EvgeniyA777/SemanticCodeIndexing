@@ -170,6 +170,32 @@
             (is (= {:start_line 3 :end_line 4} (get-in literal-resp [:json :returned_range])))
             (is (str/includes? (get-in literal-resp [:json :content]) "process-order"))))
 
+        (testing "snapshot-diff endpoint"
+          (let [baseline-resp (post-json client
+                                         (str base-url "/v1/index/create")
+                                         {:root_path tmp-root})
+                baseline-snapshot-id (get-in baseline-resp [:json :snapshot_id])
+                _ (write-file! tmp-root
+                               "src/my/app/order.clj"
+                               "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n\n(defn audit-order [order]\n  (:id order))\n")
+                rebuilt-resp (post-json client
+                                        (str base-url "/v1/index/create")
+                                        {:root_path tmp-root})
+                diff-resp (post-json client
+                                     (str base-url "/v1/retrieval/snapshot-diff")
+                                     {:root_path tmp-root
+                                      :baseline_snapshot_id baseline-snapshot-id})]
+            (is (= 200 (:status baseline-resp)))
+            (is (= 200 (:status rebuilt-resp)))
+            (is (= 200 (:status diff-resp)))
+            (is (= baseline-snapshot-id
+                   (get-in diff-resp [:json :baseline_snapshot_id])))
+            (is (= (get-in rebuilt-resp [:json :snapshot_id])
+                   (get-in diff-resp [:json :current_snapshot_id])))
+            (is (= 1 (get-in diff-resp [:json :summary :change_counts :added])))
+            (is (= 1 (get-in diff-resp [:json :summary :total_changes])))
+            (is (= "added" (get-in diff-resp [:json :changes 0 :change_type])))))
+
         (testing "method and payload validation"
           (let [method-resp (http-request client "GET" (str base-url "/v1/index/create") nil)
                 invalid-resp (post-json client

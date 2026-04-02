@@ -288,7 +288,7 @@
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
+          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
@@ -510,6 +510,25 @@
             (is (str/includes? (:content literal-data) "process-order"))
             (is (= "resolve_context" (:recommended_next_step literal-data)))))
 
+        (testing "snapshot_diff classifies changes against an explicit baseline"
+          (let [baseline-snapshot-id (:snapshot_id create-data)
+                _ (write-file! tmp-root
+                               "src/my/app/order.clj"
+                               "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n\n(defn audit-order [order]\n  (:id order))\n")
+                rebuilt-response (call-tool! handle 65 "create_index" {:root_path tmp-root
+                                                                       :force_rebuild true})
+                rebuilt-data (get-in rebuilt-response [:result :structuredContent])
+                diff-response (call-tool! handle 66 "snapshot_diff" {:index_id (:index_id rebuilt-data)
+                                                                     :baseline_snapshot_id baseline-snapshot-id})
+                diff-data (get-in diff-response [:result :structuredContent])]
+            (is (= (:index_id rebuilt-data) (:index_id diff-data)))
+            (is (= baseline-snapshot-id (:baseline_snapshot_id diff-data)))
+            (is (= (:snapshot_id rebuilt-data) (:current_snapshot_id diff-data)))
+            (is (= 1 (get-in diff-data [:summary :change_counts :added])))
+            (is (= 1 (get-in diff-data [:summary :total_changes])))
+            (is (= "added" (get-in diff-data [:changes 0 :change_type])))
+            (is (= "resolve_context" (:recommended_next_step diff-data)))))
+
         (testing "impact_analysis wraps impact_hints"
           (let [impact-response (call-tool! handle 7 "impact_analysis" {:index_id index-id
                                                                         :query sample-query})
@@ -642,7 +661,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
+        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
                tool-names)))
       (finally
         (destroy-process! handle)))))

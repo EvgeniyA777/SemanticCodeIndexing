@@ -154,6 +154,30 @@
           (is (string? (:content literal)))
           (is (.contains ^String (:content literal) "process-order"))))
 
+      (testing "snapshot-diff rpc"
+        (let [baseline (unary-call channel
+                                   runtime-grpc/create-index-method
+                                   (grpc-proto/create-index-request {:root_path tmp-root})
+                                   grpc-proto/create-index-response->map)
+              baseline-snapshot-id (:snapshot_id baseline)
+              _ (write-file! tmp-root
+                             "src/my/app/order.clj"
+                             "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n\n(defn audit-order [order]\n  (:id order))\n")
+              rebuilt (unary-call channel
+                                  runtime-grpc/create-index-method
+                                  (grpc-proto/create-index-request {:root_path tmp-root})
+                                  grpc-proto/create-index-response->map)
+              diff (unary-call channel
+                               runtime-grpc/snapshot-diff-method
+                               (grpc-proto/snapshot-diff-request {:root_path tmp-root
+                                                                  :baseline_snapshot_id baseline-snapshot-id})
+                               grpc-proto/snapshot-diff-response->map)]
+          (is (= baseline-snapshot-id (:baseline_snapshot_id diff)))
+          (is (= (:snapshot_id rebuilt) (:current_snapshot_id diff)))
+          (is (= 1 (get-in diff [:summary :change_counts :added])))
+          (is (= 1 (get-in diff [:summary :total_changes])))
+          (is (= "added" (get-in diff [:changes 0 :change_type])))))
+
       (testing "invalid payload returns INVALID_ARGUMENT"
         (try
           (unary-call channel
