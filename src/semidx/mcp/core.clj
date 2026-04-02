@@ -761,6 +761,45 @@
                  :degradation_count (count (get-in result [:diagnostics_trace :degradations]))
                  :estimated_tokens (get-in result [:context_packet :budget :estimated_tokens])}})))
 
+(defn tool-literal-file-slice [state args]
+  (when-not (map? args)
+    (invalid-request "literal_file_slice arguments must be an object"))
+  (let [entry (resolve-entry! state args)
+        selection-id (some-> (:selection_id args) (ensure-string "selection_id"))
+        snapshot-id (ensure-string (:snapshot_id args) "snapshot_id")
+        path (-> (:path args)
+                 (ensure-string "path")
+                 (normalize-rel-path (:root_path entry)))
+        start-line (ensure-int-or-nil (:start_line args) "start_line")
+        end-line (ensure-int-or-nil (:end_line args) "end_line")]
+    (when-not (some? start-line)
+      (invalid-request "start_line is required"))
+    (when-not (some? end-line)
+      (invalid-request "end_line is required"))
+    (let [result (-> (sci/literal-file-slice (:index entry)
+                                             {:selection_id selection-id
+                                              :snapshot_id snapshot-id
+                                              :path path
+                                              :start_line start-line
+                                              :end_line end-line}
+                                             {:suppress_usage_metrics true})
+                     (assoc :index_id (:index_id entry)
+                            :project_context (project-context-for-entry entry))
+                     (add-next-step-guidance "resolve_context"))]
+      (with-usage-event
+        result
+        {:root_path_hash (usage/hash-root-path (:root_path entry))
+         :payload {:index_id (:index_id entry)
+                   :selection_id selection-id
+                   :snapshot_id snapshot-id
+                   :path path
+                   :requested_range (:requested_range result)
+                   :returned_range (:returned_range result)
+                   :line_count (:line_count result)
+                   :byte_count (:byte_count result)
+                   :truncated (:truncated result)
+                   :truncation_reason (:truncation_reason result)}}))))
+
 (defn tool-impact-analysis [state args]
   (when-not (map? args)
     (invalid-request "impact_analysis arguments must be an object"))
@@ -849,6 +888,17 @@
                                                 :enum ["none" "target_span" "enclosing_unit" "local_neighborhood" "whole_file"]}}
                   :required ["index_id" "selection_id" "snapshot_id"]
                   :additionalProperties false}}
+   {:name "literal_file_slice"
+    :description "Return an exact literal block of file text for a concrete path and line range. Prefer this after semantic narrowing when an agent needs patch-safe edit context."
+    :inputSchema {:type "object"
+                  :properties {"index_id" {:type "string"}
+                               "selection_id" {:type "string"}
+                               "snapshot_id" {:type "string"}
+                               "path" {:type "string"}
+                               "start_line" {:type "integer"}
+                               "end_line" {:type "integer"}}
+                  :required ["index_id" "snapshot_id" "path" "start_line" "end_line"]
+                  :additionalProperties false}}
    {:name "impact_analysis"
     :description "Estimate blast radius: which files, symbols, and tests are affected by a proposed change. Use for change planning, refactoring scope, or bug triage."
     :inputSchema {:type "object"
@@ -887,6 +937,7 @@
    "resolve_context" tool-resolve-context
    "expand_context" tool-expand-context
    "fetch_context_detail" tool-fetch-context-detail
+   "literal_file_slice" tool-literal-file-slice
    "impact_analysis" tool-impact-analysis
    "skeletons" tool-skeletons
    "health" tool-health})

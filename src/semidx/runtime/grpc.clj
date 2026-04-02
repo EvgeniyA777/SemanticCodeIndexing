@@ -52,6 +52,7 @@
 (def resolve-context-method (unary-method "ResolveContext" :resolve-context-request :resolve-context-response))
 (def expand-context-method (unary-method "ExpandContext" :expand-context-request :expand-context-response))
 (def fetch-context-detail-method (unary-method "FetchContextDetail" :fetch-context-detail-request :fetch-context-detail-response))
+(def literal-file-slice-method (unary-method "LiteralFileSlice" :literal-file-slice-request :literal-file-slice-response))
 
 (def ^:private api-key-header
   (Metadata$Key/of "x-api-key" Metadata/ASCII_STRING_MARSHALLER))
@@ -344,6 +345,24 @@
     (assoc (sci/fetch-context-detail index (select-keys payload [:selection_id :snapshot_id :unit_ids :detail_level]))
            :project_context (project-context-summary entry))))
 
+(defn- handle-literal-file-slice [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+  (let [scope (project-context/project-scope (or (:root_path payload) ".")
+                                             (current-tenant-id))
+        entry (project-context/ensure-project-index! project-registry
+                                                     scope
+                                                     {:paths (:paths payload)}
+                                                     #(build-project-index policy-registry
+                                                                           usage-metrics
+                                                                           selection-cache
+                                                                           server-language-policy
+                                                                           payload
+                                                                           (merge {:surface "grpc"} (current-request-correlation))
+                                                                           (:root_path scope)
+                                                                           true))
+        index (:index entry)]
+    (assoc (sci/literal-file-slice index (select-keys payload [:selection_id :snapshot_id :path :start_line :end_line]))
+           :project_context (project-context-summary entry))))
+
 (defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
                             project_registry language_policy]}]
   (let [auth-config {:api_key api_key
@@ -377,6 +396,11 @@
                                                                            (partial handle-fetch-context-detail policy_registry usage_metrics selection-cache project-registry language_policy)
                                                                            auth-config
                                                                            :fetch_context_detail))
+                    (.addMethod literal-file-slice-method (unary-handler grpc-proto/literal-file-slice-request->map
+                                                                         grpc-proto/literal-file-slice-response
+                                                                         (partial handle-literal-file-slice policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                         auth-config
+                                                                         :literal_file_slice))
                     (.build))
         intercepted-service (ServerInterceptors/intercept service (into-array ServerInterceptor [(metadata-context-interceptor)]))
         server (-> (NettyServerBuilder/forAddress (java.net.InetSocketAddress. ^String host (int port)))

@@ -2,6 +2,7 @@
   (:require [semidx.runtime.compression :as compression]
             [semidx.runtime.index :as idx]
             [semidx.runtime.errors :as errors]
+            [semidx.runtime.literal-slice :as literal-slice]
             [semidx.runtime.retrieval :as retrieval]
             [semidx.runtime.retrieval-policy :as rp]
             [semidx.runtime.storage :as storage]
@@ -348,6 +349,46 @@
             sink
             (merge usage-context
                    {:operation "fetch_context_detail"
+                    :status "error"
+                    :latency_ms (- (now-ms) start-ms)
+                    :root_path_hash (usage/hash-root-path (:root_path index))
+                    :payload (error-payload e)})))
+         (throw (errors/normalize-exception e)))))))
+
+(defn literal-file-slice
+  "Fetch an exact literal file slice from either a retained selection snapshot or the current index snapshot."
+  ([index request]
+   (literal-file-slice index request {}))
+  ([index request opts]
+   (let [sink (resolve-usage-metrics index opts)
+         usage-context (resolve-usage-context index opts)
+         start-ms (now-ms)]
+     (try
+       (let [result (literal-slice/literal-file-slice index request opts)]
+         (when (should-record-usage? sink opts)
+           (usage/safe-record-event!
+            sink
+            (merge usage-context
+                   {:operation "literal_file_slice"
+                    :status "success"
+                    :latency_ms (- (now-ms) start-ms)
+                    :root_path_hash (usage/hash-root-path (:root_path index))
+                    :payload {:selection_id (:selection_id result)
+                              :snapshot_id (:snapshot_id result)
+                              :path (:path result)
+                              :requested_range (:requested_range result)
+                              :returned_range (:returned_range result)
+                              :line_count (:line_count result)
+                              :byte_count (:byte_count result)
+                              :truncated (:truncated result)
+                              :truncation_reason (:truncation_reason result)}})))
+         result)
+       (catch Exception e
+         (when (should-record-usage? sink opts)
+           (usage/safe-record-event!
+            sink
+            (merge usage-context
+                   {:operation "literal_file_slice"
                     :status "error"
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))

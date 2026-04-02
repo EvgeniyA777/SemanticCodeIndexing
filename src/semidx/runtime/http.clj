@@ -385,6 +385,42 @@
                            (merge api-version-header
                                   (response-correlation-header-map exchange))))))))))
 
+(defn- handle-literal-file-slice [auth-config ^HttpExchange exchange]
+  (if-not (post-request? exchange)
+    (write-json! exchange 405 {:error "method_not_allowed"
+                               :error_code "method_not_allowed"
+                               :error_category "client"
+                               :allowed ["POST"]})
+    (do
+      (remember-correlation! exchange (request-correlation exchange))
+      (when-let [{:keys [tenant_id]} (enforce-authorized! exchange auth-config)]
+        (let [payload (read-json-body exchange)
+              root-path (or (:root_path payload) ".")
+              paths (:paths payload)
+              selector (select-keys payload [:selection_id :snapshot_id :path :start_line :end_line])
+              language-policy (:language_policy payload)
+              correlation (remember-correlation! exchange
+                                                 (assoc (request-correlation exchange) :tenant_id tenant_id))]
+          (when (enforce-authz! exchange auth-config
+                                {:operation :literal_file_slice
+                                 :tenant_id tenant_id
+                                 :root_path root-path
+                                 :paths paths})
+            (let [entry (ensure-project-entry! auth-config
+                                               root-path
+                                               paths
+                                               (:parser_opts payload)
+                                               tenant_id
+                                               correlation
+                                               language-policy
+                                               {:paths paths})
+                  index (:index entry)
+                  result (sci/literal-file-slice index selector)]
+              (write-json! exchange 200
+                           (assoc result :project_context (project-context-summary entry))
+                           (merge api-version-header
+                                  (response-correlation-header-map exchange))))))))))
+
 (defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
                             project_registry language_policy]}]
   (let [server (HttpServer/create (InetSocketAddress. ^String host (int port)) 0)
@@ -403,6 +439,7 @@
     (.createContext server "/v1/retrieval/resolve-context" (with-handler (partial handle-resolve-context auth-config)))
     (.createContext server "/v1/retrieval/expand-context" (with-handler (partial handle-expand-context auth-config)))
     (.createContext server "/v1/retrieval/fetch-context-detail" (with-handler (partial handle-fetch-context-detail auth-config)))
+    (.createContext server "/v1/retrieval/literal-file-slice" (with-handler (partial handle-literal-file-slice auth-config)))
     (.setExecutor server nil)
     (.start server)
     server))

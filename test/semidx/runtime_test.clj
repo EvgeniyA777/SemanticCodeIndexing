@@ -1148,6 +1148,67 @@
     (is (not (str/includes? raw-content ":mutated")))
     (is (= detail-1 detail-2))))
 
+(deftest literal-file-slice-reads-current-snapshot-range-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-current" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        result (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                              :path "src/my/app/order.clj"
+                                              :start_line 4
+                                              :end_line 6})]
+    (is (= "1.0" (:api_version result)))
+    (is (= "literal_slice" (:projection_profile result)))
+    (is (= {:start_line 4 :end_line 6} (:requested_range result)))
+    (is (= {:start_line 4 :end_line 6} (:returned_range result)))
+    (is (= 3 (:line_count result)))
+    (is (false? (:truncated result)))
+    (is (str/includes? (:content result) "process-order"))
+    (is (str/includes? (:content result) "str/join"))))
+
+(deftest literal-file-slice-stays-selection-bound-across-live-file-changes-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-selection-bound" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        selection-cache (atom {:max_entries 8})
+        index-a (sci/create-index {:root_path tmp-root
+                                   :selection_cache selection-cache})
+        selection (sci/resolve-context index-a sample-query)
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  :mutated)\n\n(defn validate-order [order]\n  :mutated)\n")
+        index-b (sci/create-index {:root_path tmp-root
+                                   :selection_cache selection-cache})
+        literal-old (sci/literal-file-slice index-b {:selection_id (:selection_id selection)
+                                                     :snapshot_id (:snapshot_id selection)
+                                                     :path "src/my/app/order.clj"
+                                                     :start_line 4
+                                                     :end_line 6})
+        literal-current (sci/literal-file-slice index-b {:snapshot_id (:snapshot_id index-b)
+                                                         :path "src/my/app/order.clj"
+                                                         :start_line 3
+                                                         :end_line 6})]
+    (is (= (:selection_id selection) (:selection_id literal-old)))
+    (is (str/includes? (:content literal-old) "str/join"))
+    (is (not (str/includes? (:content literal-old) ":mutated")))
+    (is (str/includes? (:content literal-current) ":mutated"))))
+
+(deftest literal-file-slice-clamps-large-line-spans-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-truncation" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        big-content (str "(ns my.app.big-file)\n\n(defn giant []\n"
+                         (apply str (for [idx (range 450)]
+                                      (str "  ;; line-" idx "\n")))
+                         "  :ok)\n")
+        _ (write-file! tmp-root "src/my/app/big_file.clj" big-content)
+        index (sci/create-index {:root_path tmp-root})
+        result (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                              :path "src/my/app/big_file.clj"
+                                              :start_line 2
+                                              :end_line 450})]
+    (is (true? (:truncated result)))
+    (is (= "line_cap_exceeded" (:truncation_reason result)))
+    (is (= 400 (:line_count result)))
+    (is (= {:start_line 2 :end_line 401} (:returned_range result)))))
+
 (deftest selection-cache-eviction-surfaces-explicit-error-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-selection-eviction" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)

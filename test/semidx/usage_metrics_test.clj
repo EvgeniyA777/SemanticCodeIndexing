@@ -55,6 +55,10 @@
                                            :include_impact_hints true})
         _detail (sci/fetch-context-detail index {:selection_id (:selection_id result)
                                                  :snapshot_id (:snapshot_id result)})
+        _literal (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                                :path "src/my/app/order.clj"
+                                                :start_line 3
+                                                :end_line 4})
         _impact (sci/impact-analysis index sample-query)
         _skeletons (sci/skeletons index {:paths ["src/my/app/order.clj"]})
         _feedback (sci/record-feedback! index {:trace_id (get-in sample-query [:trace :trace_id])
@@ -70,7 +74,8 @@
         create-event (first events)
         resolve-event (last (filter #(= "resolve_context" (:operation %)) events))
         expand-event (last (filter #(= "expand_context" (:operation %)) events))
-        detail-event (last (filter #(= "fetch_context_detail" (:operation %)) events))]
+        detail-event (last (filter #(= "fetch_context_detail" (:operation %)) events))
+        literal-event (last (filter #(= "literal_file_slice" (:operation %)) events))]
     (testing "library events inherit sink and context from index"
       (is (>= (count events) 4))
       (is (= "library" (:surface create-event)))
@@ -96,7 +101,10 @@
       (is (= "fetch_context_detail" (:operation detail-event)))
       (is (= "detail" (get-in detail-event [:payload :stage_name])))
       (is (<= (get-in detail-event [:payload :returned_tokens])
-              (get-in detail-event [:payload :reserved_tokens]))))
+              (get-in detail-event [:payload :reserved_tokens])))
+      (is (= "literal_file_slice" (:operation literal-event)))
+      (is (= "src/my/app/order.clj" (get-in literal-event [:payload :path])))
+      (is (= {:start_line 3 :end_line 4} (get-in literal-event [:payload :returned_range]))))
     (testing "explicit host feedback is recorded separately"
       (is (= 1 (count feedback)))
       (is (= "helpful" (:feedback_outcome (first feedback))))
@@ -134,8 +142,15 @@
         _resolve-response (#'mcp-server/handle-tools-call state {:name "resolve_context"
                                                                  :arguments {:index_id index-id
                                                                              :query sample-query}})
+        _literal-response (#'mcp-server/handle-tools-call state {:name "literal_file_slice"
+                                                                 :arguments {:index_id index-id
+                                                                             :snapshot_id (get-in create-response [:structuredContent :snapshot_id])
+                                                                             :path "src/my/app/order.clj"
+                                                                             :start_line 3
+                                                                             :end_line 4}})
         create-events (filter #(= "create_index" (:operation %)) (usage/emitted-events sink))
-        resolve-event (last (filter #(= "resolve_context" (:operation %)) (usage/emitted-events sink)))]
+        resolve-event (last (filter #(= "resolve_context" (:operation %)) (usage/emitted-events sink)))
+        literal-event (last (filter #(= "literal_file_slice" (:operation %)) (usage/emitted-events sink)))]
     (testing "mcp create_index records cache miss then hit"
       (is (= 2 (count create-events)))
       (is (false? (:cache_hit (first create-events))))
@@ -148,6 +163,10 @@
       (is (= "success" (:status resolve-event)))
       (is (pos-int? (:selected_units_count resolve-event)))
       (is (= "2026-03-10" (get-in resolve-event [:payload :policy_version]))))
+    (testing "mcp literal_file_slice records exact-read payloads"
+      (is (= "literal_file_slice" (:operation literal-event)))
+      (is (= "src/my/app/order.clj" (get-in literal-event [:payload :path])))
+      (is (= {:start_line 3 :end_line 4} (get-in literal-event [:payload :returned_range]))))
     (testing "tool responses are still successful"
       (is (not (true? (get-in create-response [:structuredContent :isError]))))
       (is (not (true? (get-in cached-response [:structuredContent :isError])))))))

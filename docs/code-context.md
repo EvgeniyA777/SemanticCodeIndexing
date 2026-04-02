@@ -1,10 +1,10 @@
-# Code Context: SemanticCodeIndexing
+# Code Context: semidx
 
-- fingerprint: 08f63cfb19505fa7f27974de8371192491d17b9a
+- fingerprint: e1014e591d38348ab4dfaed5789bad8b08e9168f
 
 ## Tree
 ```text
-SemanticCodeIndexing
+semidx
 ├ deps.edn
 ├ src
 │ └ semidx
@@ -70,7 +70,7 @@ SemanticCodeIndexing
 - semidx.mcp.session-registry
 - semidx.runtime.adapters
 - semidx.runtime.authz
-- ... +27 more
+- ... +28 more
 
 ## Domain Model
 - IndexStorage [protocol]
@@ -97,12 +97,12 @@ SemanticCodeIndexing
 - semidx.core -> semidx.runtime.compression
 - semidx.core -> semidx.runtime.errors
 - semidx.core -> semidx.runtime.index
+- semidx.core -> semidx.runtime.literal-slice
 - semidx.core -> semidx.runtime.retrieval
 - semidx.core -> semidx.runtime.retrieval-policy
 - semidx.core -> semidx.runtime.storage
 - semidx.core -> semidx.runtime.usage-metrics
-- semidx.evaluation-test -> clojure.java.io
-- ... +187 more
+- ... +191 more
 
 ## Namespaces
 ### semidx.contracts.cli
@@ -139,8 +139,8 @@ SemanticCodeIndexing
 - schema-key-for-path [function]
 ### semidx.core
 - path: src/semidx/core.clj
-- requires: semidx.runtime.compression, semidx.runtime.errors, semidx.runtime.index, semidx.runtime.retrieval, semidx.runtime.retrieval-policy, semidx.runtime.storage, semidx.runtime.usage-metrics
-- aliases: compression -> semidx.runtime.compression, errors -> semidx.runtime.errors, idx -> semidx.runtime.index, retrieval -> semidx.runtime.retrieval, rp -> semidx.runtime.retrieval-policy, storage -> semidx.runtime.storage, usage -> semidx.runtime.usage-metrics
+- requires: semidx.runtime.compression, semidx.runtime.errors, semidx.runtime.index, semidx.runtime.literal-slice, semidx.runtime.retrieval, semidx.runtime.retrieval-policy, semidx.runtime.storage, semidx.runtime.usage-metrics
+- aliases: compression -> semidx.runtime.compression, errors -> semidx.runtime.errors, idx -> semidx.runtime.index, literal-slice -> semidx.runtime.literal-slice, retrieval -> semidx.runtime.retrieval, rp -> semidx.runtime.retrieval-policy, storage -> semidx.runtime.storage, usage -> semidx.runtime.usage-metrics
 - symbols:
 - now-ms [function]
 - attach-runtime-context [function]

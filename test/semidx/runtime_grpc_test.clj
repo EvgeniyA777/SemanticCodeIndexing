@@ -131,7 +131,16 @@
                                  (grpc-proto/fetch-context-detail-request {:root_path tmp-root
                                                                            :selection_id (:selection_id selection)
                                                                            :snapshot_id (:snapshot_id selection)})
-                                 grpc-proto/fetch-context-detail-response->map)]
+                                 grpc-proto/fetch-context-detail-response->map)
+              literal (unary-call channel
+                                  runtime-grpc/literal-file-slice-method
+                                  (grpc-proto/literal-file-slice-request {:root_path tmp-root
+                                                                          :selection_id (:selection_id selection)
+                                                                          :snapshot_id (:snapshot_id selection)
+                                                                          :path "src/my/app/order.clj"
+                                                                          :start_line 3
+                                                                          :end_line 4})
+                                  grpc-proto/literal-file-slice-response->map)]
           (is (seq (:skeletons expansion)))
           (is (map? (:impact_hints expansion)))
           (is (map? (:context_packet detail)))
@@ -139,7 +148,11 @@
           (is (map? (:guardrail_assessment detail)))
           (is (vector? (:stage_events detail)))
           (is (some #(= "my.app.order/process-order" (:symbol %))
-                    (get-in detail [:context_packet :relevant_units])))))
+                    (get-in detail [:context_packet :relevant_units])))
+          (is (= "literal_slice" (:projection_profile literal)))
+          (is (= {:start_line 3 :end_line 4} (:returned_range literal)))
+          (is (string? (:content literal)))
+          (is (.contains ^String (:content literal) "process-order"))))
 
       (testing "invalid payload returns INVALID_ARGUMENT"
         (try

@@ -80,7 +80,23 @@
 
    :fetch-context-detail-response
    {:proto-name "FetchContextDetailResponse"
-    :fields [{:key :detail_result_json :proto-name "detail_result_json" :number 1 :type :string}]}})
+    :fields [{:key :detail_result_json :proto-name "detail_result_json" :number 1 :type :string}]}
+
+   :literal-file-slice-request
+   {:proto-name "LiteralFileSliceRequest"
+    :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
+             {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
+             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
+             {:key :selection_id :proto-name "selection_id" :number 4 :type :string}
+             {:key :snapshot_id :proto-name "snapshot_id" :number 5 :type :string}
+             {:key :path :proto-name "path" :number 6 :type :string}
+             {:key :start_line :proto-name "start_line" :number 7 :type :int32}
+             {:key :end_line :proto-name "end_line" :number 8 :type :int32}
+             {:key :language_policy_json :proto-name "language_policy_json" :number 9 :type :string}]}
+
+   :literal-file-slice-response
+   {:proto-name "LiteralFileSliceResponse"
+    :fields [{:key :literal_slice_result_json :proto-name "literal_slice_result_json" :number 1 :type :string}]}})
 
 (defn- require-definition [message-key]
   (or (get message-definitions message-key)
@@ -335,4 +351,38 @@
 (defn fetch-context-detail-response->map [message]
   (or (json-field "detail_result_json"
                   (string-field :fetch-context-detail-response message :detail_result_json))
+      {}))
+
+(defn literal-file-slice-request [{:keys [root_path paths parser_opts selection_id snapshot_id path start_line end_line language_policy]}]
+  (build-message :literal-file-slice-request
+                 {:root_path root_path
+                  :paths (or paths [])
+                  :parser_opts_json (json-string parser_opts)
+                  :selection_id selection_id
+                  :snapshot_id snapshot_id
+                  :path path
+                  :start_line (or start_line 0)
+                  :end_line (or end_line 0)
+                  :language_policy_json (json-string language_policy)}))
+
+(defn literal-file-slice-request->map [message]
+  {:root_path (not-empty (string-field :literal-file-slice-request message :root_path))
+   :paths (not-empty (repeated-string-field :literal-file-slice-request message :paths))
+   :parser_opts (json-field "parser_opts_json"
+                            (string-field :literal-file-slice-request message :parser_opts_json))
+   :selection_id (not-empty (string-field :literal-file-slice-request message :selection_id))
+   :snapshot_id (not-empty (string-field :literal-file-slice-request message :snapshot_id))
+   :path (not-empty (string-field :literal-file-slice-request message :path))
+   :start_line (int-field :literal-file-slice-request message :start_line)
+   :end_line (int-field :literal-file-slice-request message :end_line)
+   :language_policy (json-field "language_policy_json"
+                                (string-field :literal-file-slice-request message :language_policy_json))})
+
+(defn literal-file-slice-response [{:keys [literal_slice_result] :as payload}]
+  (build-message :literal-file-slice-response
+                 {:literal_slice_result_json (json-string (or literal_slice_result payload))}))
+
+(defn literal-file-slice-response->map [message]
+  (or (json-field "literal_slice_result_json"
+                  (string-field :literal-file-slice-response message :literal_slice_result_json))
       {}))

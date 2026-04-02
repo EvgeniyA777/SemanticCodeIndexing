@@ -1,6 +1,7 @@
 (ns semidx.runtime-http-test
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [semidx.core :as sci]
             [semidx.runtime.authz :as runtime-authz]
@@ -145,7 +146,15 @@
                                        (str base-url "/v1/retrieval/fetch-context-detail")
                                        {:root_path tmp-root
                                         :selection_id selection-id
-                                        :snapshot_id snapshot-id})]
+                                        :snapshot_id snapshot-id})
+                literal-resp (post-json client
+                                        (str base-url "/v1/retrieval/literal-file-slice")
+                                        {:root_path tmp-root
+                                         :selection_id selection-id
+                                         :snapshot_id snapshot-id
+                                         :path "src/my/app/order.clj"
+                                         :start_line 3
+                                         :end_line 4})]
             (is (= 200 (:status expand-resp)))
             (is (seq (get-in expand-resp [:json :skeletons])))
             (is (map? (get-in expand-resp [:json :impact_hints])))
@@ -155,7 +164,11 @@
             (is (map? (get-in detail-resp [:json :guardrail_assessment])))
             (is (vector? (get-in detail-resp [:json :stage_events])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
-                      (get-in detail-resp [:json :context_packet :relevant_units])))))
+                      (get-in detail-resp [:json :context_packet :relevant_units])))
+            (is (= 200 (:status literal-resp)))
+            (is (= "literal_slice" (get-in literal-resp [:json :projection_profile])))
+            (is (= {:start_line 3 :end_line 4} (get-in literal-resp [:json :returned_range])))
+            (is (str/includes? (get-in literal-resp [:json :content]) "process-order"))))
 
         (testing "method and payload validation"
           (let [method-resp (http-request client "GET" (str base-url "/v1/index/create") nil)

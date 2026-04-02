@@ -105,13 +105,15 @@
           (let [list-response (request! "POST"
                                         (str base-url "/mcp")
                                         {:jsonrpc "2.0"
-                                         :id 2
+                                        :id 2
                                          :method "tools/list"}
                                         {"Mcp-Session-Id" session-id})]
             (is (= 200 (:status list-response)))
             (is (seq (get-in list-response [:body :result :tools])))
             (is (= "create_index"
                    (get-in list-response [:body :result :tools 0 :name])))
+            (is (some #(= "literal_file_slice" (:name %))
+                      (get-in list-response [:body :result :tools])))
             (is (re-find #"ALWAYS call this first"
                          (get-in list-response [:body :result :tools 0 :description])))))
         (testing "tools/call create_index works over streamable HTTP"
@@ -264,6 +266,8 @@
             (is (= 202 (:status list-response)))
             (is (= "message" (:event list-event)))
             (is (seq (get-in list-event [:payload :result :tools])))
+            (is (some #(= "literal_file_slice" (:name %))
+                      (get-in list-event [:payload :result :tools])))
             (is (re-find #"INSTEAD OF manual directory crawling"
                          (get-in list-event [:payload :result :tools 1 :description]))))))
       (finally

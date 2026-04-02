@@ -282,13 +282,13 @@
           (is (some #(str/includes? % ":max_indexes 4")
                     @(:stderr-lines handle))))
         (send-message! handle {:jsonrpc "2.0" :id 2 :method "tools/list" :params {}})
-        (let [tools-response (wait-for-response handle 2 response-timeout-ms)
+          (let [tools-response (wait-for-response handle 2 response-timeout-ms)
               tools (get-in tools-response [:result :tools])
               resolve-tool (some #(when (= "resolve_context" (:name %)) %) tools)
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons" "health"}
+          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
@@ -497,6 +497,19 @@
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (get-in detail-data [:context_packet :relevant_units])))))
 
+        (testing "literal_file_slice returns exact edit context"
+          (let [literal-response (call-tool! handle 64 "literal_file_slice" {:index_id index-id
+                                                                             :snapshot_id (:snapshot_id create-data)
+                                                                             :path "src/my/app/order.clj"
+                                                                             :start_line 3
+                                                                             :end_line 4})
+                literal-data (get-in literal-response [:result :structuredContent])]
+            (is (= index-id (:index_id literal-data)))
+            (is (= "literal_slice" (:projection_profile literal-data)))
+            (is (= {:start_line 3 :end_line 4} (:returned_range literal-data)))
+            (is (str/includes? (:content literal-data) "process-order"))
+            (is (= "resolve_context" (:recommended_next_step literal-data)))))
+
         (testing "impact_analysis wraps impact_hints"
           (let [impact-response (call-tool! handle 7 "impact_analysis" {:index_id index-id
                                                                         :query sample-query})
@@ -629,7 +642,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "impact_analysis" "skeletons" "health"}
+        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
                tool-names)))
       (finally
         (destroy-process! handle)))))
