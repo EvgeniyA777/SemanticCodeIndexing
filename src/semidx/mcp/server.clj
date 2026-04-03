@@ -1,6 +1,6 @@
 (ns semidx.mcp.server
   (:gen-class)
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
             [clojure.string :as str]
             [semidx.core :as sci]
             [semidx.mcp.core :as core]
@@ -21,9 +21,6 @@
                                  rest)
           "--policy-registry-file" (recur (assoc m :policy_registry_file v) rest)
           (recur m rest))))))
-
-(defn- handle-tools-call [state params]
-  (core/handle-tools-call state params))
 
 (defn- headers-complete? [^bytes bytes]
   (let [n (alength bytes)]
@@ -121,7 +118,7 @@
       (when-not content-length
         (throw (ex-info "missing Content-Length header" {:type :protocol_error})))
       {:transport-format :headers
-       :message (clojure.data.json/read-str
+       :message (json/read-str
                  (String. ^bytes (read-body-bytes input-stream (int content-length)) "UTF-8")
                  :key-fn keyword)})))
 
@@ -129,7 +126,7 @@
   (when-let [first-byte (read-next-byte input-stream)]
     (if (= (int \{) first-byte)
       {:transport-format :line
-       :message (clojure.data.json/read-str (read-json-line-text input-stream first-byte) :key-fn keyword)}
+       :message (json/read-str (read-json-line-text input-stream first-byte) :key-fn keyword)}
       (do
         (.unread input-stream first-byte)
         (read-framed-message! input-stream)))))

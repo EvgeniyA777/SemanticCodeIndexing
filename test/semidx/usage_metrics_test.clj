@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [semidx.core :as sci]
-            [semidx.mcp.server :as mcp-server]
+            [semidx.mcp.core :as mcp-core]
             [semidx.runtime.usage-metrics :as usage]))
 
 (defn- write-file! [root rel-path content]
@@ -134,20 +134,20 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        create-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
-        cached-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        create-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
+        cached-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         index-id (get-in create-response [:structuredContent :index_id])
-        _resolve-response (#'mcp-server/handle-tools-call state {:name "resolve_context"
-                                                                 :arguments {:index_id index-id
-                                                                             :query sample-query}})
-        _literal-response (#'mcp-server/handle-tools-call state {:name "literal_file_slice"
-                                                                 :arguments {:index_id index-id
-                                                                             :snapshot_id (get-in create-response [:structuredContent :snapshot_id])
-                                                                             :path "src/my/app/order.clj"
-                                                                             :start_line 3
-                                                                             :end_line 4}})
+        _resolve-response (#'mcp-core/handle-tools-call state {:name "resolve_context"
+                                                               :arguments {:index_id index-id
+                                                                           :query sample-query}})
+        _literal-response (#'mcp-core/handle-tools-call state {:name "literal_file_slice"
+                                                               :arguments {:index_id index-id
+                                                                           :snapshot_id (get-in create-response [:structuredContent :snapshot_id])
+                                                                           :path "src/my/app/order.clj"
+                                                                           :start_line 3
+                                                                           :end_line 4}})
         create-events (filter #(= "create_index" (:operation %)) (usage/emitted-events sink))
         resolve-event (last (filter #(= "resolve_context" (:operation %)) (usage/emitted-events sink)))
         literal-event (last (filter #(= "literal_file_slice" (:operation %)) (usage/emitted-events sink)))]
@@ -184,12 +184,12 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        create-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        create-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         index-id (get-in create-response [:structuredContent :index_id])
-        _resolve-response (#'mcp-server/handle-tools-call state {:name "resolve_context"
-                                                                 :arguments {:index_id index-id
-                                                                             :query sample-shorthand-query}})
+        _resolve-response (#'mcp-core/handle-tools-call state {:name "resolve_context"
+                                                               :arguments {:index_id index-id
+                                                                           :query sample-shorthand-query}})
         memory (sci/compact-mcp-query-memory sink)
         entry (first (:entries memory))]
     (testing "report scope and counts stay compact and MCP-specific"
@@ -268,10 +268,10 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        _mcp-create (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                           :arguments {:root_path tmp-root}})
-        _mcp-create-hit (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        _mcp-create (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                         :arguments {:root_path tmp-root}})
+        _mcp-create-hit (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         report (sci/slo-report sink)
         retrieval-only (sci/slo-report sink {:operation "resolve_context"})]
     (testing "report exposes the requested SLO-facing metrics"
@@ -378,7 +378,6 @@
                                                    :feedback_outcome "not_helpful"
                                                    :followup_action "discarded"
                                                    :confidence_level "low"})
-        events (usage/emitted-events sink)
         _patched-events (swap! (:state sink)
                                update :events
                                (fn [rows]

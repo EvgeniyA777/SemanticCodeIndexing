@@ -54,9 +54,6 @@
   (ensure-parent-dir! path)
   (spit path content))
 
-(defn- basename [path]
-  (.getName (io/file path)))
-
 (defn- project-name [root-path]
   (let [name (-> root-path io/file .getCanonicalFile .getName)]
     (if (str/blank? name) "project" name)))
@@ -359,15 +356,15 @@
                    :dependency_edges deps
                    :entrypoints entrypoints
                    :domain_model domain-model
-                   :namespace_categories (category-map namespaces)}]
-     (let [summary (summary-lines artifact)]
-       (projections/with-projection
-        (assoc artifact
-               :summary_lines summary
-               :summary_markdown (render-markdown (assoc artifact :summary_lines summary))
-               :dependency_graph_dot (render-dot artifact))
-        :summary
-        :selection)))))
+                   :namespace_categories (category-map namespaces)}
+         summary (summary-lines artifact)]
+     (projections/with-projection
+      (assoc artifact
+             :summary_lines summary
+             :summary_markdown (render-markdown (assoc artifact :summary_lines summary))
+             :dependency_graph_dot (render-dot artifact))
+      :summary
+      :selection))))
 
 (defn compression-drift-report
   ([index] (compression-drift-report index {}))

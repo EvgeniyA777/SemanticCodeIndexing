@@ -106,22 +106,6 @@
     (:expected item)
     item))
 
-(defn- classify-review [expected actual]
-  (cond
-    (nil? actual)
-    {:type :missing_expected
-     :expected (review-sample expected)}
-
-    (= (:change_type expected) (:change_type actual))
-    {:type :exact_match
-     :expected (review-sample expected)
-     :actual (review-sample actual)}
-
-    :else
-    {:type :classification_mismatch
-     :expected (review-sample expected)
-     :actual (review-sample actual)}))
-
 (defn- match-expected-changes [expected-changes actual-changes]
   (loop [expected-remaining (vec expected-changes)
          actual-remaining (vec actual-changes)
@@ -324,10 +308,10 @@
                                                 (double (:actual_changes aggregates))))}
                  :metric_counts {:identity_stability_cases (:identity_stability_denominator aggregates)
                                  :move_rename_cases (:move_rename_denominator aggregates)
-                                 :implementation_vs_meaning_cases (:implementation_vs_meaning_denominator aggregates)}}]
-    (let [report {:schema_version api-version
-                  :generated_at (now-iso)
-                  :summary summary
-                  :cases case-reports
-                  :thresholds (merge default-thresholds thresholds)}]
-      (assoc report :gate_decision (semantic-quality-gate-decision report thresholds)))))
+                                 :implementation_vs_meaning_cases (:implementation_vs_meaning_denominator aggregates)}}
+        report {:schema_version api-version
+                :generated_at (now-iso)
+                :summary summary
+                :cases case-reports
+                :thresholds (merge default-thresholds thresholds)}]
+    (assoc report :gate_decision (semantic-quality-gate-decision report thresholds))))

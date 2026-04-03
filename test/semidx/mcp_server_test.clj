@@ -2,8 +2,7 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
-            [semidx.mcp.server :as mcp-server])
+            [clojure.test :refer [deftest is testing]])
   (:import [java.io ByteArrayOutputStream InputStream]
            [java.time Duration Instant]))
 
@@ -753,16 +752,14 @@
         (destroy-process! handle)))))
 
 (deftest initialize-preserves-client-protocol-version-test
-  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! {:directory "."})]
+  (let [handle (start-mcp-process! {:directory "."})]
     (try
       (testing "legacy Codex protocol version is preserved"
         (is (= "2024-11-05"
                (get-in (initialize! handle "2024-11-05") [:result :protocolVersion]))))
       (finally
         (destroy-process! handle))))
-  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! {:directory "."})]
+  (let [handle (start-mcp-process! {:directory "."})]
     (try
       (testing "arbitrary newer protocol version is echoed back"
         (is (= "2026-02-18"

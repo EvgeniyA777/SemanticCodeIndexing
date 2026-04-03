@@ -49,7 +49,7 @@
 (defn- parse-files [root-path paths parser-opts]
   (letfn [(distinct-vec [xs]
             (->> xs (remove nil?) distinct vec))
-          (enrich-elixir-use-imports [{:keys [files units diagnostics] :as parsed-data}]
+          (enrich-elixir-use-imports [{:keys [files units diagnostics]}]
             (let [module->use-imports (->> (vals files)
                                            (filter #(= "elixir" (:language %)))
                                            (keep (fn [{:keys [module use_expansion_imports]}]
@@ -315,8 +315,7 @@
             same-superclass (filter #(superclass-target? caller % units-by-id) arity-filtered)
             import-filtered (if (seq caller-imports)
                               (filter #(import-match? caller-imports %) arity-filtered)
-                              arity-filtered)
-            candidate-pool (if (seq import-filtered) import-filtered arity-filtered)]
+                              arity-filtered)]
         (cond
           (seq same-path) (mapv :unit_id same-path)
           (seq same-module) (mapv :unit_id same-module)

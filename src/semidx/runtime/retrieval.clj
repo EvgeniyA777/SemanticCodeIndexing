@@ -30,9 +30,10 @@
                              (map (fn [[k v]] (str (name k) " " v)))
                              vec)
    :hints_summary (->> (get query :hints)
-                       (keep (fn [[k v]] (when (or (true? v)
-                                                   (and (coll? v) (seq v))))
-                               (str (name k))))
+                       (keep (fn [[k v]]
+                               (when (or (true? v)
+                                         (and (coll? v) (seq v)))
+                                 (str (name k)))))
                        vec)})
 
 (defn- validate-query! [query]
@@ -663,7 +664,7 @@
 (defn- snippet-bytes [s]
   (count (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8)))
 
-(defn- perform-raw-fetch [index selection selected query requested-token-budget]
+(defn- perform-raw-fetch [_index selection selected query requested-token-budget]
   (let [level (raw-escalation-level query)]
     (if (= level "none")
       {:status "skipped"

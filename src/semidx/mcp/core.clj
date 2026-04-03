@@ -258,7 +258,7 @@
     (or (= root path)
         (.startsWith path root))))
 
-(defn validate-root-path! [state root-path]
+(defn validate-root-path! [_state root-path]
   (let [provided (ensure-string root-path "root_path")
         canonical (canonical-path provided)
         file (io/file canonical)]
