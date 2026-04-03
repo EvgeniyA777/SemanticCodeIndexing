@@ -57,6 +57,10 @@
   (with-open [w (io/writer path)]
     (json/write data w :indent true)))
 
+(defn- write-text [path text]
+  (with-open [w (io/writer path)]
+    (.write w (str text))))
+
 (defn- read-edn [path]
   (with-open [rdr (java.io.PushbackReader. (io/reader path))]
     (edn/read rdr)))
@@ -337,6 +341,38 @@
   (when-let [parent (.getParentFile (io/file path))]
     (.mkdirs parent)))
 
+(defn- delete-file-if-exists! [path]
+  (when (and (seq (str path))
+             (.exists (io/file path)))
+    (io/delete-file path true)))
+
+(defn- temp-path [path suffix]
+  (let [target (io/file path)
+        dir (or (.getParentFile target) (io/file "."))]
+    (ensure-parent-dir! (.getAbsolutePath target))
+    (.getAbsolutePath
+     (java.io.File/createTempFile
+      (str (.getName target) ".")
+      suffix
+      dir))))
+
+(defn- move-atomically! [from-path to-path]
+  (ensure-parent-dir! to-path)
+  (let [from (.toPath (io/file from-path))
+        to (.toPath (io/file to-path))]
+    (try
+      (java.nio.file.Files/move from
+                                to
+                                (into-array java.nio.file.CopyOption
+                                            [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+                                             java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
+      (catch java.nio.file.AtomicMoveNotSupportedException _
+        (java.nio.file.Files/move from
+                                  to
+                                  (into-array java.nio.file.CopyOption
+                                              [java.nio.file.StandardCopyOption/REPLACE_EXISTING])))))
+  to-path)
+
 (defn- read-json-if-exists [path]
   (when (.exists (io/file path))
     (read-json path)))
@@ -345,6 +381,27 @@
   (ensure-parent-dir! path)
   (write-json path data)
   path)
+
+(defn- write-json-file-atomically! [path data]
+  (let [tmp-path (temp-path path ".json")]
+    (try
+      (write-json tmp-path data)
+      (read-json tmp-path)
+      (move-atomically! tmp-path path)
+      path
+      (catch Throwable t
+        (io/delete-file tmp-path true)
+        (throw t)))))
+
+(defn- write-text-file-atomically! [path text]
+  (let [tmp-path (temp-path path ".md")]
+    (try
+      (write-text tmp-path text)
+      (move-atomically! tmp-path path)
+      path
+      (catch Throwable t
+        (io/delete-file tmp-path true)
+        (throw t)))))
 
 (defn- artifact-files
   ([artifacts-dir]
@@ -1479,6 +1536,27 @@
                                                :thresholds thresholds
                                                :review_case_limit review_case_limit})))
 
+(defn- valid-semantic-quality-report? [report]
+  (and (map? report)
+       (map? (:gate_decision report))
+       (map? (:summary report))))
+
+(defn- semantic-quality-summary-markdown [dataset-path report]
+  (let [gate? (boolean (get-in report [:gate_decision :eligible?]))
+        summary (:summary report)
+        metrics (:metrics summary)
+        lines ["# Semantic Quality Report"
+               ""
+               (str "- dataset: `" dataset-path "`")
+               (str "- gate_eligible: `" (str/lower-case (str gate?)) "`")
+               (str "- cases: `" (:cases summary) "`")
+               (str "- expected_change_match_rate: `" (:expected_change_match_rate metrics) "`")
+               (str "- identity_stability_rate: `" (:identity_stability_rate metrics) "`")
+               (str "- move_rename_recovery_rate: `" (:move_rename_recovery_rate metrics) "`")
+               (str "- implementation_vs_meaning_accuracy: `" (:implementation_vs_meaning_accuracy metrics) "`")
+               (str "- unmatched_rate: `" (:unmatched_rate metrics) "`")]]
+    (str (str/join "\n" lines) "\n")))
+
 (defn- parse-bool [value]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str (or value "")))))
 
@@ -1512,6 +1590,7 @@
           "--required-candidate-streak-runs" (recur (assoc m :required_candidate_streak_runs (Long/parseLong v)) rest)
           "--promotion-cooldown-runs" (recur (assoc m :promotion_cooldown_runs (Long/parseLong v)) rest)
           "--out" (recur (assoc m :out_path v) rest)
+          "--summary-out" (recur (assoc m :summary_out_path v) rest)
           "--write-registry" (recur (assoc m :write_registry true) rest)
           "--manual-approval" (recur (assoc m :manual_approval true) rest)
           "--auto-promote" (recur (assoc m :auto_promote true) rest)
@@ -1700,6 +1779,34 @@
     (print-or-write! out_path result)
     (System/exit (if (get-in result [:gate_decision :eligible?]) 0 1))))
 
+(defn- run-semantic-quality-runner-command [{:keys [dataset_path out_path summary_out_path]}]
+  (when-not (and dataset_path out_path summary_out_path)
+    (println "Usage: clojure -M:eval semantic-quality-runner --dataset <quality-dataset.json> --out <output.json> --summary-out <summary.md>")
+    (System/exit 1))
+  (try
+    (delete-file-if-exists! out_path)
+    (delete-file-if-exists! summary_out_path)
+    (let [dataset (read-json dataset_path)
+          report (semantic-quality-report-from-dataset dataset)]
+      (when-not (valid-semantic-quality-report? report)
+        (throw (ex-info "semantic quality report missing required sections"
+                        {:type :invalid_request
+                         :message "semantic quality report missing required sections"})))
+      (write-json-file-atomically! out_path report)
+      (write-text-file-atomically! summary_out_path
+                                   (semantic-quality-summary-markdown dataset_path report))
+      (println (str "semantic_quality_gate="
+                    (if (get-in report [:gate_decision :eligible?])
+                      "eligible"
+                      "advisory_failure")))
+      (println (str "semantic_quality_report=" out_path))
+      (println (str "semantic_quality_summary=" summary_out_path))
+      (System/exit 0))
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "semantic_quality_runner_failed: " (.getMessage t))))
+      (System/exit 1))))
+
 (defn- run-policy-review-pipeline-command [{:keys [root_path usage_metrics_jdbc_url registry_path surface tenant_id since out_path write_registry]}]
   (when-not (and root_path usage_metrics_jdbc_url registry_path)
     (println "Usage: clojure -M:eval policy-review-pipeline --root <repo-root> --usage-metrics-jdbc-url <jdbc-url> --registry <registry.edn> [--surface <surface>] [--tenant-id <tenant>] [--since <iso-timestamp>] [--write-registry] [--out <output.json>]")
@@ -1839,6 +1946,7 @@
       "weekly-review-report" (run-weekly-review-report-command (parse-args rest-args))
       "protected-replay-dataset" (run-protected-replay-dataset-command (parse-args rest-args))
       "semantic-quality-report" (run-semantic-quality-report-command (parse-args rest-args))
+      "semantic-quality-runner" (run-semantic-quality-runner-command (parse-args rest-args))
       "policy-review-pipeline" (run-policy-review-pipeline-command (parse-args rest-args))
       "scheduled-policy-review" (run-scheduled-policy-review-command (parse-args rest-args))
       "scheduled-governance-cycle" (run-scheduled-governance-cycle-command (parse-args rest-args))
