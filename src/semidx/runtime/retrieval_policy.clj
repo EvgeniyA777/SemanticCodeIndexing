@@ -20,6 +20,9 @@
              :graph_related_test_neighbor 28
              :hint_preferred_path 15
              :hint_preferred_module 10
+             :hint_suspected_symbol_exact 42
+             :hint_suspected_symbol_segment 18
+             :source_path_prior 6
              :lexical_overlap 8
              :parser_fallback 0}
    :caps {:no_tier1_max 89

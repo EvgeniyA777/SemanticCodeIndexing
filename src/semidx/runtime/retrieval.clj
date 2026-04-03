@@ -88,6 +88,69 @@
              (str/starts-with? m module-str)
              (str/includes? m module-str)))))
 
+(defn- normalize-symbolish [s]
+  (-> (str s)
+      str/lower-case
+      (str/replace "_" "-")))
+
+(defn- symbol-tail [s]
+  (some-> (str s)
+          (str/split #"/" 2)
+          second))
+
+(defn- path-class [path]
+  (let [p (some-> path str str/lower-case)]
+    (cond
+      (or (str/starts-with? p ".tree-sitter-grammars/")
+          (str/starts-with? p "vendor/")
+          (str/includes? p "/vendor/")
+          (str/includes? p "/third_party/")
+          (str/includes? p "/node_modules/"))
+      "vendored"
+
+      (or (str/starts-with? p "fixtures/")
+          (str/includes? p "/fixtures/"))
+      "fixture"
+
+      (or (str/includes? p "/generated/")
+          (str/ends-with? p ".pb.go")
+          (str/ends-with? p "_pb2.py"))
+      "generated"
+
+      (or (str/starts-with? p "src/")
+          (str/starts-with? p "lib/")
+          (str/starts-with? p "app/"))
+      "source"
+
+      (or (str/starts-with? p "test/")
+          (str/includes? p "/test/")
+          (str/includes? p "/tests/"))
+      "test"
+
+      :else
+      "other")))
+
+(def ^:private path-class-rank
+  {"source" 0
+   "other" 1
+   "test" 2
+   "generated" 3
+   "fixture" 4
+   "vendored" 5})
+
+(defn- source-like-path? [path]
+  (= "source" (path-class path)))
+
+(defn- lexical-path-eligible? [u]
+  (not (contains? #{"vendored" "fixture" "generated"}
+                  (path-class (:path u)))))
+
+(defn- lexical-match-score [u tokens]
+  (let [hay (str/lower-case (str (:signature u) " " (:summary u) " " (:symbol u)))
+        lexical-overlap (count (filter #(str/includes? hay %) tokens))
+        dispatch-bonus (if (dispatch-match? u tokens) 2 0)]
+    (+ lexical-overlap dispatch-bonus)))
+
 (defn- combine-score [policy {:keys [tier1 tier2 tier3 tier4]} parser-mode]
   (let [raw (+ tier1 tier2 tier3 tier4)
         capped-soft (if (zero? tier1)
@@ -138,6 +201,28 @@
       (add-tier score-map uid tier points (coded code summary))
       score-map)))
 
+(defn- suspected-symbol-match-reasons [u query]
+  (let [suspected-symbols (get-in query [:hints :suspected_symbols] [])
+        eligible? (lexical-path-eligible? u)
+        normalized-symbol (normalize-symbolish (:symbol u))
+        normalized-tail (some-> (:symbol u) symbol-tail normalize-symbolish)
+        exact? (and eligible?
+                    (some #(let [candidate (normalize-symbolish %)]
+                             (or (= normalized-symbol candidate)
+                                 (and normalized-tail (= normalized-tail candidate))))
+                          suspected-symbols))
+        segment? (and eligible?
+                      (not exact?)
+                      (some #(let [candidate (normalize-symbolish %)]
+                               (and (>= (count candidate) 4)
+                                    (or (str/includes? normalized-symbol candidate)
+                                        (and normalized-tail
+                                             (str/includes? normalized-tail candidate)))))
+                            suspected-symbols))]
+    (cond-> []
+      exact? (conj [:tier2 "hint_suspected_symbol_exact" "Tier2: suspected symbol hint matched the unit symbol."])
+      segment? (conj [:tier3 "hint_suspected_symbol_segment" "Tier3: suspected symbol hint partially matched the unit symbol."]))))
+
 (defn- structural-seed-reasons [u query tokens]
   (let [target-symbols (get-in query [:targets :symbols] [])
         target-paths (set (get-in query [:targets :paths] []))
@@ -150,21 +235,35 @@
         by-test (contains? target-tests (:path u))
         by-span (some #(overlap-span? u %) changed-spans)
         by-dispatch (dispatch-match? u tokens)]
-    (cond-> []
-      by-symbol (conj [:tier1 "exact_target_resolved" "Tier1: target symbol resolved to unit."])
-      by-path (conj [:tier1 "target_path_match" "Tier1: unit path directly targeted by query."])
-      by-span (conj [:tier1 "diff_overlap_direct" "Tier1: changed span overlaps this unit."])
-      by-module (conj [:tier2 "target_module_match" "Tier2: unit module targeted by query."])
-      by-test (conj [:tier2 "target_test_match" "Tier2: unit appears in explicitly requested tests."])
-      by-dispatch (conj [:tier2 "dispatch_value_match" "Tier2: multimethod dispatch value matches the query intent."]))))
+    (into
+     (cond-> []
+       by-symbol (conj [:tier1 "exact_target_resolved" "Tier1: target symbol resolved to unit."])
+       by-path (conj [:tier1 "target_path_match" "Tier1: unit path directly targeted by query."])
+       by-span (conj [:tier1 "diff_overlap_direct" "Tier1: changed span overlaps this unit."])
+       by-module (conj [:tier2 "target_module_match" "Tier2: unit module targeted by query."])
+       by-test (conj [:tier2 "target_test_match" "Tier2: unit appears in explicitly requested tests."])
+       by-dispatch (conj [:tier2 "dispatch_value_match" "Tier2: multimethod dispatch value matches the query intent."]))
+     (suspected-symbol-match-reasons u query))))
 
 (defn- lexical-seed-units [units tokens]
-  (->> units
-       (filter #(or (lexical-match? % tokens)
-                    (dispatch-match? % tokens)))
-       (sort-by (juxt :path :start_line))
-       (take 6)
-       vec))
+  (let [matches (->> units
+                     (keep (fn [u]
+                             (let [score (lexical-match-score u tokens)]
+                               (when (pos? score)
+                                 (assoc u ::lexical-score score)))))
+                     vec)
+        eligible-matches (vec (filter lexical-path-eligible? matches))
+        candidates (if (seq eligible-matches)
+                     eligible-matches
+                     matches)]
+    (->> candidates
+         (sort-by (fn [u]
+                    [(- (::lexical-score u))
+                     (get path-class-rank (path-class (:path u)) 99)
+                     (:path u)
+                     (:start_line u)]))
+         (take 6)
+         (mapv #(dissoc % ::lexical-score)))))
 
 (defn- related-test-unit-ids [index module]
   (if (seq module)
@@ -216,12 +315,15 @@
     (reduce
      (fn [acc u]
        (let [uid (:unit_id u)
+             already-scored? (contains? score-map uid)
              by-pref-path (contains? preferred-paths (:path u))
              by-pref-module (some #(module-prefix-match? u %) preferred-modules)
+             by-source-path-prior (and already-scored? (source-like-path? (:path u)))
              by-parser-fallback (= "fallback" (:parser_mode u))]
          (cond-> acc
            by-pref-path (add-scored-reason uid :tier3 (rp/weight policy "hint_preferred_path") "hint_preferred_path" "Tier3: preferred path hint boosted unit.")
            by-pref-module (add-scored-reason uid :tier3 (rp/weight policy "hint_preferred_module") "hint_preferred_module" "Tier3: preferred module hint boosted unit.")
+           by-source-path-prior (add-scored-reason uid :tier3 (rp/weight policy "source_path_prior") "source_path_prior" "Tier3: source-like path prior boosted an already-matched unit.")
            by-parser-fallback (add-scored-reason uid :tier3 (rp/weight policy "parser_fallback") "parser_fallback" "Fallback parser contributes limited-confidence evidence."))))
      score-map
      units)))
@@ -945,7 +1047,20 @@
                       (take 2)
                       vec)})
 
-(defn- next-step [status focus confidence]
+(defn- narrowing-guidance-needed? [query confidence]
+  (let [warning-codes (set (map :code (:warnings confidence)))
+        explicit-targets? (boolean
+                           (some seq
+                                 [(get-in query [:targets :symbols])
+                                  (get-in query [:targets :paths])
+                                  (get-in query [:targets :modules])
+                                  (get-in query [:targets :tests])
+                                  (get-in query [:targets :changed_spans])]))]
+    (and (not explicit-targets?)
+         (contains? warning-codes "no_tier1_evidence")
+         (contains? warning-codes "target_ambiguous"))))
+
+(defn- next-step [status focus confidence query]
   (let [target-unit-ids (mapv :unit_id focus)]
     (case status
       "insufficient_evidence"
@@ -959,6 +1074,12 @@
        :available_actions []
        :reason "Selection payload could not fit into the reserved selection budget."
        :target_unit_ids []}
+
+      (narrowing-guidance-needed? query confidence)
+      {:recommended_action "narrow_query"
+       :available_actions ["fetch_context_detail"]
+       :reason "Retrieval is ambiguous without explicit structural targets; narrow the query or provide paths, modules, or symbols."
+       :target_unit_ids target-unit-ids}
 
       {:recommended_action (if (= "low" (:level confidence)) "fetch_context_detail" "expand_context")
        :available_actions ["expand_context" "fetch_context_detail"]
@@ -1010,7 +1131,7 @@
         :confidence_level (:level confidence)
         :budget_summary (:budget selection)
         :focus (mapv compact-focus-unit focus)
-        :next_step (next-step status focus confidence)}
+        :next_step (next-step status focus confidence query)}
        :selection
        :api-shape)
       {:retrieval_policy (rp/policy-summary policy)

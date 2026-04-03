@@ -16,6 +16,10 @@
   (write-file! root "src/my/app/order.clj"
                "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  order)\n"))
 
+(defn- create-vendored-lexical-noise! [root]
+  (write-file! root ".tree-sitter-grammars/tree-sitter-java/bindings/python/tree_sitter_java/__init__.py"
+               "def process_order(value):\n    return value\n\n\ndef validate_order(value):\n    return value\n"))
+
 (def ^:private sample-shorthand-query
   {:intent "Find the main orchestration flow and key entrypoints."})
 
@@ -159,7 +163,7 @@
                    (get-in resolve-response [:body :result :structuredContent :compact_continuation :continuation_mode])))
             (is (= "expand_context"
                    (get-in resolve-response [:body :result :structuredContent :compact_continuation :next_tool])))
-            (is (= ["paths"]
+            (is (= ["diff_summary"]
                    (get-in resolve-response [:body :result :structuredContent :normalized_query_summary :target_keys])))))
         (testing "intent string shorthand works over streamable HTTP"
           (let [create-response (request! "POST"
@@ -186,6 +190,34 @@
             (is (= "intent_shorthand"
                    (get-in resolve-response [:body :result :structuredContent :query_ingress_mode])))
             (is (string? (get-in resolve-response [:body :result :structuredContent :selection_id])))))
+        (testing "intent shorthand avoids vendored lexical noise over streamable HTTP"
+          (let [noisy-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-http-vendored-noise" (make-array java.nio.file.attribute.FileAttribute 0)))
+                _ (create-sample-repo! noisy-root)
+                _ (create-vendored-lexical-noise! noisy-root)
+                create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 53
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path noisy-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 54
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :intent "Find process_order validation flow and key entrypoints."}}}
+                                           {"Mcp-Session-Id" session-id})
+                focus (get-in resolve-response [:body :result :structuredContent :focus])]
+            (is (= 200 (:status resolve-response)))
+            (is (seq focus))
+            (is (some #(= "src/my/app/order.clj" (:path %)) focus))
+            (is (not-any? #(clojure.string/starts-with? (:path %) ".tree-sitter-grammars/") focus))))
         (testing "invalid shorthand returns repair-oriented error over streamable HTTP"
           (let [create-response (request! "POST"
                                           (str base-url "/mcp")

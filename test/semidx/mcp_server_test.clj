@@ -25,6 +25,10 @@
   (write-file! root "test/my/app/order_test.clj"
                "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n"))
 
+(defn- create-vendored-lexical-noise! [root]
+  (write-file! root ".tree-sitter-grammars/tree-sitter-java/bindings/python/tree_sitter_java/__init__.py"
+               "def process_order(value):\n    return value\n\n\ndef validate_order(value):\n    return value\n"))
+
 (def sample-query
   {:api_version "1.0"
    :schema_version "1.0"
@@ -394,7 +398,7 @@
             (is (= "mcp_shorthand" (:query_ingress_mode resolve-data)))
             (is (= "code_understanding"
                    (get-in resolve-data [:normalized_query_summary :purpose])))
-            (is (= ["paths"]
+            (is (= ["diff_summary"]
                    (get-in resolve-data [:normalized_query_summary :target_keys])))
             (is (string? (:selection_id resolve-data)))))
 
@@ -445,6 +449,22 @@
             (is (true? (:query_normalized resolve-data)))
             (is (= "intent_shorthand" (:query_ingress_mode resolve-data)))
             (is (string? (:selection_id resolve-data)))))
+
+        (testing "shorthand retrieval avoids vendored lexical noise"
+          (let [noisy-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-vendored-noise" (make-array java.nio.file.attribute.FileAttribute 0)))
+                _ (create-sample-repo! noisy-root)
+                _ (create-vendored-lexical-noise! noisy-root)
+                noisy-create (call-tool! handle 79 "create_index" {:root_path noisy-root})
+                noisy-index-id (get-in noisy-create [:result :structuredContent :index_id])
+                resolve-response (call-tool! handle 80 "resolve_context" {:index_id noisy-index-id
+                                                                          :intent "Find process_order validation flow and key entrypoints."})
+                resolve-data (get-in resolve-response [:result :structuredContent])
+                focus (:focus resolve-data)]
+            (is (= noisy-index-id (:index_id resolve-data)))
+            (is (true? (:query_normalized resolve-data)))
+            (is (seq focus))
+            (is (some #(= "src/my/app/order.clj" (:path %)) focus))
+            (is (not-any? #(str/starts-with? (:path %) ".tree-sitter-grammars/") focus))))
 
         (testing "resolve_context rejects missing both intent and query"
           (let [resolve-response (call-tool! handle 76 "resolve_context" {:index_id index-id})

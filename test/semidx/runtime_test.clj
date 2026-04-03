@@ -2219,3 +2219,59 @@
       (is (some #(= "my.app.order/process-order" (:symbol %)) callers))
       (is (some #(= "my.app.order/validate-order" (:symbol %)) callees)))
     (is true "SEMIDX_TEST_POSTGRES_URL is not set; skipping postgres storage smoke test.")))
+
+(defn- create-vendored-lexical-noise! [root]
+  (write-file! root ".tree-sitter-grammars/tree-sitter-java/bindings/python/tree_sitter_java/__init__.py"
+               "def process_order(value):\n    return value\n\n\ndef validate_order(value):\n    return value\n"))
+
+(deftest broad-query-prefers-source-over-vendored-lexical-noise-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-vendored-noise" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        _ (create-vendored-lexical-noise! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        query {:api_version "1.0"
+               :schema_version "1.0"
+               :intent {:purpose "code_understanding"
+                        :details "Find the process validation flow and key entrypoints."}
+               :targets {:diff_summary "Find the process validation flow and key entrypoints."}
+               :constraints {:token_budget 1200
+                             :language_allowlist ["clojure"]
+                             :freshness "current_snapshot"}
+               :hints {:prefer_definitions_over_callers true}
+               :options {:include_tests false
+                         :include_impact_hints false
+                         :allow_raw_code_escalation false}
+               :trace {:trace_id "77777777-7777-4777-8777-777777777777"
+                       :request_id "runtime-vendored-noise-001"}}
+        result (sci/resolve-context index query)
+        focus (:focus result)]
+    (is (seq focus))
+    (is (some #(str/starts-with? (:path %) "src/") focus))
+    (is (not-any? #(str/starts-with? (:path %) ".tree-sitter-grammars/") focus))))
+
+(deftest suspected-symbols-lift-source-authority-for-symbolish-query-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-suspected-symbols" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        _ (create-vendored-lexical-noise! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        query {:api_version "1.0"
+               :schema_version "1.0"
+               :intent {:purpose "code_understanding"
+                        :details "Find process_order validation flow and key entrypoints."}
+               :targets {:diff_summary "Find process_order validation flow and key entrypoints."}
+               :constraints {:token_budget 1200
+                             :language_allowlist ["clojure"]
+                             :freshness "current_snapshot"}
+               :hints {:suspected_symbols ["process_order" "validate_order"]
+                       :prefer_definitions_over_callers true}
+               :options {:include_tests false
+                         :include_impact_hints false
+                         :allow_raw_code_escalation false}
+               :trace {:trace_id "88888888-8888-4888-8888-888888888888"
+                       :request_id "runtime-suspected-symbols-001"}}
+        result (sci/resolve-context index query)
+        focus (:focus result)]
+    (is (seq focus))
+    (is (some #(= "my.app.order/process-order" (:symbol %)) focus))
+    (is (not-any? #(str/starts-with? (:path %) ".tree-sitter-grammars/") focus))
+    (is (= "src/my/app/order.clj" (:path (first focus))))))

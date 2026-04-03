@@ -5,6 +5,7 @@
             [semidx.core :as sci]
             [semidx.runtime.errors :as errors]
             [semidx.runtime.language-activation :as activation]
+            [semidx.runtime.query-anchors :as query-anchors]
             [semidx.runtime.retrieval-policy :as rp]
             [semidx.runtime.storage :as storage]
             [semidx.runtime.usage-metrics :as usage])
@@ -468,6 +469,22 @@
    :token_budget (get-in query [:constraints :token_budget])
    :include_tests (boolean (get-in query [:options :include_tests]))})
 
+(defn- merge-query-section [base inferred]
+  (merge-with (fn [existing inferred-value]
+                (cond
+                  (and (vector? existing) (vector? inferred-value))
+                  (vec (distinct (concat existing inferred-value)))
+
+                  (and (map? existing) (map? inferred-value))
+                  (merge-query-section existing inferred-value)
+
+                  (nil? existing)
+                  inferred-value
+
+                  :else existing))
+              (or inferred {})
+              (or base {})))
+
 (defn- normalize-mcp-query [state query]
   (cond
     (canonical-query-shape? query)
@@ -481,12 +498,20 @@
       (let [purpose (:purpose intent-map)
             adaptive-budget (get purpose-token-budgets purpose (:token_budget mcp-query-default-constraints))
             base-constraints (assoc mcp-query-default-constraints :token_budget adaptive-budget)
+            inferred-anchors (query-anchors/infer-anchors intent-map)
+            fallback-targets (cond-> {}
+                               (seq (:details intent-map))
+                               (assoc :diff_summary (:details intent-map)))
             normalized {:api_version (or (:api_version query) "1.0")
                         :schema_version (or (:schema_version query) "1.0")
                         :intent intent-map
-                        :targets (or (:targets query) {:paths ["."]})
+                        :targets (merge-query-section
+                                  (or (:targets query) fallback-targets)
+                                  (:targets inferred-anchors))
                         :constraints (merge base-constraints (:constraints query))
-                        :hints (merge mcp-query-default-hints (:hints query))
+                        :hints (merge-query-section
+                                (merge mcp-query-default-hints (:hints query))
+                                (:hints inferred-anchors))
                         :options (merge mcp-query-default-options (:options query))
                         :trace (fill-trace-defaults state (:trace query))}]
         {:query normalized
@@ -501,7 +526,7 @@
    :schema_version "1.0"
    :intent {:purpose "code_understanding"
             :details "Describe the coding task or repository question here."}
-   :targets {:paths ["."]}
+   :targets {:diff_summary "Describe the relevant code area or changed behavior here."}
    :constraints {:token_budget 3200
                  :max_raw_code_level "enclosing_unit"
                  :freshness "current_snapshot"}
