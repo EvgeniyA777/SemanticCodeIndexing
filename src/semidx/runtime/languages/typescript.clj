@@ -3,7 +3,6 @@
             [clojure.java.shell :as sh]
             [clojure.string :as str]))
 
-(def ^:private ts-import-from-re #"^\s*(?:import|export)\s+.+?\s+from\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-import-clause-re #"^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-import-bare-re #"^\s*import\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-class-re #"^\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)")

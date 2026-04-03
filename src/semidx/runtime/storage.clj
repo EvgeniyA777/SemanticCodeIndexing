@@ -1,5 +1,6 @@
 (ns semidx.runtime.storage
   (:require [clojure.data.json :as json]
+            [semidx.runtime.semantic-id :as semantic-id]
             [next.jdbc :as jdbc]))
 
 (defprotocol IndexStorage
@@ -38,6 +39,7 @@
         (->> (:unit_order idx)
              (map #(get (:units idx) %))
              (remove nil?)
+             (map semantic-id/enrich-unit)
              (filter #(if module (= module (:module %)) true))
              (filter #(if symbol (= symbol (:symbol %)) true))
              (take limit)
@@ -53,6 +55,7 @@
         (->> (get (:callers_index idx) unit-id #{})
              (map #(get (:units idx) %))
              (remove nil?)
+             (map semantic-id/enrich-unit)
              (take limit)
              vec))))
   (fetch-callees [_ root-path unit-id {:keys [snapshot_id limit] :or {limit 100}}]
@@ -70,6 +73,7 @@
           (->> callees
                (map #(get (:units idx) %))
                (remove nil?)
+               (map semantic-id/enrich-unit)
                (take limit)
                vec))))))
 
@@ -111,9 +115,12 @@
        vec))
 
 (defn- row-payload [row]
-  (parse-json (:semantic_index_units/payload row
-                                             (:semantic_index_snapshots/payload row
-                                                                                (:payload row)))))
+  (let [payload (parse-json (:semantic_index_units/payload row
+                                                          (:semantic_index_snapshots/payload row
+                                                                                             (:payload row))))]
+    (if (map? payload)
+      (semantic-id/enrich-unit payload)
+      payload)))
 
 (defn- latest-snapshot-id [datasource root-path]
   (when-let [row (first (jdbc/execute! datasource
@@ -152,6 +159,9 @@
                        root_path text not null,
                        snapshot_id text not null,
                        unit_id text not null,
+                       semantic_id text,
+                       semantic_id_version text,
+                       semantic_fingerprint text,
                        path text not null,
                        module text,
                        symbol text,
@@ -164,6 +174,15 @@
     (jdbc/execute! datasource
                    ["create index if not exists idx_semantic_index_units_root_snapshot
                      on semantic_index_units(root_path, snapshot_id)"])
+    (jdbc/execute! datasource
+                   ["alter table semantic_index_units
+                     add column if not exists semantic_id text"])
+    (jdbc/execute! datasource
+                   ["alter table semantic_index_units
+                     add column if not exists semantic_id_version text"])
+    (jdbc/execute! datasource
+                   ["alter table semantic_index_units
+                     add column if not exists semantic_fingerprint text"])
     (jdbc/execute! datasource
                    ["create index if not exists idx_semantic_index_units_unit
                      on semantic_index_units(unit_id)"])
@@ -203,11 +222,14 @@
       (doseq [u (ordered-units index)]
         (jdbc/execute! tx
                        ["insert into semantic_index_units
-                         (root_path, snapshot_id, unit_id, path, module, symbol, kind, start_line, end_line, parser_mode, payload)
-                         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))"
+                         (root_path, snapshot_id, unit_id, semantic_id, semantic_id_version, semantic_fingerprint, path, module, symbol, kind, start_line, end_line, parser_mode, payload)
+                         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, cast(? as jsonb))"
                         (:root_path index)
                         (:snapshot_id index)
                         (:unit_id u)
+                        (:semantic_id u)
+                        (:semantic_id_version u)
+                        (:semantic_fingerprint u)
                         (:path u)
                         (:module u)
                         (:symbol u)
@@ -233,7 +255,8 @@
                                            order by id desc
                                            limit 1"
                                           root-path]))]
-      (parse-json (:semantic_index_snapshots/payload row (:payload row)))))
+      (some-> (parse-json (:semantic_index_snapshots/payload row (:payload row)))
+              semantic-id/enrich-index)))
   (load-index-by-snapshot [_ root-path snapshot-id]
     (when-let [row (first (jdbc/execute! datasource
                                          ["select payload
@@ -242,7 +265,8 @@
                                              and snapshot_id = ?
                                            limit 1"
                                           root-path snapshot-id]))]
-      (parse-json (:semantic_index_snapshots/payload row (:payload row)))))
+      (some-> (parse-json (:semantic_index_snapshots/payload row (:payload row)))
+              semantic-id/enrich-index)))
   (fetch-units [_ root-path {:keys [snapshot_id module symbol limit] :or {limit 100}}]
     (if-let [sid (resolve-snapshot-id datasource root-path snapshot_id)]
       (let [sql (str "select payload

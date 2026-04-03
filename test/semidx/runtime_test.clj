@@ -12,7 +12,8 @@
             [semidx.runtime.languages.lua :as lua-language]
             [semidx.runtime.languages.python :as py-language]
             [semidx.runtime.languages.typescript :as ts-language]
-            [semidx.runtime.retrieval-policy :as rp]))
+            [semidx.runtime.retrieval-policy :as rp]
+            [semidx.runtime.storage :as storage]))
 
 (defn- write-file! [root rel-path content]
   (let [f (io/file root rel-path)]
@@ -1069,7 +1070,198 @@
         ;; load_latest should return previously persisted snapshot
         index-b (sci/create-index {:root_path tmp-root :storage storage :load_latest true})]
     (is (= (:snapshot_id index-a) (:snapshot_id index-b)))
-    (is (= (count (:units index-a)) (count (:units index-b))))))
+    (is (= (count (:units index-a)) (count (:units index-b))))
+    (is (every? #(seq (:semantic_id %)) (vals (:units index-b))))
+    (is (every? #(= "v1" (:semantic_id_version %)) (vals (:units index-b))))
+    (is (every? #(seq (:semantic_fingerprint %)) (vals (:units index-b))))))
+
+(deftest semantic-id-foundation-fields-are-present-and-stable-across-noop-edits-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-semantic-id-foundation" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index-a (sci/create-index {:root_path tmp-root})
+        process-a (->> (vals (:units index-a))
+                       (filter #(= "my.app.order/process-order" (:symbol %)))
+                       first)
+        validate-a (->> (vals (:units index-a))
+                        (filter #(= "my.app.order/validate-order" (:symbol %)))
+                        first)
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n;; comment-only semantic noop\n(defn process-order [ctx order]\n  (validate-order order)\n  (str/join \"-\" [\"ok\" (:id order)]))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n")
+        index-b (sci/update-index index-a {:changed_paths ["src/my/app/order.clj"]})
+        process-b (->> (vals (:units index-b))
+                       (filter #(= "my.app.order/process-order" (:symbol %)))
+                       first)
+        validate-b (->> (vals (:units index-b))
+                        (filter #(= "my.app.order/validate-order" (:symbol %)))
+                        first)]
+    (testing "semantic foundation fields are emitted for normalized units"
+      (is (seq (:semantic_id process-a)))
+      (is (= "v1" (:semantic_id_version process-a)))
+      (is (seq (:semantic_fingerprint process-a)))
+      (is (seq (:language process-a))))
+    (testing "comment-only edits preserve semantic slot identity"
+      (is (= (:semantic_id process-a) (:semantic_id process-b)))
+      (is (= (:semantic_id validate-a) (:semantic_id validate-b))))
+    (testing "no-op edits preserve current implementation fingerprint"
+      (is (= (:semantic_fingerprint process-a) (:semantic_fingerprint process-b)))
+      (is (= (:semantic_fingerprint validate-a) (:semantic_fingerprint validate-b))))))
+
+(deftest legacy-storage-loads-backfill-semantic-id-fields-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-semantic-id-legacy-storage" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        index (sci/create-index {:root_path tmp-root})
+        legacy-index (-> index
+                         (update :units
+                                 (fn [units]
+                                   (into {}
+                                         (map (fn [[unit-id unit]]
+                                                [unit-id (dissoc unit :semantic_id
+                                                                      :semantic_id_version
+                                                                      :semantic_fingerprint)])
+                                              units)))))
+        _ (storage/init-storage! storage-adapter)
+        _ (storage/save-index! storage-adapter legacy-index)
+        loaded (sci/create-index {:root_path tmp-root
+                                  :storage storage-adapter
+                                  :load_latest true})
+        persisted-units (sci/query-units storage-adapter tmp-root {:snapshot_id (:snapshot_id loaded)
+                                                                   :module "my.app.order"})]
+    (testing "load_latest backfills semantic metadata for legacy snapshots"
+      (is (= (:snapshot_id index) (:snapshot_id loaded)))
+      (is (every? #(seq (:semantic_id %)) (vals (:units loaded))))
+      (is (every? #(= "v1" (:semantic_id_version %)) (vals (:units loaded))))
+      (is (every? #(seq (:semantic_fingerprint %)) (vals (:units loaded)))))
+    (testing "query-units also returns enriched legacy payloads"
+      (is (seq persisted-units))
+      (is (every? #(seq (:semantic_id %)) persisted-units))
+      (is (every? #(= "v1" (:semantic_id_version %)) persisted-units))
+      (is (every? #(seq (:semantic_fingerprint %)) persisted-units)))))
+
+(deftest snapshot-diff-parent-inference-classifies-semantic-changes-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-parent" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        baseline (sci/create-index {:root_path tmp-root
+                                    :storage storage-adapter})
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n(defn process-order [ctx order]\n  (validate-order order)\n  (str \"ok-\" (:id order)))\n\n(defn validate-order [payload]\n  (if (:id payload)\n    payload\n    (throw (ex-info \"invalid\" {}))))\n\n(defn normalize-order [order]\n  (assoc order :normalized true))\n")
+        _ (write-file! tmp-root
+                       "src/my/app/alt_order.clj"
+                       "(ns my.app.alt-order-v2)\n\n(defn validate-order [order]\n  (assoc order :alt true))\n")
+        _ (write-file! tmp-root
+                       "test/my/app/order_support.clj"
+                       "(ns my.app.order-support\n  (:require [my.app.order :as order]))\n")
+        updated (sci/update-index baseline {:changed_paths ["src/my/app/order.clj"
+                                                            "src/my/app/alt_order.clj"
+                                                            "test/my/app/order_support.clj"]
+                                            :storage storage-adapter})
+        diff (sci/snapshot-diff updated)
+        changes-by-type (group-by :change_type (:changes diff))]
+    (testing "parent snapshot is inferred from lifecycle provenance"
+      (is (= (:snapshot_id baseline) (:baseline_snapshot_id diff)))
+      (is (= (:snapshot_id updated) (:current_snapshot_id diff))))
+    (testing "semantic diff classifies the main change categories"
+      (is (= {:added 1
+              :removed 1
+              :moved_or_renamed 1
+              :implementation_changed 1
+              :meaning_changed 1
+              :unchanged 0}
+             (get-in diff [:summary :change_counts])))
+      (is (= 5 (get-in diff [:summary :total_changes]))))
+    (testing "implementation changes retain semantic slot but change implementation fingerprint"
+      (let [change (first (get changes-by-type :implementation_changed))]
+        (is (= "my.app.order/process-order" (:symbol change)))
+        (is (= :semantic_id (get-in change [:classification_basis :matched_on])))))
+    (testing "meaning changes are surfaced when public shape changes within the same slot"
+      (let [change (first (get changes-by-type :meaning_changed))]
+        (is (= "my.app.order/validate-order" (:symbol change)))
+        (is (false? (get-in change [:classification_basis :same_public_shape])))))
+    (testing "rename-like changes pair removed and added units by implementation fingerprint"
+      (let [change (first (get changes-by-type :moved_or_renamed))]
+        (is (= "my.app.alt-order-v2/validate-order" (:symbol change)))
+        (is (= "my.app.alt-order/validate-order" (:baseline_symbol change)))
+        (is (= :semantic_fingerprint_with_symbol_local_name
+               (get-in change [:classification_basis :matched_on])))))
+    (testing "added and removed changes remain explicit"
+      (is (= #{"my.app.order/normalize-order"}
+             (set (map :symbol (get changes-by-type :added)))))
+      (is (= #{"my.app.order-support/run-order-helper"}
+             (set (map :baseline_symbol (get changes-by-type :removed))))))))
+
+(deftest snapshot-diff-keeps-unrelated-identical-bodies-as-add-and-remove-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-no-false-rename" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        baseline (sci/create-index {:root_path tmp-root
+                                    :storage storage-adapter})
+        _ (write-file! tmp-root
+                       "src/my/app/alt_order.clj"
+                       "(ns my.app.alt-order)\n\n(defn validate-alt-order [order]\n  (assoc order :alt true))\n")
+        updated (sci/update-index baseline {:changed_paths ["src/my/app/alt_order.clj"]
+                                            :storage storage-adapter})
+        diff (sci/snapshot-diff updated)
+        changes-by-type (group-by :change_type (:changes diff))]
+    (is (empty? (get changes-by-type :moved_or_renamed)))
+    (is (= #{"my.app.alt-order/validate-alt-order"}
+           (set (map :symbol (get changes-by-type :added)))))
+    (is (= #{"my.app.alt-order/validate-order"}
+           (set (map :baseline_symbol (get changes-by-type :removed)))))))
+
+(deftest snapshot-diff-explicit-baseline-and-path-filter-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-filter" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        baseline (sci/create-index {:root_path tmp-root
+                                    :storage storage-adapter})
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n(defn process-order [ctx order]\n  (validate-order order)\n  (str \"ok-\" (:id order)))\n\n(defn validate-order [payload]\n  (if (:id payload)\n    payload\n    (throw (ex-info \"invalid\" {}))))\n\n(defn normalize-order [order]\n  (assoc order :normalized true))\n")
+        _ (write-file! tmp-root
+                       "test/my/app/order_support.clj"
+                       "(ns my.app.order-support\n  (:require [my.app.order :as order]))\n")
+        updated (sci/update-index baseline {:changed_paths ["src/my/app/order.clj"
+                                                            "test/my/app/order_support.clj"]
+                                            :storage storage-adapter})
+        diff (sci/snapshot-diff updated {:baseline_snapshot_id (:snapshot_id baseline)
+                                         :paths ["src/my/app/order.clj"]})]
+    (is (= (:snapshot_id baseline) (:baseline_snapshot_id diff)))
+    (is (= {:added 1
+            :removed 0
+            :moved_or_renamed 0
+            :implementation_changed 1
+            :meaning_changed 1
+            :unchanged 0}
+           (get-in diff [:summary :change_counts])))
+    (is (every? #(= "src/my/app/order.clj"
+                    (or (:path %) (:baseline_path %)))
+                (:changes diff)))))
+
+(deftest snapshot-diff-baseline-errors-are-explicit-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-snapshot-diff-errors" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})]
+    (testing "missing parent snapshot without explicit baseline is rejected"
+      (try
+        (sci/snapshot-diff index)
+        (is false "expected invalid_request")
+        (catch clojure.lang.ExceptionInfo e
+          (is (= :invalid_request (:type (ex-data e))))
+          (is (= "invalid_request" (:error_code (ex-data e)))))))
+    (testing "missing explicit baseline snapshot is rejected with details"
+      (let [storage-adapter (sci/in-memory-storage)
+            persisted (sci/create-index {:root_path tmp-root
+                                         :storage storage-adapter})]
+        (try
+          (sci/snapshot-diff persisted {:baseline_snapshot_id "missing-snapshot"})
+          (is false "expected invalid_request")
+          (catch clojure.lang.ExceptionInfo e
+            (is (= :invalid_request (:type (ex-data e))))
+            (is (= "missing-snapshot"
+                   (get-in (ex-data e) [:details :baseline_snapshot_id])))))))))
 
 (deftest index-lifecycle-reuse-staleness-and-pinning-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-storage-lifecycle-test" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -1191,6 +1383,40 @@
     (is (not (str/includes? (:content literal-old) ":mutated")))
     (is (str/includes? (:content literal-current) ":mutated"))))
 
+(deftest literal-file-slice-stays-snapshot-bound-across-live-file-changes-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-snapshot-bound" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (sci/create-index {:root_path tmp-root})
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  :mutated)\n\n(defn validate-order [order]\n  :mutated)\n")
+        result (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                              :path "src/my/app/order.clj"
+                                              :start_line 4
+                                              :end_line 6})]
+    (is (str/includes? (:content result) "process-order"))
+    (is (str/includes? (:content result) "str/join"))
+    (is (not (str/includes? (:content result) ":mutated")))))
+
+(deftest literal-file-slice-rejects-current-snapshot-read-when-file-snapshots-are-missing-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-missing-file-snapshots" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        index (-> (sci/create-index {:root_path tmp-root})
+                  (dissoc :file_snapshots))
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  :mutated)\n")]
+    (try
+      (sci/literal-file-slice index {:snapshot_id (:snapshot_id index)
+                                     :path "src/my/app/order.clj"
+                                     :start_line 3
+                                     :end_line 4})
+      (is false "expected invalid_request")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= :invalid_request (:type (ex-data e))))
+        (is (= :file_snapshots_unavailable
+               (get-in (ex-data e) [:details :reason])))))))
+
 (deftest literal-file-slice-clamps-large-line-spans-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-literal-slice-truncation" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -1208,6 +1434,48 @@
     (is (= "line_cap_exceeded" (:truncation_reason result)))
     (is (= 400 (:line_count result)))
     (is (= {:start_line 2 :end_line 401} (:returned_range result)))))
+
+(deftest projection-profile-rollout-is-additive-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-projection-profile-rollout" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        storage-adapter (sci/in-memory-storage)
+        baseline (sci/create-index {:root_path tmp-root
+                                    :storage storage-adapter})
+        repo-map (sci/repo-map baseline)
+        compression (sci/compress-project baseline)
+        selection (sci/resolve-context baseline sample-query)
+        expansion (sci/expand-context baseline {:selection_id (:selection_id selection)
+                                                :snapshot_id (:snapshot_id selection)})
+        detail (sci/fetch-context-detail baseline {:selection_id (:selection_id selection)
+                                                   :snapshot_id (:snapshot_id selection)})
+        detail-one-shot (sci/resolve-context-detail baseline sample-query)
+        skeletons (sci/skeletons baseline {:paths ["src/my/app/order.clj"]})
+        _ (write-file! tmp-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order\n  (:require [clojure.string :as str]))\n\n(defn process-order [ctx order]\n  (let [validated (validate-order order)]\n    (str/join \"-\" [\"ok\" (:id validated)])))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n")
+        updated (sci/create-index {:root_path tmp-root
+                                   :storage storage-adapter})
+        diff (sci/snapshot-diff updated {:baseline_snapshot_id (:snapshot_id baseline)})]
+    (testing "map-returning surfaces expose projection metadata directly"
+      (is (= "structural" (:projection_profile repo-map)))
+      (is (= "selection" (:recommended_projection_profile repo-map)))
+      (is (= "summary" (:projection_profile compression)))
+      (is (= "selection" (:recommended_projection_profile compression)))
+      (is (= "selection" (:projection_profile selection)))
+      (is (= "api_shape" (:recommended_projection_profile selection)))
+      (is (= "api_shape" (:projection_profile expansion)))
+      (is (= "detail" (:recommended_projection_profile expansion)))
+      (is (= "detail" (:projection_profile detail)))
+      (is (nil? (:recommended_projection_profile detail)))
+      (is (= "detail" (:projection_profile detail-one-shot)))
+      (is (nil? (:recommended_projection_profile detail-one-shot)))
+      (is (= "diff" (:projection_profile diff)))
+      (is (nil? (:recommended_projection_profile diff))))
+    (testing "vector-returning skeletons remain backward-compatible via metadata"
+      (is (vector? skeletons))
+      (is (seq skeletons))
+      (is (= "api_shape" (:projection_profile (meta skeletons))))
+      (is (= "detail" (:recommended_projection_profile (meta skeletons)))))))
 
 (deftest selection-cache-eviction-surfaces-explicit-error-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-selection-eviction" (make-array java.nio.file.attribute.FileAttribute 0)))

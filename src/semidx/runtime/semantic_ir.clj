@@ -1,5 +1,6 @@
 (ns semidx.runtime.semantic-ir
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [semidx.runtime.semantic-id :as semantic-id]))
 
 (def ^:private semantic-pipeline-version "v1")
 
@@ -19,14 +20,16 @@
        distinct
        vec))
 
-(defn- normalize-unit [file-path parser-mode unit]
+(defn- normalize-unit [file-path language parser-mode unit]
   (-> unit
       (assoc :path (or (:path unit) file-path)
+             :language (or (:language unit) language)
              :parser_mode (or (:parser_mode unit) parser-mode)
              :semantic_pipeline semantic-pipeline-version)
       (update :imports #(distinct-vec (or % [])))
       (update :calls #(normalize-string-vec (or % [])))
-      (update :call_tokens #(normalize-string-vec (or % [])))))
+      (update :call_tokens #(normalize-string-vec (or % [])))
+      semantic-id/enrich-unit))
 
 (defn finalize-parsed-file [file-path language parsed]
   (let [parsed* (if (map? parsed)
@@ -39,16 +42,17 @@
                    :imports []
                    :units []})
         parser-mode (or (:parser_mode parsed*) "fallback")
-        units (mapv #(normalize-unit file-path parser-mode %) (:units parsed*))
+        effective-language (or (:language parsed*) language "unknown")
+        units (mapv #(normalize-unit file-path effective-language parser-mode %) (:units parsed*))
         imports (distinct-vec (:imports parsed*))
         diagnostics (vec (or (:diagnostics parsed*) []))]
     (-> parsed*
-        (assoc :language (or (:language parsed) language "unknown")
+        (assoc :language effective-language
                :module (:module parsed)
                :imports imports
                :units units
                :diagnostics diagnostics
                :parser_mode parser-mode
                :semantic_pipeline {:version semantic-pipeline-version
-                                   :language (or (:language parsed) language "unknown")
+                                   :language effective-language
                                    :parser_mode parser-mode}))))

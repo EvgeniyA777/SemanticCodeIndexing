@@ -6,6 +6,7 @@
             [semidx.runtime.errors :as errors]
             [semidx.runtime.language-activation :as activation]
             [semidx.runtime.retrieval-policy :as rp]
+            [semidx.runtime.storage :as storage]
             [semidx.runtime.usage-metrics :as usage])
   (:import [java.util UUID]))
 
@@ -257,7 +258,7 @@
     (or (= root path)
         (.startsWith path root))))
 
-(defn validate-root-path! [state root-path]
+(defn validate-root-path! [_state root-path]
   (let [provided (ensure-string root-path "root_path")
         canonical (canonical-path provided)
         file (io/file canonical)]
@@ -381,6 +382,7 @@
       (let [index (sci/create-index {:root_path root-path
                                      :paths paths
                                      :parser_opts parser-opts
+                                     :storage (:storage_adapter @state)
                                      :language_policy language-policy
                                      :policy_registry (:policy_registry @state)
                                      :usage_metrics (:usage_metrics @state)
@@ -563,14 +565,18 @@
       (conj {:path "trace"
              :error "must be an object with trace_id, request_id, actor_id"}))))
 
-(defn- enrich-invalid-query [message query]
+(defn- enrich-invalid-query
+  ([message query]
+   (enrich-invalid-query message query nil))
+  ([message query cause-data]
   (ex-info message
            {:type :invalid_query
             :message message
             :details {:missing_sections (missing-query-sections query)
                       :invalid_field_paths (invalid-field-paths query)
+                      :validation_errors (:errors cause-data)
                       :minimal_query_skeleton (minimal-retrieval-query-skeleton)
-                      :recommended_next_step "retry_resolve_context_with_structured_query"}}))
+                      :recommended_next_step "retry_resolve_context_with_structured_query"}})))
 
 (defn tool-repo-map [state args]
   (when-not (map? args)
@@ -635,7 +641,7 @@
                                              :policy_registry (:policy_registry @state)})
                        (catch Exception e
                          (if (= :invalid_query (:type (ex-data e)))
-                           (throw (enrich-invalid-query "invalid retrieval query" query))
+                           (throw (enrich-invalid-query "invalid retrieval query" query (ex-data e)))
                            (throw e))))
             continuation-summary (or normalized_query_summary
                                      (normalized-query-summary query))
@@ -800,6 +806,32 @@
                    :truncated (:truncated result)
                    :truncation_reason (:truncation_reason result)}}))))
 
+(defn tool-snapshot-diff [state args]
+  (when-not (map? args)
+    (invalid-request "snapshot_diff arguments must be an object"))
+  (let [entry (resolve-entry! state args)
+        baseline-snapshot-id (some-> (:baseline_snapshot_id args) (ensure-string "baseline_snapshot_id"))
+        paths (normalize-paths (:paths args))
+        include-unchanged? (ensure-boolean-or-nil (:include_unchanged? args) "include_unchanged?")
+        result (-> (sci/snapshot-diff (:index entry)
+                                      (cond-> {:suppress_usage_metrics true}
+                                        baseline-snapshot-id (assoc :baseline_snapshot_id baseline-snapshot-id)
+                                        (seq paths) (assoc :paths paths)
+                                        (some? include-unchanged?) (assoc :include_unchanged? include-unchanged?)))
+                   (assoc :index_id (:index_id entry)
+                          :project_context (project-context-for-entry entry))
+                   (add-next-step-guidance "resolve_context"))]
+    (with-usage-event
+      result
+      {:root_path_hash (usage/hash-root-path (:root_path entry))
+       :payload {:index_id (:index_id entry)
+                 :baseline_snapshot_id (:baseline_snapshot_id result)
+                 :current_snapshot_id (:current_snapshot_id result)
+                 :paths_count (count paths)
+                 :include_unchanged (boolean include-unchanged?)
+                 :change_counts (get-in result [:summary :change_counts])
+                 :total_changes (get-in result [:summary :total_changes])}})))
+
 (defn tool-impact-analysis [state args]
   (when-not (map? args)
     (invalid-request "impact_analysis arguments must be an object"))
@@ -830,8 +862,10 @@
       (invalid-request "skeletons requires paths or unit_ids"))
     (let [skeletons (sci/skeletons (:index entry) selector {:suppress_usage_metrics true})]
       (with-usage-event
-        {:index_id (:index_id entry)
-         :skeletons skeletons}
+        (merge {:index_id (:index_id entry)
+                :skeletons skeletons}
+               (select-keys (meta skeletons)
+                            [:projection_profile :recommended_projection_profile]))
         {:root_path_hash (usage/hash-root-path (:root_path entry))
          :payload {:index_id (:index_id entry)
                    :skeleton_count (count skeletons)
@@ -899,6 +933,15 @@
                                "end_line" {:type "integer"}}
                   :required ["index_id" "snapshot_id" "path" "start_line" "end_line"]
                   :additionalProperties false}}
+   {:name "snapshot_diff"
+    :description "Compare the current indexed snapshot to a baseline snapshot and classify semantic changes across units."
+    :inputSchema {:type "object"
+                  :properties {"index_id" {:type "string"}
+                               "baseline_snapshot_id" {:type "string"}
+                               "paths" {:type "array" :items {:type "string"}}
+                               "include_unchanged?" {:type "boolean"}}
+                  :required ["index_id"]
+                  :additionalProperties false}}
    {:name "impact_analysis"
     :description "Estimate blast radius: which files, symbols, and tests are affected by a proposed change. Use for change planning, refactoring scope, or bug triage."
     :inputSchema {:type "object"
@@ -938,6 +981,7 @@
    "expand_context" tool-expand-context
    "fetch_context_detail" tool-fetch-context-detail
    "literal_file_slice" tool-literal-file-slice
+   "snapshot_diff" tool-snapshot-diff
    "impact_analysis" tool-impact-analysis
    "skeletons" tool-skeletons
    "health" tool-health})
@@ -1058,7 +1102,7 @@
         (when (contains? message :id)
           (jsonrpc-error id -32601 (str "method not found: " method)))))))
 
-(defn new-session-state [{:keys [max-indexes usage-metrics policy-registry session-id transport-format tenant-id]
+(defn new-session-state [{:keys [max-indexes usage-metrics policy-registry session-id transport-format tenant-id storage-adapter]
                           :or {max-indexes default-max-indexes
                                session-id (str (UUID/randomUUID))}}]
   (atom (cond-> {:initialized? false
@@ -1066,6 +1110,8 @@
                  :max-indexes max-indexes
                  :policy_registry policy-registry
                  :selection_cache (atom {})
+                 :storage_adapter (or storage-adapter
+                                      (storage/in-memory-storage))
                  :session_id session-id
                  :started_at (now-ms)
                  :usage_metrics usage-metrics

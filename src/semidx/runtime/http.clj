@@ -8,6 +8,7 @@
             [semidx.runtime.errors :as errors]
             [semidx.runtime.project-context :as project-context]
             [semidx.runtime.retrieval-policy :as rp]
+            [semidx.runtime.storage :as storage]
             [semidx.core :as sci])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.net InetSocketAddress]))
@@ -175,6 +176,7 @@
     (sci/create-index {:root_path canonical-root-path
                        :paths paths
                        :parser_opts parser-opts
+                       :storage (:storage auth-config)
                        :usage_metrics (:usage_metrics auth-config)
                        :usage_context (merge {:surface "http"
                                               :tenant_id tenant-id}
@@ -421,11 +423,51 @@
                            (merge api-version-header
                                   (response-correlation-header-map exchange))))))))))
 
+(defn- handle-snapshot-diff [auth-config ^HttpExchange exchange]
+  (if-not (post-request? exchange)
+    (write-json! exchange 405 {:error "method_not_allowed"
+                               :error_code "method_not_allowed"
+                               :error_category "client"
+                               :allowed ["POST"]})
+    (do
+      (remember-correlation! exchange (request-correlation exchange))
+      (when-let [{:keys [tenant_id]} (enforce-authorized! exchange auth-config)]
+        (let [payload (read-json-body exchange)
+              root-path (or (:root_path payload) ".")
+              paths (:paths payload)
+              diff-opts (cond-> {}
+                          (:baseline_snapshot_id payload) (assoc :baseline_snapshot_id (:baseline_snapshot_id payload))
+                          (seq paths) (assoc :paths paths)
+                          (contains? payload :include_unchanged?) (assoc :include_unchanged? (:include_unchanged? payload)))
+              language-policy (:language_policy payload)
+              correlation (remember-correlation! exchange
+                                                 (assoc (request-correlation exchange) :tenant_id tenant_id))]
+          (when (enforce-authz! exchange auth-config
+                                {:operation :snapshot_diff
+                                 :tenant_id tenant_id
+                                 :root_path root-path
+                                 :paths paths})
+            (let [entry (ensure-project-entry! auth-config
+                                               root-path
+                                               paths
+                                               (:parser_opts payload)
+                                               tenant_id
+                                               correlation
+                                               language-policy
+                                               {:paths paths})
+                  index (:index entry)
+                  result (sci/snapshot-diff index diff-opts)]
+              (write-json! exchange 200
+                           (assoc result :project_context (project-context-summary entry))
+                           (merge api-version-header
+                                  (response-correlation-header-map exchange))))))))))
+
 (defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
-                            project_registry language_policy]}]
+                            project_registry language_policy storage]}]
   (let [server (HttpServer/create (InetSocketAddress. ^String host (int port)) 0)
         selection-cache (or selection_cache (atom {:max_entries 128}))
         project-registry (or project_registry (project-context/project-registry))
+        storage-adapter (or storage (storage/in-memory-storage))
         auth-config {:api_key api_key
                      :require_tenant require_tenant
                      :authz_check authz_check
@@ -433,6 +475,7 @@
                      :usage_metrics usage_metrics
                      :selection_cache selection-cache
                      :project_registry project-registry
+                     :storage storage-adapter
                      :language_policy language_policy}]
     (.createContext server "/health" (with-handler handle-health))
     (.createContext server "/v1/index/create" (with-handler (partial handle-create-index auth-config)))
@@ -440,6 +483,7 @@
     (.createContext server "/v1/retrieval/expand-context" (with-handler (partial handle-expand-context auth-config)))
     (.createContext server "/v1/retrieval/fetch-context-detail" (with-handler (partial handle-fetch-context-detail auth-config)))
     (.createContext server "/v1/retrieval/literal-file-slice" (with-handler (partial handle-literal-file-slice auth-config)))
+    (.createContext server "/v1/retrieval/snapshot-diff" (with-handler (partial handle-snapshot-diff auth-config)))
     (.setExecutor server nil)
     (.start server)
     server))

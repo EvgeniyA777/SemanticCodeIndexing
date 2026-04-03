@@ -2,8 +2,7 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
-            [semidx.mcp.server :as mcp-server])
+            [clojure.test :refer [deftest is testing]])
   (:import [java.io ByteArrayOutputStream InputStream]
            [java.time Duration Instant]))
 
@@ -288,7 +287,7 @@
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
+          (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
@@ -357,6 +356,8 @@
             (is (seq (:files repo-map-data)))
             (is (map? (:index_lifecycle repo-map-data)))
             (is (string? (:summary repo-map-data)))
+            (is (= "structural" (:projection_profile repo-map-data)))
+            (is (= "selection" (:recommended_projection_profile repo-map-data)))
             (is (= "resolve_context" (:recommended_next_step repo-map-data)))))
 
         (testing "resolve_context returns compact selection"
@@ -379,6 +380,8 @@
                    (get-in resolve-data [:compact_continuation :next_tool])))
             (is (= ["expand_context" "fetch_context_detail"]
                    (get-in resolve-data [:next_step :available_actions])))
+            (is (= "selection" (:projection_profile resolve-data)))
+            (is (= "api_shape" (:recommended_projection_profile resolve-data)))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (:focus resolve-data)))))
 
@@ -420,6 +423,19 @@
                       (get-in result [:structuredContent :details :details :invalid_field_paths])))
             (is (some #(= "targets" (:path %))
                       (get-in result [:structuredContent :details :details :invalid_field_paths])))))
+
+        (testing "canonical invalid query preserves schema validation details"
+          (let [resolve-response (call-tool! handle 78 "resolve_context" {:index_id index-id
+                                                                          :query (assoc-in sample-query
+                                                                                           [:constraints :token_budget]
+                                                                                           "oops")})
+                result (:result resolve-response)]
+            (is (true? (:isError result)))
+            (is (= "invalid_query"
+                   (get-in result [:structuredContent :details :code])))
+            (is (map? (get-in result [:structuredContent :details :details :validation_errors])))
+            (is (contains? (get-in result [:structuredContent :details :details :validation_errors])
+                           :constraints))))
 
         (testing "resolve_context accepts top-level intent string shorthand"
           (let [resolve-response (call-tool! handle 75 "resolve_context" {:index_id index-id
@@ -476,6 +492,8 @@
             (is (= index-id (:index_id expand-data)))
             (is (seq (:skeletons expand-data)))
             (is (map? (:impact_hints expand-data)))
+            (is (= "api_shape" (:projection_profile expand-data)))
+            (is (= "detail" (:recommended_projection_profile expand-data)))
             (is (= "fetch_context_detail" (:recommended_next_step expand-data)))
             (is (= "fetch_context_detail"
                    (get-in expand-data [:compact_continuation :next_tool])))
@@ -487,6 +505,8 @@
             (is (map? (:context_packet detail-data)))
             (is (map? (:guardrail_assessment detail-data)))
             (is (vector? (:stage_events detail-data)))
+            (is (= "detail" (:projection_profile detail-data)))
+            (is (nil? (:recommended_projection_profile detail-data)))
             (is (= "resolve_context" (:recommended_next_step detail-data)))
             (is (= "resolve_context"
                    (get-in detail-data [:compact_continuation :next_tool])))
@@ -510,6 +530,26 @@
             (is (str/includes? (:content literal-data) "process-order"))
             (is (= "resolve_context" (:recommended_next_step literal-data)))))
 
+        (testing "snapshot_diff classifies changes against an explicit baseline"
+          (let [baseline-snapshot-id (:snapshot_id create-data)
+                _ (write-file! tmp-root
+                               "src/my/app/order.clj"
+                               "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n\n(defn audit-order [order]\n  (:id order))\n")
+                rebuilt-response (call-tool! handle 65 "create_index" {:root_path tmp-root
+                                                                       :force_rebuild true})
+                rebuilt-data (get-in rebuilt-response [:result :structuredContent])
+                diff-response (call-tool! handle 66 "snapshot_diff" {:index_id (:index_id rebuilt-data)
+                                                                     :baseline_snapshot_id baseline-snapshot-id})
+                diff-data (get-in diff-response [:result :structuredContent])]
+            (is (= (:index_id rebuilt-data) (:index_id diff-data)))
+            (is (= baseline-snapshot-id (:baseline_snapshot_id diff-data)))
+            (is (= (:snapshot_id rebuilt-data) (:current_snapshot_id diff-data)))
+            (is (= "diff" (:projection_profile diff-data)))
+            (is (= 1 (get-in diff-data [:summary :change_counts :added])))
+            (is (= 1 (get-in diff-data [:summary :total_changes])))
+            (is (= "added" (get-in diff-data [:changes 0 :change_type])))
+            (is (= "resolve_context" (:recommended_next_step diff-data)))))
+
         (testing "impact_analysis wraps impact_hints"
           (let [impact-response (call-tool! handle 7 "impact_analysis" {:index_id index-id
                                                                         :query sample-query})
@@ -523,7 +563,9 @@
                                                                      :paths ["src/my/app/order.clj"]})
                 skeletons-data (get-in skeletons-response [:result :structuredContent])]
             (is (= index-id (:index_id skeletons-data)))
-            (is (seq (:skeletons skeletons-data)))))
+            (is (seq (:skeletons skeletons-data)))
+            (is (= "api_shape" (:projection_profile skeletons-data)))
+            (is (= "detail" (:recommended_projection_profile skeletons-data)))))
 
         (testing "force_rebuild returns a new handle"
           (let [rebuild-response (call-tool! handle 9 "create_index" {:root_path tmp-root
@@ -642,7 +684,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "impact_analysis" "skeletons" "health"}
+        (is (= #{"create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
                tool-names)))
       (finally
         (destroy-process! handle)))))
@@ -710,16 +752,14 @@
         (destroy-process! handle)))))
 
 (deftest initialize-preserves-client-protocol-version-test
-  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! {:directory "."})]
+  (let [handle (start-mcp-process! {:directory "."})]
     (try
       (testing "legacy Codex protocol version is preserved"
         (is (= "2024-11-05"
                (get-in (initialize! handle "2024-11-05") [:result :protocolVersion]))))
       (finally
         (destroy-process! handle))))
-  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-mcp-server-version-test" (make-array java.nio.file.attribute.FileAttribute 0)))
-        handle (start-mcp-process! {:directory "."})]
+  (let [handle (start-mcp-process! {:directory "."})]
     (try
       (testing "arbitrary newer protocol version is echoed back"
         (is (= "2026-02-18"

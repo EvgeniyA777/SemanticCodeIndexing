@@ -26,8 +26,6 @@
   #"^\s*(?:(public|private|protected)\s+)?(?:(?:static|final|native|synchronized|abstract|default)\s+)*([A-Za-z0-9_<>,\[\]\.\?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|throws|;)")
 (def ^:private java-constructor-re
   #"^\s*(?:(public|private|protected)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|throws)")
-(def ^:private java-call-re #"\b([A-Za-z_][A-Za-z0-9_\.]*)\s*\(")
-
 (def ^:private py-import-re #"^\s*import\s+([a-zA-Z0-9_\.]+)(?:\s+as\s+([A-Za-z0-9_]+))?")
 (def ^:private py-from-import-re #"^\s*from\s+([a-zA-Z0-9_\.]+)\s+import\s+([A-Za-z0-9_,\s\*_]+)")
 (def ^:private py-class-re #"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)")
@@ -46,7 +44,6 @@
 (def ^:private lua-table-assigned-function-re #"^\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*function\s*\(")
 (def ^:private lua-call-re #"\b([A-Za-z_][A-Za-z0-9_]*)(?:(\.|:)([A-Za-z_][A-Za-z0-9_]*))?\s*\(")
 
-(def ^:private ts-import-from-re #"^\s*(?:import|export)\s+.+?\s+from\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-import-clause-re #"^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-import-bare-re #"^\s*import\s+['\"]([^'\"]+)['\"]")
 (def ^:private ts-class-re #"^\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)")
@@ -118,7 +115,7 @@
 (defn- tail-token [token]
   (some-> token str (str/split #"[\./#]") last))
 
-(defn- clj-scan-line [{:keys [depth in-string] :as state} line]
+(defn- clj-scan-line [{:keys [depth in-string] :as _state} line]
   (loop [chars (seq (str line))
          depth* (or depth 0)
          in-string* (true? in-string)
@@ -172,23 +169,6 @@
             (inc idx)
             (recur (inc idx) next-state)))))))
 
-(defn- parse-python-import [module line]
-  (if-let [[_ from names] (re-find py-from-import-re line)]
-    (let [resolved-from (py-normalize-relative-module module from)
-          parts (->> (str/split names #",")
-                     (map str/trim)
-                     (remove str/blank?))]
-      (vec (cons resolved-from
-                 (map (fn [n]
-                        (let [[_ name _alias] (or (re-find #"^([A-Za-z0-9_\*]+)(?:\s+as\s+([A-Za-z0-9_]+))?$" n)
-                                                  [nil n nil])]
-                          (if (= name "*")
-                            resolved-from
-                            (str resolved-from "." name))))
-                      parts))))
-    (when-let [[_ imp] (re-find py-import-re line)]
-      [imp])))
-
 (defn- ts-strip-ext [path]
   (-> (str path)
       (str/replace #"\.(ts|tsx|js|jsx|mjs|cjs)$" "")
@@ -211,13 +191,6 @@
             joined (if (str/blank? dir) spec* (str dir "/" spec*))]
         (-> joined io/file .toPath .normalize str (str/replace "\\" "/")))
       (str/replace spec* "\\" "/"))))
-
-(defn- parse-typescript-import [path line]
-  (let [spec (or (some-> (re-find ts-import-clause-re line) (nth 2))
-                 (some-> (re-find ts-import-bare-re line) second))]
-    (when (seq spec)
-      [(-> (ts-resolve-import-path path spec)
-           ts-module-name)])))
 
 (defn- ts-parse-named-imports [clause]
   (let [body (some-> (re-find #"\{([^}]*)\}" (str clause)) second)]
@@ -1604,9 +1577,6 @@
                      (> (count segment) 1) (into (subvec segment 1)))]
     (str/join "\n" body-lines)))
 
-(defn- extract-java-calls [body]
-  (java-call-tokens (java-call-details body)))
-
 (defn- java-resolve-class-name [pkg imports class-name]
   (let [nm (str/trim (str class-name))]
     (cond
@@ -1962,7 +1932,7 @@
 
 (defn- py-expand-self-token [token module class-name]
   (let [token* (str token)]
-    (if-let [[_ owner suffix] (re-matches #"(self|cls)\.(.+)" token*)]
+    (if-let [[_ _owner suffix] (re-matches #"(self|cls)\.(.+)" token*)]
       (let [base (str module "." class-name)]
         [(str base "." suffix) (str base "/" suffix)])
       [])))
@@ -2504,10 +2474,6 @@
     "test"
     (if method? "method" "function")))
 
-(defn- ts-brace-delta [line]
-  (- (count (re-seq #"\{" (str line)))
-     (count (re-seq #"\}" (str line)))))
-
 (defn- ts-class-ranges [lines]
   (let [line-count (count lines)]
     (loop [idx 0
@@ -2830,11 +2796,6 @@
        (remove str/blank?)
        first))
 
-(defn- ts-call-name [ts-lines call-node]
-  (or (ts-named-value-inside ts-lines call-node "function:")
-      (ts-named-value-inside ts-lines call-node "property:")
-      (some-> (ts-node-values-inside ts-lines call-node) last)))
-
 (defn- parse-typescript-tree-sitter [root-path path src-lines parser-opts]
   (let [grammar-path (parser-grammar-path parser-opts :typescript)
         abs (-> (io/file root-path path) .getCanonicalPath)
@@ -2961,7 +2922,7 @@
                           vec)
                 local-call-names (ts-local-call-names (map #(assoc % :raw-symbol (:symbol %)) defs))
                 units (->> defs
-                           (map (fn [{:keys [start-line end-line kind symbol module file-module calls call_tokens]}]
+                           (map (fn [{:keys [start-line end-line kind symbol module file-module call_tokens]}]
                                   {:unit_id (str path "::" symbol)
                                    :kind kind
                                    :symbol symbol
@@ -3050,7 +3011,10 @@
                 "java" (parse-java-file root-path file-path lines parser-opts)
                 "elixir" (parse-elixir-language-file root-path file-path lines parser-opts)
                 "python" (parse-python-file file-path lines)
-                "typescript" (ts-language/parse-file root-path file-path lines parser-opts)
+                "typescript" (try
+                               (ts-language/parse-file root-path file-path lines parser-opts)
+                               (catch Exception _
+                                 (parse-typescript root-path file-path lines parser-opts)))
                 "lua" (parse-lua file-path lines)
                 (fallback-unit file-path lines language "unsupported_language"))
               (semantic-ir/finalize-parsed-file file-path language)))

@@ -1,6 +1,6 @@
 (ns semidx.runtime.literal-slice
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [semidx.runtime.projections :as projections]))
 
 (def ^:private max-line-span 400)
 (def ^:private max-byte-count (* 32 1024))
@@ -86,12 +86,22 @@
     (invalid-request "path is not present in the current index snapshot"
                      {:path path
                       :snapshot_id (:snapshot_id index)}))
-  (let [f (io/file (:root_path index) path)]
-    (if (.exists f)
-      (-> f slurp str/split-lines vec)
-      (invalid-request "path does not exist on disk for the current index snapshot"
+  (let [file-snapshots (:file_snapshots index)]
+    (cond
+      (not (map? file-snapshots))
+      (invalid-request "literal_file_slice requires retained file snapshots for the requested snapshot_id"
                        {:path path
-                        :snapshot_id (:snapshot_id index)}))))
+                        :snapshot_id (:snapshot_id index)
+                        :reason :file_snapshots_unavailable})
+
+      (contains? file-snapshots path)
+      (get file-snapshots path)
+
+      :else
+      (invalid-request "path is not present in retained file snapshots for the requested snapshot_id"
+                       {:path path
+                        :snapshot_id (:snapshot_id index)
+                        :reason :path_snapshot_missing}))))
 
 (defn- read-selection-file-lines [selection path]
   (if-let [lines (get-in selection [:file_snapshots path])]
@@ -176,9 +186,10 @@
                                  (ensure-current-snapshot! index snapshot-id)
                                  [(read-current-file-lines index path*) nil]))
            slice (exact-slice lines start-line* end-line*)]
-       (cond-> {:api_version "1.0"
-                :projection_profile "literal_slice"
-                :snapshot_id snapshot-id
-                :path path*}
+       (cond-> (projections/with-projection
+                {:api_version "1.0"
+                 :snapshot_id snapshot-id
+                 :path path*}
+                :literal-slice)
          selection (assoc :selection_id (:selection_id selection))
          true (merge slice))))))

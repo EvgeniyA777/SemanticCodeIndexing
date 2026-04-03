@@ -16,6 +16,7 @@ The project defines how a host system should request code context, how retrieval
 - mirrors contracts in Clojure (`malli`) for runtime validation
 - provides a local and CI gate to prevent contract drift
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `expand-context`, `fetch-context-detail`, `resolve-context-detail`, `impact-analysis`, `skeletons`
+- now also provides exact `literal-file-slice`, semantic `snapshot-diff`, and offline `semantic-quality-report` evaluation surfaces
 - provides a Clojure-first `Code Context Compressor` lane for bounded architecture summaries, dependency-graph export, committed repo context docs, and pre-push/CI drift checks
 - includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript` and emits diagnostics/guardrails outputs
 - supports versioned retrieval policy overrides plus emitted capability metadata for replayable ranking behavior
@@ -73,6 +74,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Build a calibration report from recorded usage events and feedback: `clojure -M:eval calibration-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-calibration.json"`
 - Build a weekly review artifact linking query, selected context, feedback, and outcome: `clojure -M:eval weekly-review-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-weekly-review.json"`
 - Convert a weekly review artifact into a protected replay dataset: `clojure -M:eval protected-replay-dataset --weekly-review "${TMPDIR:-.tmp}/sci-weekly-review.json" --out "${TMPDIR:-.tmp}/sci-protected-replay.json"`
+- Build an offline semantic-quality report over expected snapshot-diff cases: `clojure -M:eval semantic-quality-report --dataset fixtures/semantic-quality/report-dataset.json --out "${TMPDIR:-.tmp}/semantic-quality-report.json"`
 - Run the Phase 5 batch loop from usage metrics into weekly review, protected replay dataset, and `shadow-review`: `clojure -M:eval policy-review-pipeline --root . --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --registry path/to/policy-registry.edn --out "${TMPDIR:-.tmp}/sci-policy-review-pipeline.json"`
 - Run the regularized Phase 5 review cycle with artifact retention: `clojure -M:eval scheduled-policy-review --root . --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --registry path/to/policy-registry.edn --artifacts-dir "${TMPDIR:-.tmp}/policy-review" --retention-runs 8 --write-registry --out "${TMPDIR:-.tmp}/sci-scheduled-policy-review.json"`
 - Run the closed-loop governance cadence with optional auto-promotion, best-candidate selection, history-aware selection, streak, and cooldown controls: `clojure -M:eval scheduled-governance-cycle --root . --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --registry path/to/policy-registry.edn --artifacts-dir "${TMPDIR:-.tmp}/policy-review" --retention-runs 8 --write-registry --auto-promote --select-best-candidate --history-aware-selection --required-candidate-streak-runs 2 --promotion-cooldown-runs 1 --out "${TMPDIR:-.tmp}/sci-scheduled-governance-cycle.json"`
@@ -104,11 +106,13 @@ Canonical retrieval flow is compact-first staged retrieval:
 - MCP optionally accepts `SCI_MCP_POLICY_REGISTRY_FILE` for active-policy defaults and selector-based `resolve_context` lookup.
 - gRPC edge now uses dedicated runtime protobuf request/response messages for unary methods.
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
+- Advisory semantic-quality report: `./scripts/run-semantic-quality-report.sh`
 - CI runtime gates: `.github/workflows/mvp-runtime.yml`
 - Runtime API docs: [docs/runtime-api.md](docs/runtime-api.md)
 - MCP docs: [docs/mcp-api.md](docs/mcp-api.md)
 - Agent MCP prompts: [docs/mcp-agent-prompts.md](docs/mcp-agent-prompts.md)
 - Roadmap status checklist: [docs/roadmap-status.md](docs/roadmap-status.md)
+- ADR for projection profiles and advisory semantic-quality gates: [adr/029-standardize-projection-profiles-and-advisory-semantic-quality-gates.md](adr/029-standardize-projection-profiles-and-advisory-semantic-quality-gates.md)
 - Compact-first staged retrieval execution plan: [docs/compact-first-staged-retrieval-plan.md](docs/compact-first-staged-retrieval-plan.md)
 - Post-roadmap semantic deepening plan (delivered tranche): [docs/post-roadmap-semantic-deepening-plan.md](docs/post-roadmap-semantic-deepening-plan.md)
 - Semantic stabilization plan (active tranche): [docs/semantic-stabilization-plan.md](docs/semantic-stabilization-plan.md)
@@ -205,6 +209,7 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - HTTP/gRPC keep isolated project contexts per canonical `root_path` (tenant-qualified when a tenant is present), support optional server-level `language_policy`, and return `project_context` activation metadata alongside create/retrieval responses
 - when a project activation is already rebuilding, HTTP/gRPC now return transient `language_activation_in_progress` guidance with retry metadata instead of silently starting duplicate builds
 - MCP now shares one transport-agnostic core across stdio, Streamable HTTP, and SSE, with session-scoped index caching and consistent tool payloads across transports
+- projection profiles are now standardized across structural, summary, selection, widened API-shape, detail, literal-slice, and diff outputs, while semantic-quality CI reporting is available as an advisory artifact lane
 
 ## License
 

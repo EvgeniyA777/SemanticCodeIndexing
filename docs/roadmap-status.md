@@ -33,6 +33,7 @@ Legend:
 - `[x]` Capabilities now drive per-language confidence ceilings and guardrails, and governed replay reports `confidence_ceiling_distribution`
 - `[x]` Phase 4 runtime and MCP hardening: snapshots, usage metrics, authz, tenant-aware correlation propagation, index lifecycle metadata, unified machine-readable error taxonomy, and SLO-facing metrics now exist on the main runtime surfaces
 - `[x]` Phase 5 real self-improvement loop: replay harvesting from usage events and feedback, query-to-outcome linkage, difficult-case promotion into `protected_case`, calibration reports against real feedback, weekly review artifacts, conversion of those artifacts back into protected replay datasets, a batch `policy-review-pipeline` into `shadow-review`, retained `scheduled-policy-review` runs, retained `scheduled-governance-cycle` promotion decisions with deterministic best-candidate selection, history-aware selection, streak/cooldown gating, governance approval tiers / allow-block auto-promotion constraints, direct `promote-policy` governance-tier enforcement plus explicit manual approval, retained review/governance indexes, derived operator queue/status reports, and the top-level `scheduled-phase5-cycle` orchestration artifact now exist
+- `[x]` Semantic snapshot productization tail: projection profiles are standardized across public outputs, semantic-quality reporting has an advisory CI/artifact lane, and the runtime/MCP docs now describe literal slices, snapshot diff, and semantic quality surfaces
 
 ## Canonical References
 
@@ -55,6 +56,12 @@ The semantic stabilization tranche captured in [docs/semantic-stabilization-plan
 - TypeScript now runs through its dedicated language module with advanced-surface regex/tree-sitter parity
 - Java superclass ancestry and Python immediate-scope local suppression are tightened for graph correctness
 - all supported languages now have dedicated entry namespaces under `runtime/languages/*`, while `runtime/adapters` remains the canonical facade
+
+The semantic snapshot productization tail is now also delivered for the current scope:
+
+- projection profiles are standardized across structural, summary, selection, widened API-shape, detail, literal-slice, and diff outputs
+- semantic-quality reporting is available as an advisory CI artifact lane via `.github/workflows/mvp-runtime.yml`
+- runtime and MCP docs now cover `literal-file-slice`, `snapshot-diff`, `semantic-quality-report`, and the projection taxonomy
 
 The next near-term focus is now beyond this delivered stabilization slice:
 

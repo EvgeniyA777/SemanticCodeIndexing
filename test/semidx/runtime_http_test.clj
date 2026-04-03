@@ -108,6 +108,8 @@
             (is (string? (get-in resp [:json :selection_id])))
             (is (string? (get-in resp [:json :snapshot_id])))
             (is (= "completed" (get-in resp [:json :result_status])))
+            (is (= "selection" (get-in resp [:json :projection_profile])))
+            (is (= "api_shape" (get-in resp [:json :recommended_projection_profile])))
             (is (vector? (get-in resp [:json :focus])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (get-in resp [:json :focus])))
@@ -158,17 +160,47 @@
             (is (= 200 (:status expand-resp)))
             (is (seq (get-in expand-resp [:json :skeletons])))
             (is (map? (get-in expand-resp [:json :impact_hints])))
+            (is (= "api_shape" (get-in expand-resp [:json :projection_profile])))
+            (is (= "detail" (get-in expand-resp [:json :recommended_projection_profile])))
             (is (= 200 (:status detail-resp)))
             (is (map? (get-in detail-resp [:json :context_packet])))
             (is (map? (get-in detail-resp [:json :diagnostics_trace])))
             (is (map? (get-in detail-resp [:json :guardrail_assessment])))
             (is (vector? (get-in detail-resp [:json :stage_events])))
+            (is (= "detail" (get-in detail-resp [:json :projection_profile])))
             (is (some #(= "my.app.order/process-order" (:symbol %))
                       (get-in detail-resp [:json :context_packet :relevant_units])))
             (is (= 200 (:status literal-resp)))
             (is (= "literal_slice" (get-in literal-resp [:json :projection_profile])))
             (is (= {:start_line 3 :end_line 4} (get-in literal-resp [:json :returned_range])))
             (is (str/includes? (get-in literal-resp [:json :content]) "process-order"))))
+
+        (testing "snapshot-diff endpoint"
+          (let [baseline-resp (post-json client
+                                         (str base-url "/v1/index/create")
+                                         {:root_path tmp-root})
+                baseline-snapshot-id (get-in baseline-resp [:json :snapshot_id])
+                _ (write-file! tmp-root
+                               "src/my/app/order.clj"
+                               "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n\n(defn audit-order [order]\n  (:id order))\n")
+                rebuilt-resp (post-json client
+                                        (str base-url "/v1/index/create")
+                                        {:root_path tmp-root})
+                diff-resp (post-json client
+                                     (str base-url "/v1/retrieval/snapshot-diff")
+                                     {:root_path tmp-root
+                                      :baseline_snapshot_id baseline-snapshot-id})]
+            (is (= 200 (:status baseline-resp)))
+            (is (= 200 (:status rebuilt-resp)))
+            (is (= 200 (:status diff-resp)))
+            (is (= baseline-snapshot-id
+                   (get-in diff-resp [:json :baseline_snapshot_id])))
+            (is (= (get-in rebuilt-resp [:json :snapshot_id])
+                   (get-in diff-resp [:json :current_snapshot_id])))
+            (is (= "diff" (get-in diff-resp [:json :projection_profile])))
+            (is (= 1 (get-in diff-resp [:json :summary :change_counts :added])))
+            (is (= 1 (get-in diff-resp [:json :summary :total_changes])))
+            (is (= "added" (get-in diff-resp [:json :changes 0 :change_type])))))
 
         (testing "method and payload validation"
           (let [method-resp (http-request client "GET" (str base-url "/v1/index/create") nil)

@@ -7,6 +7,7 @@
             [semidx.runtime.grpc-proto :as grpc-proto]
             [semidx.runtime.project-context :as project-context]
             [semidx.runtime.retrieval-policy :as rp]
+            [semidx.runtime.storage :as storage]
             [semidx.core :as sci])
   (:import [io.grpc MethodDescriptor MethodDescriptor$Marshaller MethodDescriptor$MethodType
                      Context Contexts Metadata Metadata$Key
@@ -53,6 +54,7 @@
 (def expand-context-method (unary-method "ExpandContext" :expand-context-request :expand-context-response))
 (def fetch-context-detail-method (unary-method "FetchContextDetail" :fetch-context-detail-request :fetch-context-detail-response))
 (def literal-file-slice-method (unary-method "LiteralFileSlice" :literal-file-slice-request :literal-file-slice-response))
+(def snapshot-diff-method (unary-method "SnapshotDiff" :snapshot-diff-request :snapshot-diff-response))
 
 (def ^:private api-key-header
   (Metadata$Key/of "x-api-key" Metadata/ASCII_STRING_MARSHALLER))
@@ -222,7 +224,7 @@
 
 (declare build-project-index project-context-summary)
 
-(defn- handle-create-index [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+(defn- handle-create-index [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
   (let [scope (project-context/project-scope (or (:root_path payload) ".")
                                              (current-tenant-id))
         entry (project-context/refresh-project-index! project-registry
@@ -231,6 +233,7 @@
                                                                             usage-metrics
                                                                             selection-cache
                                                                             server-language-policy
+                                                                            storage-adapter
                                                                             payload
                                                                             (current-request-correlation)
                                                                             (:root_path scope)
@@ -264,12 +267,13 @@
                       :selection_hint
                       :manual_language_selection]))
 
-(defn- build-project-index [policy-registry usage-metrics selection-cache server-language-policy payload correlation canonical-root-path suppress-usage?]
+(defn- build-project-index [policy-registry usage-metrics selection-cache server-language-policy storage-adapter payload correlation canonical-root-path suppress-usage?]
   (let [effective-language-policy (project-context/merge-language-policy server-language-policy
                                                                          (:language_policy payload))]
     (sci/create-index {:root_path canonical-root-path
                        :paths (:paths payload)
                        :parser_opts (:parser_opts payload)
+                       :storage storage-adapter
                        :usage_metrics usage-metrics
                        :usage_context (merge {:surface "grpc"} correlation)
                        :selection_cache selection-cache
@@ -277,7 +281,7 @@
                        :policy_registry policy-registry
                        :language_policy effective-language-policy})))
 
-(defn- handle-resolve-context [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+(defn- handle-resolve-context [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
   (let [query (:query payload)
         retrieval-policy (:retrieval_policy payload)
         correlation (merge (current-request-correlation)
@@ -300,6 +304,7 @@
                                                                              usage-metrics
                                                                              selection-cache
                                                                              server-language-policy
+                                                                             storage-adapter
                                                                              payload
                                                                              correlation
                                                                              (:root_path scope)
@@ -309,7 +314,7 @@
                                                :policy_registry policy-registry})
              :project_context (project-context-summary entry)))))
 
-(defn- handle-expand-context [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+(defn- handle-expand-context [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
   (let [scope (project-context/project-scope (or (:root_path payload) ".")
                                              (current-tenant-id))
         entry (project-context/ensure-project-index! project-registry
@@ -319,6 +324,7 @@
                                                                            usage-metrics
                                                                            selection-cache
                                                                            server-language-policy
+                                                                           storage-adapter
                                                                            payload
                                                                            (merge {:surface "grpc"} (current-request-correlation))
                                                                            (:root_path scope)
@@ -327,7 +333,7 @@
     (assoc (sci/expand-context index (select-keys payload [:selection_id :snapshot_id :unit_ids :include_impact_hints]))
            :project_context (project-context-summary entry))))
 
-(defn- handle-fetch-context-detail [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+(defn- handle-fetch-context-detail [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
   (let [scope (project-context/project-scope (or (:root_path payload) ".")
                                              (current-tenant-id))
         entry (project-context/ensure-project-index! project-registry
@@ -337,6 +343,7 @@
                                                                            usage-metrics
                                                                            selection-cache
                                                                            server-language-policy
+                                                                           storage-adapter
                                                                            payload
                                                                            (merge {:surface "grpc"} (current-request-correlation))
                                                                            (:root_path scope)
@@ -345,7 +352,7 @@
     (assoc (sci/fetch-context-detail index (select-keys payload [:selection_id :snapshot_id :unit_ids :detail_level]))
            :project_context (project-context-summary entry))))
 
-(defn- handle-literal-file-slice [policy-registry usage-metrics selection-cache project-registry server-language-policy payload]
+(defn- handle-literal-file-slice [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
   (let [scope (project-context/project-scope (or (:root_path payload) ".")
                                              (current-tenant-id))
         entry (project-context/ensure-project-index! project-registry
@@ -355,6 +362,7 @@
                                                                            usage-metrics
                                                                            selection-cache
                                                                            server-language-policy
+                                                                           storage-adapter
                                                                            payload
                                                                            (merge {:surface "grpc"} (current-request-correlation))
                                                                            (:root_path scope)
@@ -363,13 +371,37 @@
     (assoc (sci/literal-file-slice index (select-keys payload [:selection_id :snapshot_id :path :start_line :end_line]))
            :project_context (project-context-summary entry))))
 
+(defn- handle-snapshot-diff [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
+  (let [scope (project-context/project-scope (or (:root_path payload) ".")
+                                             (current-tenant-id))
+        entry (project-context/ensure-project-index! project-registry
+                                                     scope
+                                                     {:paths (:paths payload)}
+                                                     #(build-project-index policy-registry
+                                                                           usage-metrics
+                                                                           selection-cache
+                                                                           server-language-policy
+                                                                           storage-adapter
+                                                                           payload
+                                                                           (merge {:surface "grpc"} (current-request-correlation))
+                                                                           (:root_path scope)
+                                                                           true))
+        index (:index entry)
+        diff-opts (cond-> {}
+                    (:baseline_snapshot_id payload) (assoc :baseline_snapshot_id (:baseline_snapshot_id payload))
+                    (seq (:paths payload)) (assoc :paths (:paths payload))
+                    (contains? payload :include_unchanged) (assoc :include_unchanged? (:include_unchanged payload)))]
+    (assoc (sci/snapshot-diff index diff-opts)
+           :project_context (project-context-summary entry))))
+
 (defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
-                            project_registry language_policy]}]
+                            project_registry language_policy storage]}]
   (let [auth-config {:api_key api_key
                      :require_tenant require_tenant
                      :authz_check authz_check}
         selection-cache (or selection_cache (atom {:max_entries 128}))
         project-registry (or project_registry (project-context/project-registry))
+        storage-adapter (or storage (storage/in-memory-storage))
         service (-> (ServerServiceDefinition/builder service-name)
                     (.addMethod health-method (unary-handler (constantly {})
                                                              grpc-proto/health-response
@@ -378,29 +410,34 @@
                                                              nil))
                     (.addMethod create-index-method (unary-handler grpc-proto/create-index-request->map
                                                                    grpc-proto/create-index-response
-                                                                   (partial handle-create-index policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                   (partial handle-create-index policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                    auth-config
                                                                    :create_index))
                     (.addMethod resolve-context-method (unary-handler grpc-proto/resolve-context-request->map
                                                                       grpc-proto/resolve-context-response
-                                                                      (partial handle-resolve-context policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                      (partial handle-resolve-context policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                       auth-config
                                                                       :resolve_context))
                     (.addMethod expand-context-method (unary-handler grpc-proto/expand-context-request->map
                                                                      grpc-proto/expand-context-response
-                                                                     (partial handle-expand-context policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                     (partial handle-expand-context policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                      auth-config
                                                                      :expand_context))
                     (.addMethod fetch-context-detail-method (unary-handler grpc-proto/fetch-context-detail-request->map
                                                                            grpc-proto/fetch-context-detail-response
-                                                                           (partial handle-fetch-context-detail policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                           (partial handle-fetch-context-detail policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                            auth-config
                                                                            :fetch_context_detail))
                     (.addMethod literal-file-slice-method (unary-handler grpc-proto/literal-file-slice-request->map
                                                                          grpc-proto/literal-file-slice-response
-                                                                         (partial handle-literal-file-slice policy_registry usage_metrics selection-cache project-registry language_policy)
+                                                                         (partial handle-literal-file-slice policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                          auth-config
                                                                          :literal_file_slice))
+                    (.addMethod snapshot-diff-method (unary-handler grpc-proto/snapshot-diff-request->map
+                                                                    grpc-proto/snapshot-diff-response
+                                                                    (partial handle-snapshot-diff policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
+                                                                    auth-config
+                                                                    :snapshot_diff))
                     (.build))
         intercepted-service (ServerInterceptors/intercept service (into-array ServerInterceptor [(metadata-context-interceptor)]))
         server (-> (NettyServerBuilder/forAddress (java.net.InetSocketAddress. ^String host (int port)))

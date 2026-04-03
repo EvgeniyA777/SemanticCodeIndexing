@@ -55,6 +55,42 @@ jobs:
       - name: Run MVP Gates
         run: ./scripts/run-mvp-gates.sh
 
+  semantic-quality-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.2
+        with:
+          cli: "1.12.0.1530"
+
+      - name: Run advisory semantic quality report
+        run: ./scripts/run-semantic-quality-report.sh fixtures/semantic-quality/report-dataset.json .tmp/semantic-quality-report.json .tmp/semantic-quality-report-summary.md
+
+      - name: Publish semantic quality summary
+        if: always()
+        run: |
+          if [[ -f .tmp/semantic-quality-report-summary.md ]]; then
+            cat .tmp/semantic-quality-report-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload semantic quality artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-quality-report
+          path: |
+            .tmp/semantic-quality-report.json
+            .tmp/semantic-quality-report-summary.md
+
   runtime-gates-postgres:
     runs-on: ubuntu-latest
     services:

@@ -130,6 +130,11 @@ Canonical MCP retrieval flow is:
 `resolve_context` returns a compact selection artifact. Rich retrieval detail is intentionally delayed to `fetch_context_detail`.
 The canonical contract remains a full structured retrieval query, but MCP also accepts one narrow shorthand ingress for first-contact IDE agents: `query.intent` may be a string or a partial `{purpose, details}` object, and the server fills safe defaults for the remaining retrieval sections.
 
+Projection metadata is also additive on MCP responses:
+
+- `projection_profile` identifies the current payload shape
+- `recommended_projection_profile` appears only on progressive/refinement outputs
+
 ### `create_index`
 
 Index a repository root or reuse a cached index. Agents should usually call this first.
@@ -188,6 +193,8 @@ Additive MCP guidance fields:
 - `recommended_next_step` - normally `resolve_context`
 - `recommended_flow`
 - `usage_hint`
+- `projection_profile` => `"structural"`
+- `recommended_projection_profile` => `"selection"`
 
 ### `resolve_context`
 
@@ -241,6 +248,8 @@ Returns:
 - `recommended_next_step`
 - `recommended_flow`
 - `usage_hint`
+- `projection_profile` => `"selection"`
+- `recommended_projection_profile` => `"api_shape"`
 
 `next_step` tells the client whether it should stay compact, expand the structural view, or fetch rich detail.
 `compact_continuation` is the machine-readable handoff artifact for the next stage. Reuse `selection_id` + `snapshot_id` from that artifact instead of resending a larger prompt or regenerating a larger query body.
@@ -282,6 +291,8 @@ Returns:
 - `recommended_next_step`
 - `recommended_flow`
 - `usage_hint`
+- `projection_profile` => `"api_shape"`
+- `recommended_projection_profile` => `"detail"`
 
 ### `fetch_context_detail`
 
@@ -311,11 +322,68 @@ Returns:
 - `recommended_next_step`
 - `recommended_flow`
 - `usage_hint`
+- `projection_profile` => `"detail"`
 
 The returned `context_packet` and `diagnostics_trace` include:
 
 - `retrieval_policy` - versioned ranking policy summary used for this retrieval
 - `capabilities` - parser/language coverage summary for the selected authority/support evidence set, including per-language strength and a derived `confidence_ceiling`
+
+### `literal_file_slice`
+
+Return an exact snapshot-bound text block for a concrete file path and line range.
+
+Inputs:
+
+- `index_id`
+- `snapshot_id`
+- optional `selection_id`
+- `path`
+- `start_line`
+- `end_line`
+
+Returns:
+
+- `index_id`
+- `snapshot_id`
+- optional `selection_id`
+- `path`
+- `requested_range`
+- `returned_range`
+- `content`
+- `line_count`
+- `byte_count`
+- `truncated`
+- `truncation_reason`
+- `project_context`
+- `recommended_next_step`
+- `recommended_flow`
+- `usage_hint`
+- `projection_profile` => `"literal_slice"`
+
+### `snapshot_diff`
+
+Compare the current MCP index snapshot to a baseline snapshot.
+
+Inputs:
+
+- `index_id`
+- optional `baseline_snapshot_id`
+- optional `paths`
+- optional `include_unchanged?`
+
+Returns:
+
+- `index_id`
+- `baseline_snapshot_id`
+- `current_snapshot_id`
+- `summary`
+- `changes`
+- `project_context`
+- `recommended_next_step`
+- `recommended_flow`
+- `usage_hint`
+- `projection_profile` => `"diff"`
 
 ### `impact_analysis`
 
@@ -344,6 +412,8 @@ Returns:
 
 - `index_id`
 - `skeletons`
+- `projection_profile` => `"api_shape"`
+- `recommended_projection_profile` => `"detail"`
 
 ## Operational Notes
 

@@ -96,7 +96,20 @@
 
    :literal-file-slice-response
    {:proto-name "LiteralFileSliceResponse"
-    :fields [{:key :literal_slice_result_json :proto-name "literal_slice_result_json" :number 1 :type :string}]}})
+    :fields [{:key :literal_slice_result_json :proto-name "literal_slice_result_json" :number 1 :type :string}]}
+
+   :snapshot-diff-request
+   {:proto-name "SnapshotDiffRequest"
+    :fields [{:key :root_path :proto-name "root_path" :number 1 :type :string}
+             {:key :paths :proto-name "paths" :number 2 :type :string :repeated? true}
+             {:key :parser_opts_json :proto-name "parser_opts_json" :number 3 :type :string}
+             {:key :baseline_snapshot_id :proto-name "baseline_snapshot_id" :number 4 :type :string}
+             {:key :include_unchanged :proto-name "include_unchanged" :number 5 :type :string}
+             {:key :language_policy_json :proto-name "language_policy_json" :number 6 :type :string}]}
+
+   :snapshot-diff-response
+   {:proto-name "SnapshotDiffResponse"
+    :fields [{:key :snapshot_diff_result_json :proto-name "snapshot_diff_result_json" :number 1 :type :string}]}})
 
 (defn- require-definition [message-key]
   (or (get message-definitions message-key)
@@ -385,4 +398,34 @@
 (defn literal-file-slice-response->map [message]
   (or (json-field "literal_slice_result_json"
                   (string-field :literal-file-slice-response message :literal_slice_result_json))
+      {}))
+
+(defn snapshot-diff-request [{:keys [root_path paths parser_opts baseline_snapshot_id include_unchanged language_policy]}]
+  (build-message :snapshot-diff-request
+                 {:root_path root_path
+                  :paths (or paths [])
+                  :parser_opts_json (json-string parser_opts)
+                  :baseline_snapshot_id baseline_snapshot_id
+                  :include_unchanged (when (some? include_unchanged) (str include_unchanged))
+                  :language_policy_json (json-string language_policy)}))
+
+(defn snapshot-diff-request->map [message]
+  {:root_path (not-empty (string-field :snapshot-diff-request message :root_path))
+   :paths (not-empty (repeated-string-field :snapshot-diff-request message :paths))
+   :parser_opts (json-field "parser_opts_json"
+                            (string-field :snapshot-diff-request message :parser_opts_json))
+   :baseline_snapshot_id (not-empty (string-field :snapshot-diff-request message :baseline_snapshot_id))
+   :include_unchanged (let [raw (some-> (string-field :snapshot-diff-request message :include_unchanged) not-empty)]
+                        (when raw
+                          (= "true" raw)))
+   :language_policy (json-field "language_policy_json"
+                                (string-field :snapshot-diff-request message :language_policy_json))})
+
+(defn snapshot-diff-response [{:keys [snapshot_diff_result] :as payload}]
+  (build-message :snapshot-diff-response
+                 {:snapshot_diff_result_json (json-string (or snapshot_diff_result payload))}))
+
+(defn snapshot-diff-response->map [message]
+  (or (json-field "snapshot_diff_result_json"
+                  (string-field :snapshot-diff-response message :snapshot_diff_result_json))
       {}))

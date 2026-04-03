@@ -2,8 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [semidx.core :as sci]
-            [semidx.runtime.compression :as compression]))
+            [semidx.core :as sci]))
 
 (defn- write-file! [root rel-path content]
   (let [f (io/file root rel-path)]

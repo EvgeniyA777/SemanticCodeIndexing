@@ -1,9 +1,7 @@
 (ns semidx.runtime.compression-cli
   (:gen-class)
   (:require [clojure.data.json :as json]
-            [clojure.edn :as edn]
-            [semidx.core :as sci]
-            [semidx.runtime.compression :as compression]))
+            [semidx.core :as sci]))
 
 (defn- parse-args [args]
   (loop [m {:root_path "."

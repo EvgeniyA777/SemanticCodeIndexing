@@ -3,6 +3,8 @@
             [clojure.string :as str]
             [semidx.runtime.adapters :as adapters]
             [semidx.runtime.language-activation :as activation]
+            [semidx.runtime.projections :as projections]
+            [semidx.runtime.semantic-id :as semantic-id]
             [semidx.runtime.storage :as storage]))
 
 (defn- now-iso []
@@ -47,7 +49,7 @@
 (defn- parse-files [root-path paths parser-opts]
   (letfn [(distinct-vec [xs]
             (->> xs (remove nil?) distinct vec))
-          (enrich-elixir-use-imports [{:keys [files units diagnostics] :as parsed-data}]
+          (enrich-elixir-use-imports [{:keys [files units diagnostics]}]
             (let [module->use-imports (->> (vals files)
                                            (filter #(= "elixir" (:language %)))
                                            (keep (fn [{:keys [module use_expansion_imports]}]
@@ -96,6 +98,18 @@
                           (map (fn [d] (assoc d :path path)) (:diagnostics parsed))))))
           {:files {} :units [] :diagnostics []})
          enrich-elixir-use-imports)))
+
+(defn- snapshot-file-lines [root-path path]
+  (let [f (io/file root-path path)]
+    (if (.exists f)
+      (-> f slurp str/split-lines vec)
+      [])))
+
+(defn- build-file-snapshots [root-path files]
+  (reduce-kv (fn [acc path _]
+               (assoc acc path (snapshot-file-lines root-path path)))
+             {}
+             files))
 
 (defn- lower [s]
   (some-> s str/lower-case))
@@ -301,8 +315,7 @@
             same-superclass (filter #(superclass-target? caller % units-by-id) arity-filtered)
             import-filtered (if (seq caller-imports)
                               (filter #(import-match? caller-imports %) arity-filtered)
-                              arity-filtered)
-            candidate-pool (if (seq import-filtered) import-filtered arity-filtered)]
+                              arity-filtered)]
         (cond
           (seq same-path) (mapv :unit_id same-path)
           (seq same-module) (mapv :unit_id same-module)
@@ -422,16 +435,17 @@
   ([root-path files-data]
    (build-index-state root-path files-data {}))
   ([root-path files-data lifecycle-opts]
-   (let [units (:units files-data)
+   (let [units (semantic-id/enrich-units (:units files-data))
          units-by-id (into {} (map (juxt :unit_id identity) units))
          activation-metadata (:activation_metadata lifecycle-opts)
          callers-index (build-callers-index units (:files files-data))
          callees-index (build-callees-index callers-index)]
      (attach-lifecycle
-      {:root_path root-path
+     {:root_path root-path
        :snapshot_id (uuid)
        :indexed_at (now-iso)
        :files (:files files-data)
+       :file_snapshots (build-file-snapshots root-path (:files files-data))
        :diagnostics (:diagnostics files-data)
        :units units-by-id
        :unit_order (mapv :unit_id units)
@@ -456,7 +470,8 @@
     (storage/init-storage! storage-adapter)
     (cond
       (seq pinned_snapshot_id)
-      (or (storage/load-index-by-snapshot storage-adapter root-path pinned_snapshot_id)
+      (or (some-> (storage/load-index-by-snapshot storage-adapter root-path pinned_snapshot_id)
+                  semantic-id/enrich-index)
           (throw (ex-info "requested pinned snapshot was not found"
                           {:type :invalid_request
                            :message "requested pinned snapshot was not found"
@@ -464,7 +479,8 @@
                                      :snapshot_id pinned_snapshot_id}})))
 
       load_latest
-      (storage/load-latest-index storage-adapter root-path)
+      (some-> (storage/load-latest-index storage-adapter root-path)
+              semantic-id/enrich-index)
 
       :else nil)))
 
@@ -626,9 +642,12 @@
                       sort
                       (take max_modules)
                       vec)]
-     {:snapshot_id (:snapshot_id index)
-      :indexed_at (:indexed_at index)
-      :index_lifecycle (:index_lifecycle index)
-      :files files
-      :modules modules
-      :summary (str "Indexed " (count (:files index)) " files and " (count (:units index)) " units.")})))
+     (projections/with-projection
+      {:snapshot_id (:snapshot_id index)
+       :indexed_at (:indexed_at index)
+       :index_lifecycle (:index_lifecycle index)
+       :files files
+       :modules modules
+       :summary (str "Indexed " (count (:files index)) " files and " (count (:units index)) " units.")}
+      :structural
+      :selection))))

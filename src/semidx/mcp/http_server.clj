@@ -35,9 +35,6 @@
 (defn- request-uri [^HttpExchange exchange]
   (.getRequestURI exchange))
 
-(defn- request-path [^HttpExchange exchange]
-  (.getPath (request-uri exchange)))
-
 (defn- request-header [^HttpExchange exchange header-name]
   (some-> exchange .getRequestHeaders (.getFirst header-name)))
 

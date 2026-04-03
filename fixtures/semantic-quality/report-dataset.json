@@ -1,0 +1,84 @@
+{
+  "thresholds": {
+    "identity_stability_rate": 1.0,
+    "move_rename_recovery_rate": 1.0,
+    "implementation_vs_meaning_accuracy": 1.0,
+    "expected_change_match_rate": 1.0,
+    "unmatched_rate": 0.0
+  },
+  "review_case_limit": 5,
+  "cases": [
+    {
+      "case_id": "implementation-change",
+      "baseline_root": "fixtures/semantic-quality/implementation-change/baseline",
+      "current_root": "fixtures/semantic-quality/implementation-change/current",
+      "expected_changes": [
+        {
+          "change_type": "implementation_changed",
+          "path": "src/my/app/order.clj",
+          "symbol": "my.app.order/process-order"
+        }
+      ]
+    },
+    {
+      "case_id": "meaning-change",
+      "baseline_root": "fixtures/semantic-quality/meaning-change/baseline",
+      "current_root": "fixtures/semantic-quality/meaning-change/current",
+      "expected_changes": [
+        {
+          "change_type": "meaning_changed",
+          "path": "src/my/app/order.clj",
+          "symbol": "my.app.order/validate-order"
+        }
+      ]
+    },
+    {
+      "case_id": "rename-recovery",
+      "baseline_root": "fixtures/semantic-quality/rename-recovery/baseline",
+      "current_root": "fixtures/semantic-quality/rename-recovery/current",
+      "expected_changes": [
+        {
+          "change_type": "moved_or_renamed",
+          "baseline_path": "src/my/app/alt_order.clj",
+          "path": "src/my/app/alt_order_v2.clj"
+        }
+      ]
+    },
+    {
+      "case_id": "added-change",
+      "baseline_root": "fixtures/semantic-quality/added-change/baseline",
+      "current_root": "fixtures/semantic-quality/added-change/current",
+      "expected_changes": [
+        {
+          "change_type": "added",
+          "path": "src/my/app/order.clj",
+          "symbol": "my.app.order/normalize-order"
+        }
+      ]
+    },
+    {
+      "case_id": "removed-change",
+      "baseline_root": "fixtures/semantic-quality/removed-change/baseline",
+      "current_root": "fixtures/semantic-quality/removed-change/current",
+      "expected_changes": [
+        {
+          "change_type": "removed",
+          "baseline_path": "src/my/app/order.clj",
+          "baseline_symbol": "my.app.order/normalize-order"
+        }
+      ]
+    },
+    {
+      "case_id": "intentional-mismatch",
+      "baseline_root": "fixtures/semantic-quality/intentional-mismatch/baseline",
+      "current_root": "fixtures/semantic-quality/intentional-mismatch/current",
+      "expected_changes": [
+        {
+          "change_type": "meaning_changed",
+          "path": "src/my/app/order.clj",
+          "symbol": "my.app.order/process-order"
+        }
+      ]
+    }
+  ]
+}

@@ -134,6 +134,11 @@ Returns compact map-level view of indexed repository.
 (sci/repo-map index {:max_files 20 :max_modules 20})
 ```
 
+Returned map now also carries additive projection metadata:
+
+- `:projection_profile` => `"structural"`
+- `:recommended_projection_profile` => `"selection"`
+
 ### `compress-project`
 
 Returns a bounded architecture/compression artifact for the indexed repository.
@@ -154,6 +159,31 @@ Returned keys include:
 - `:domain_model`
 - `:namespace_categories`
 - `:summary_markdown`
+- `:projection_profile` => `"summary"`
+- `:recommended_projection_profile` => `"selection"`
+
+## Projection Metadata
+
+Projection metadata is now standardized across the public retrieval/compression surfaces.
+
+- `:projection_profile` identifies the current shape of the payload
+- `:recommended_projection_profile` is emitted only on progressive/refinement outputs
+
+Current v1 taxonomy:
+
+- `"structural"` - repo map / high-level structure
+- `"summary"` - bounded architecture/compression summary
+- `"selection"` - compact staged retrieval selection
+- `"api_shape"` - widened structural/API surface
+- `"detail"` - rich evidence and raw-code detail
+- `"literal_slice"` - exact snapshot-bound file text
+- `"diff"` - semantic snapshot change report
+
+Notes:
+
+- `resolve-context`, `expand-context`, `repo-map`, and `compress-project` carry both fields
+- terminal outputs such as `fetch-context-detail`, `resolve-context-detail`, `literal-file-slice`, and `snapshot-diff` carry only `:projection_profile`
+- `skeletons` remains vector-returning in the library API for backward compatibility; its projection metadata is attached as collection metadata and is materialized as normal response fields on MCP/HTTP/gRPC surfaces
 
 ### `refresh-project-compression`
 
@@ -238,6 +268,8 @@ Returned keys:
 - `:budget_summary`
 - `:focus`
 - `:next_step`
+- `:projection_profile` => `"selection"`
+- `:recommended_projection_profile` => `"api_shape"`
 
 Example with policy override:
 
@@ -338,6 +370,8 @@ Returns:
 - `:budget_summary`
 - `:skeletons`
 - optional `:impact_hints`
+- `:projection_profile` => `"api_shape"`
+- `:recommended_projection_profile` => `"detail"`
 
 `budget_summary` includes:
 
@@ -368,6 +402,7 @@ Returns:
 - `:guardrail_assessment`
 - `:diagnostics_trace`
 - `:stage_events`
+- `:projection_profile` => `"detail"`
 
 Both `:context_packet` and `:diagnostics_trace` include:
 
@@ -386,6 +421,10 @@ Convenience helper for internal callers that still need the old one-shot rich re
 
 It is intentionally not the canonical public flow. External integrations should prefer the explicit staged API so selection stability and later-stage budgets remain visible.
 
+Returned payload carries:
+
+- `:projection_profile` => `"detail"`
+
 The capability layer is now language-strength-aware. Runtime retrieval emits `:selected_language_strengths` and `:confidence_ceiling` inside `:capabilities`, then caps the final confidence level to that ceiling after late raw-fetch upgrades. This means:
 
 - Clojure can still reach `high` when structural evidence is strong
@@ -402,6 +441,109 @@ The same capability summary now also surfaces index lifecycle state:
 - `:index_provenance_source`
 
 If a query asks for `:freshness "current_snapshot"` and retrieval is running against a stale pinned/reused snapshot, guardrails now emit `stale_index` and block autonomous drafting until the host rebuilds or explicitly allows stale usage.
+
+### `literal-file-slice`
+
+Fetches an exact, snapshot-bound file text block for patch-safe edit context.
+
+```clojure
+(sci/literal-file-slice index
+  {:snapshot_id (:snapshot_id index)
+   :path "src/my/app/order.clj"
+   :start_line 3
+   :end_line 8})
+```
+
+Returns:
+
+- `:api_version`
+- `:snapshot_id`
+- optional `:selection_id`
+- `:path`
+- `:requested_range`
+- `:returned_range`
+- `:content`
+- `:line_count`
+- `:byte_count`
+- `:truncated`
+- `:truncation_reason`
+- `:projection_profile` => `"literal_slice"`
+
+Hard caps are separate from staged retrieval budgets:
+
+- max requested line span: `400`
+- max returned bytes: `32 KiB`
+
+### `snapshot-diff`
+
+Compares the current index snapshot to a baseline snapshot using semantic identity plus implementation/public-shape fingerprints.
+
+```clojure
+(sci/snapshot-diff index {:baseline_snapshot_id "..."})
+```
+
+Options:
+
+- `:baseline_snapshot_id` optional explicit baseline snapshot
+- `:storage` optional storage adapter for baseline loading
+- `:paths` optional path filter
+- `:include_unchanged?` optional inclusion of unchanged rows
+
+Returns:
+
+- `:api_version`
+- `:baseline_snapshot_id`
+- `:current_snapshot_id`
+- `:summary`
+- `:changes`
+- `:projection_profile` => `"diff"`
+
+Current change types:
+
+- `:added`
+- `:removed`
+- `:moved_or_renamed`
+- `:implementation_changed`
+- `:meaning_changed`
+- `:unchanged`
+
+### `semantic-quality-report`
+
+Evaluates semantic diff quality against expected change fixtures.
+
+Library example:
+
+```clojure
+(sci/semantic-quality-report
+ current-index
+ {:baseline_index baseline-index
+  :expected_changes [{:change_type "implementation_changed"
+                      :path "src/my/app/order.clj"
+                      :symbol "my.app.order/process-order"}]})
+```
+
+Offline CLI:
+
+```bash
+clojure -M:eval semantic-quality-report \
+  --dataset fixtures/semantic-quality/report-dataset.json \
+  --out "${TMPDIR:-.tmp}/semantic-quality-report.json"
+```
+
+Returned keys include:
+
+- `:summary`
+- `:cases`
+- `:thresholds`
+- `:gate_decision`
+
+Summary metrics include:
+
+- `:identity_stability_rate`
+- `:move_rename_recovery_rate`
+- `:implementation_vs_meaning_accuracy`
+- `:expected_change_match_rate`
+- `:unmatched_rate`
 
 ## Offline Policy Governance CLI
 
@@ -998,6 +1140,11 @@ Returns skeletons for specific units or paths.
 (sci/skeletons index {:unit_ids ["src/my/app/order.clj::my.app.order/process-order"]})
 ```
 
+The library return value remains a vector of skeleton entries. Projection metadata is attached as collection metadata:
+
+- `:projection_profile` => `"api_shape"`
+- `:recommended_projection_profile` => `"detail"`
+
 ## Runtime CLI
 
 Use CLI alias to run query directly from JSON:
@@ -1201,8 +1348,15 @@ Transport mapping for authz denials:
 - Tests: `clojure -M:test`
 - Benchmarks: `./scripts/run-benchmarks.sh` (`--fixture-prefix retrieval_elixir_ --elixir-engine regex` runs the Elixir regex baseline subset)
 - Full MVP gates: `./scripts/run-mvp-gates.sh`
+- Advisory semantic-quality report: `./scripts/run-semantic-quality-report.sh`
 - Language onboarding scaffold: `./scripts/new-language-adapter.sh <language> --ext .ext1,.ext2`
 - Language onboarding validator: `./scripts/validate-language-onboarding.sh <language>` (use `--skip-gates` for structural checks only)
+
+The semantic-quality report lane is advisory in v1:
+
+- the workflow publishes JSON + markdown artifacts
+- gate failure is visible in the report summary
+- merge blocking remains tied to the existing runtime gates until the fixture corpus is broad enough for a stricter policy
 
 ## Current MVP Notes
 

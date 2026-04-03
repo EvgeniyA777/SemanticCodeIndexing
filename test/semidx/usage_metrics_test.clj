@@ -2,7 +2,7 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [semidx.core :as sci]
-            [semidx.mcp.server :as mcp-server]
+            [semidx.mcp.core :as mcp-core]
             [semidx.runtime.usage-metrics :as usage]))
 
 (defn- write-file! [root rel-path content]
@@ -134,20 +134,20 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        create-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
-        cached-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        create-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
+        cached-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         index-id (get-in create-response [:structuredContent :index_id])
-        _resolve-response (#'mcp-server/handle-tools-call state {:name "resolve_context"
-                                                                 :arguments {:index_id index-id
-                                                                             :query sample-query}})
-        _literal-response (#'mcp-server/handle-tools-call state {:name "literal_file_slice"
-                                                                 :arguments {:index_id index-id
-                                                                             :snapshot_id (get-in create-response [:structuredContent :snapshot_id])
-                                                                             :path "src/my/app/order.clj"
-                                                                             :start_line 3
-                                                                             :end_line 4}})
+        _resolve-response (#'mcp-core/handle-tools-call state {:name "resolve_context"
+                                                               :arguments {:index_id index-id
+                                                                           :query sample-query}})
+        _literal-response (#'mcp-core/handle-tools-call state {:name "literal_file_slice"
+                                                               :arguments {:index_id index-id
+                                                                           :snapshot_id (get-in create-response [:structuredContent :snapshot_id])
+                                                                           :path "src/my/app/order.clj"
+                                                                           :start_line 3
+                                                                           :end_line 4}})
         create-events (filter #(= "create_index" (:operation %)) (usage/emitted-events sink))
         resolve-event (last (filter #(= "resolve_context" (:operation %)) (usage/emitted-events sink)))
         literal-event (last (filter #(= "literal_file_slice" (:operation %)) (usage/emitted-events sink)))]
@@ -184,12 +184,12 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        create-response (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        create-response (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         index-id (get-in create-response [:structuredContent :index_id])
-        _resolve-response (#'mcp-server/handle-tools-call state {:name "resolve_context"
-                                                                 :arguments {:index_id index-id
-                                                                             :query sample-shorthand-query}})
+        _resolve-response (#'mcp-core/handle-tools-call state {:name "resolve_context"
+                                                               :arguments {:index_id index-id
+                                                                           :query sample-shorthand-query}})
         memory (sci/compact-mcp-query-memory sink)
         entry (first (:entries memory))]
     (testing "report scope and counts stay compact and MCP-specific"
@@ -208,6 +208,40 @@
              (get-in entry [:continuation :recommended_next_step])))
       (is (string? (get-in entry [:continuation :selection_id])))
       (is (string? (get-in entry [:continuation :snapshot_id]))))))
+
+(deftest semantic-quality-report-records-usage-event-test
+  (let [baseline-root (str (java.nio.file.Files/createTempDirectory "sci-usage-semantic-quality-base" (make-array java.nio.file.attribute.FileAttribute 0)))
+        current-root (str (java.nio.file.Files/createTempDirectory "sci-usage-semantic-quality-current" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! baseline-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  order)\n")
+        _ (write-file! current-root
+                       "src/my/app/order.clj"
+                       "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (let [validated (validate-order order)]\n    validated))\n\n(defn validate-order [order]\n  order)\n")
+        sink (sci/in-memory-usage-metrics)
+        baseline-index (sci/create-index {:root_path baseline-root})
+        current-index (sci/create-index {:root_path current-root
+                                         :usage_metrics sink
+                                         :usage_context {:session_id "session-semantic-quality"}})
+        report (sci/semantic-quality-report current-index
+                                            {:baseline_index baseline-index
+                                             :expected_changes [{:change_type "implementation_changed"
+                                                                 :path "src/my/app/order.clj"
+                                                                 :symbol "my.app.order/process-order"}]})
+        semantic-event (last (filter #(= "semantic_quality_report" (:operation %))
+                                     (usage/emitted-events sink)))]
+    (testing "semantic quality report returns aggregated metrics"
+      (is (= 1 (get-in report [:summary :expected_changes])))
+      (is (= 1 (get-in report [:summary :exact_matches])))
+      (is (= 1.0 (get-in report [:summary :metrics :expected_change_match_rate]))))
+    (testing "semantic quality report emits a dedicated usage event"
+      (is (= "semantic_quality_report" (:operation semantic-event)))
+      (is (= "success" (:status semantic-event)))
+      (is (= "session-semantic-quality" (:session_id semantic-event)))
+      (is (= 1 (get-in semantic-event [:payload :expected_changes])))
+      (is (= 1.0 (get-in semantic-event [:payload :identity_stability_rate])))
+      (is (= 1.0 (get-in semantic-event [:payload :implementation_vs_meaning_accuracy])))
+      (is (true? (get-in semantic-event [:payload :eligible?]))))))
 
 (deftest slo-report-aggregates-operational-metrics-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-usage-metrics-slo" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -234,10 +268,10 @@
                      :indexes-by-id {}
                      :cache-key->index-id {}
                      :client-info {:name "codex-test-client"}})
-        _mcp-create (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                           :arguments {:root_path tmp-root}})
-        _mcp-create-hit (#'mcp-server/handle-tools-call state {:name "create_index"
-                                                               :arguments {:root_path tmp-root}})
+        _mcp-create (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                         :arguments {:root_path tmp-root}})
+        _mcp-create-hit (#'mcp-core/handle-tools-call state {:name "create_index"
+                                                             :arguments {:root_path tmp-root}})
         report (sci/slo-report sink)
         retrieval-only (sci/slo-report sink {:operation "resolve_context"})]
     (testing "report exposes the requested SLO-facing metrics"
@@ -344,7 +378,6 @@
                                                    :feedback_outcome "not_helpful"
                                                    :followup_action "discarded"
                                                    :confidence_level "low"})
-        events (usage/emitted-events sink)
         _patched-events (swap! (:state sink)
                                update :events
                                (fn [rows]

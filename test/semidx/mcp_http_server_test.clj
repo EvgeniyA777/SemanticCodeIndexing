@@ -114,6 +114,8 @@
                    (get-in list-response [:body :result :tools 0 :name])))
             (is (some #(= "literal_file_slice" (:name %))
                       (get-in list-response [:body :result :tools])))
+            (is (some #(= "snapshot_diff" (:name %))
+                      (get-in list-response [:body :result :tools])))
             (is (re-find #"ALWAYS call this first"
                          (get-in list-response [:body :result :tools 0 :description])))))
         (testing "tools/call create_index works over streamable HTTP"
@@ -210,6 +212,84 @@
                    (get-in resolve-response [:body :result :structuredContent :details :code])))
             (is (= "retry_resolve_context_with_structured_query"
                    (get-in resolve-response [:body :result :structuredContent :details :details :recommended_next_step])))))
+        (testing "canonical invalid query preserves validation details over streamable HTTP"
+          (let [create-response (request! "POST"
+                                          (str base-url "/mcp")
+                                          {:jsonrpc "2.0"
+                                           :id 43
+                                           :method "tools/call"
+                                           :params {:name "create_index"
+                                                    :arguments {:root_path tmp-root
+                                                                :force_rebuild true}}}
+                                          {"Mcp-Session-Id" session-id})
+                index-id (get-in create-response [:body :result :structuredContent :index_id])
+                resolve-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 44
+                                            :method "tools/call"
+                                            :params {:name "resolve_context"
+                                                     :arguments {:index_id index-id
+                                                                 :query {:api_version "1.0"
+                                                                         :schema_version "1.0"
+                                                                         :intent {:purpose "code_understanding"
+                                                                                  :details "Locate process-order authority."}
+                                                                         :targets {:symbols ["my.app.order/process-order"]
+                                                                                   :paths ["src/my/app/order.clj"]}
+                                                                         :constraints {:token_budget "oops"
+                                                                                       :max_raw_code_level "enclosing_unit"
+                                                                                       :freshness "current_snapshot"}
+                                                                         :hints {:prefer_definitions_over_callers true}
+                                                                         :options {:allow_raw_code_escalation false}
+                                                                         :trace {:trace_id "44444444-4444-4444-8444-444444444444"
+                                                                                 :request_id "http-invalid-query-001"}}}}}
+                                           {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status resolve-response)))
+            (is (true? (get-in resolve-response [:body :result :isError])))
+            (is (map? (get-in resolve-response [:body :result :structuredContent :details :details :validation_errors])))
+            (is (contains? (get-in resolve-response [:body :result :structuredContent :details :details :validation_errors])
+                           :constraints))))
+        (testing "snapshot_diff works over streamable HTTP"
+          (let [baseline-response (request! "POST"
+                                            (str base-url "/mcp")
+                                            {:jsonrpc "2.0"
+                                             :id 61
+                                             :method "tools/call"
+                                             :params {:name "create_index"
+                                                      :arguments {:root_path tmp-root
+                                                                  :force_rebuild true}}}
+                                            {"Mcp-Session-Id" session-id})
+                baseline-snapshot-id (get-in baseline-response [:body :result :structuredContent :snapshot_id])
+                _ (write-file! tmp-root
+                               "src/my/app/order.clj"
+                               "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  order)\n\n(defn audit-order [order]\n  (:id order))\n")
+                rebuilt-response (request! "POST"
+                                           (str base-url "/mcp")
+                                           {:jsonrpc "2.0"
+                                            :id 62
+                                            :method "tools/call"
+                                            :params {:name "create_index"
+                                                     :arguments {:root_path tmp-root
+                                                                 :force_rebuild true}}}
+                                           {"Mcp-Session-Id" session-id})
+                rebuilt-index-id (get-in rebuilt-response [:body :result :structuredContent :index_id])
+                rebuilt-snapshot-id (get-in rebuilt-response [:body :result :structuredContent :snapshot_id])
+                diff-response (request! "POST"
+                                        (str base-url "/mcp")
+                                        {:jsonrpc "2.0"
+                                         :id 63
+                                         :method "tools/call"
+                                         :params {:name "snapshot_diff"
+                                                  :arguments {:index_id rebuilt-index-id
+                                                              :baseline_snapshot_id baseline-snapshot-id}}}
+                                        {"Mcp-Session-Id" session-id})]
+            (is (= 200 (:status diff-response)))
+            (is (= baseline-snapshot-id
+                   (get-in diff-response [:body :result :structuredContent :baseline_snapshot_id])))
+            (is (= rebuilt-snapshot-id
+                   (get-in diff-response [:body :result :structuredContent :current_snapshot_id])))
+            (is (= 1
+                   (get-in diff-response [:body :result :structuredContent :summary :change_counts :added])))))
         (testing "missing session is rejected for non-initialize calls"
           (let [missing-session (request! "POST"
                                           (str base-url "/mcp")
@@ -267,6 +347,8 @@
             (is (= "message" (:event list-event)))
             (is (seq (get-in list-event [:payload :result :tools])))
             (is (some #(= "literal_file_slice" (:name %))
+                      (get-in list-event [:payload :result :tools])))
+            (is (some #(= "snapshot_diff" (:name %))
                       (get-in list-event [:payload :result :tools])))
             (is (re-find #"INSTEAD OF manual directory crawling"
                          (get-in list-event [:payload :result :tools 1 :description]))))))
