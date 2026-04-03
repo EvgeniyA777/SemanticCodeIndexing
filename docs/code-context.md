@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: 6429ad6a4276cd17cb071306a65bd7864e0ddd5d
+- fingerprint: e30ed5da3eca58d6bbd8793e02471e4560b8933f
 
 ## Tree
 ```text
@@ -22,6 +22,7 @@ semidx
     ├ mcp_server_test.clj
     ├ policy_governance_test.clj
     ├ project_context_test.clj
+    ├ repo_identity_test.clj
     ├ runtime_grpc_test.clj
     ├ runtime_http_test.clj
     ├ runtime_test.clj
@@ -59,8 +60,8 @@ semidx
 - semidx.mcp-server-test
 - semidx.policy-governance-test
 - semidx.project-context-test
-- semidx.runtime-grpc-test
-- ... +4 more
+- semidx.repo-identity-test
+- ... +5 more
 ### other
 - semidx.contracts.cli
 - semidx.contracts.schemas
@@ -70,7 +71,7 @@ semidx
 - semidx.mcp.session-registry
 - semidx.runtime.adapters
 - semidx.runtime.authz
-- ... +33 more
+- ... +34 more
 
 ## Domain Model
 - IndexStorage [protocol]
@@ -102,7 +103,7 @@ semidx
 - semidx.core -> semidx.runtime.semantic-quality
 - semidx.core -> semidx.runtime.snapshot-diff
 - semidx.core -> semidx.runtime.storage
-- ... +214 more
+- ... +223 more
 
 ## Namespaces
 ### semidx.contracts.cli
