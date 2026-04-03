@@ -1,3 +1,25 @@
+---
+file_type: adr
+decision_id: ADR-030
+title: Move Semantic-Quality Runner Post-Processing Into Clojure
+status: proposed
+date: 2026-04-02
+deciders:
+  - project owner
+tags:
+  - architecture
+  - tooling
+  - ci
+summary: Consolidate semantic-quality runner post-processing into a Clojure-owned runner path and keep shell as a thin launcher.
+agent_summary: Read this ADR before changing the semantic-quality runner path. The decision of record is to move post-processing, summary rendering, artifact writing, and exit semantics into a Clojure runner while keeping shell as a thin entrypoint.
+supersedes: []
+superseded_by: null
+links:
+  - notes/2026-04-02-semantic-quality-runner-post-processing-plan.md
+  - scripts/run-semantic-quality-report.sh
+  - src/semidx/runtime/evaluation.clj
+---
+
 # ADR-030: Move Semantic-Quality Runner Post-Processing Into Clojure
 
 **Status**: Proposed  
@@ -6,296 +28,120 @@
 
 ---
 
-## Context and Problem Statement
+## Context
 
-The semantic-quality advisory path currently spans multiple layers:
+The semantic-quality advisory runner currently spans multiple implementation layers:
 
-- a shell runner script
-- inline Python used for report post-processing and summary rendering
-- the existing Clojure evaluation command that builds the semantic-quality report
+- a shell script that chooses paths and drives process flow
+- inline Python that parses report JSON and renders markdown summary output
+- Clojure code that generates the semantic-quality report itself
 
-This split has already produced avoidable bugs:
+This split has already produced avoidable defects, including:
 
 - temp-path vs final-path confusion in stdout
-- stale artifact masking on runner failure
-- drift between shell behavior, Python summary generation, and workflow expectations
+- stale artifact masking after runner failure
+- drift between shell behavior, Python post-processing, and workflow expectations
 
-The current implementation is workable, but the change surface is fragmented. Each edit to runner behavior requires reasoning across:
+The current flow works, but the change cost is too high for a path that is likely to be revisited. Small adjustments require reasoning across bash, Python, Clojure, and workflow artifact conventions at the same time.
 
-- bash path handling
-- bash exit semantics
-- Python JSON parsing and markdown rendering
-- Clojure report generation
-- GitHub workflow artifact assumptions
+The decision that now needs to be made is not about the semantic-quality report schema itself. It is about where runner post-processing and artifact semantics should live.
 
-This is not a runtime product-path problem, but it is a recurring CI and tooling maintenance problem. We expect to revisit the runner again, so keeping post-processing split across `bash+python` raises future change cost unnecessarily.
+## Decision Drivers
 
----
+- clear ownership of runner behavior
+- lower change cost for CI and tooling paths
+- stable stdout and artifact contract
+- explicit distinction between advisory failure and execution failure
+- fewer cross-language bugs in a Clojure-first codebase
+- ability to test runner behavior without re-deriving shell and Python semantics
+
+## Considered Options
+
+### Option 1. Keep the current split across shell, inline Python, and Clojure
+
+Retain the current mixed implementation and continue fixing issues at the layer where they appear.
+
+### Option 2. Move post-processing into a dedicated Clojure-owned runner path
+
+Keep report generation reusable, but move summary rendering, validation, artifact writing, stdout emission, and exit semantics into one Clojure runner path.
+
+### Option 3. Move all semantic-quality behavior into the shell layer
+
+Treat shell as the primary orchestration and contract layer and keep Clojure limited to raw report generation only.
 
 ## Decision
 
-### 1. Move runner post-processing into a single Clojure path
+We accept Option 2: move semantic-quality runner post-processing into a dedicated Clojure-owned runner path.
 
-Post-processing responsibilities will move out of inline Python and into Clojure.
+After this decision:
 
-That includes:
+- semantic-quality report generation remains reusable as a Clojure capability
+- runner post-processing moves out of inline Python
+- shell remains only a thin launcher with defaults and command invocation
+- stdout, artifact writing, validation, and exit semantics are owned by one Clojure path
 
-- reading the semantic-quality dataset
-- invoking report generation
-- validating the resulting report shape
+The chosen design separates two concerns that were previously entangled:
+
+- report generation
+- runner orchestration
+
+`report generation` means computing the semantic-quality JSON report from the dataset.
+
+`runner orchestration` means:
+
+- validating the report shape
 - rendering the markdown summary
-- writing report and summary artifacts atomically
-- printing the stdout contract
-- deciding execution vs advisory exit semantics
+- writing final artifacts atomically
+- printing stable stdout metadata
+- deciding whether the outcome is advisory success or execution failure
 
-### 2. Keep shell as a thin entrypoint only
+Option 1 loses because it preserves the exact multi-language seam that already created repeated defects.
 
-`scripts/run-semantic-quality-report.sh` remains as a thin launcher that:
+Option 3 loses because it would push more semantic responsibility into shell, which is the least suitable place for structured validation, artifact contracts, and long-term maintainability.
 
-- provides default argument values
-- invokes the Clojure command
-
-It will not own:
-
-- JSON parsing
-- summary rendering
-- temp-file orchestration
-- stdout protocol details
-- report validation logic
-
-### 3. Keep report generation separate from runner orchestration
-
-The existing semantic-quality report generation logic remains reusable as a library/eval capability.
-
-The system distinguishes between:
-
-- **report generation**
-  - produce the semantic-quality JSON report
-- **runner orchestration**
-  - validate it
-  - render summary
-  - write artifacts
-  - print stdout metadata
-  - return correct exit semantics
-
-This keeps CI/tooling concerns from leaking further into core evaluation logic.
-
-### 4. Define a stable runner contract
-
-The new Clojure runner path must provide:
-
-#### Inputs
-
-- `--dataset <path>`
-- `--out <report.json>`
-- `--summary-out <report.md>`
-
-#### Side effects
-
-- atomically write final JSON report
-- atomically write final markdown summary
-
-#### Stdout
-
-- `semantic_quality_gate=eligible|advisory_failure`
-- `semantic_quality_report=<final path>`
-- `semantic_quality_summary=<final path>`
-
-#### Exit semantics
-
-- exit `0` when the report is successfully built, even if gate result is advisory failure
-- exit nonzero on:
-  - dataset read failure
-  - report generation failure
-  - invalid report structure
-  - summary rendering failure
-  - artifact write failure
-
-### 5. Treat temp artifacts as internal implementation detail
-
-If temp files are used, they are internal only.
-
-They must never leak into the user-facing stdout contract.
-
-The caller should only see final artifact paths.
-
----
-
-## Architectural Consequences
+## Consequences
 
 ### Positive
 
-- future edits stay localized to one Clojure runner path
-- stdout behavior, artifact writing, and exit semantics become easier to reason about
-- workflow integration becomes simpler because it consumes one stable contract
-- inline Python is removed from a Clojure-first codebase path
+- runner behavior has one primary owner
+- stdout and artifact semantics become easier to reason about
+- summary rendering and validation can be tested in Clojure directly
+- the shell wrapper becomes cheaper, thinner, and less error-prone
+- future CI and tooling changes stay localized to one implementation seam
 
-### Tradeoffs
+### Negative
 
-- one more command path or helper namespace is introduced
-- some lightweight scripting convenience moves into application code
-- runner logic becomes more explicit and structured, which is slightly more code than a shell snippet
+- the codebase gains one more explicit runner-oriented Clojure path
+- some behavior that was previously quick to sketch in shell or Python now needs proper Clojure implementation
+- there is a short-term migration cost to move summary rendering, validation, and artifact writing into the new path
+- if the runner grows carelessly, it can still over-centralize too much tooling logic in one namespace
 
-### What We Are Not Doing
+### Follow-Up
 
-- we are not changing the semantic-quality report schema itself
-- we are not adding MCP/HTTP/gRPC surfaces for semantic-quality reporting
-- we are not introducing protocol-based abstraction unless another runner implementation becomes real
+- add a dedicated runner path or namespace for semantic-quality orchestration
+- keep `scripts/run-semantic-quality-report.sh` as a thin launcher only
+- move summary rendering and report validation into Clojure helpers
+- ensure artifact writes are atomic and stdout emits final paths only
+- add regression coverage for advisory success, execution failure, invalid reports, and stale-output replacement
 
----
+## Status Changes
 
-## Boundary Design
+No status change yet.
 
-### A. `semidx.runtime.evaluation`
+If accepted, this ADR becomes the decision of record for the semantic-quality runner architecture.
 
-**Responsibility**
+## References
 
-- build semantic-quality reports from datasets
+- [notes/2026-04-02-semantic-quality-runner-post-processing-plan.md](/Users/ae/workspaces/semidx/notes/2026-04-02-semantic-quality-runner-post-processing-plan.md)
+- [run-semantic-quality-report.sh](/Users/ae/workspaces/semidx/scripts/run-semantic-quality-report.sh)
+- [evaluation.clj](/Users/ae/workspaces/semidx/src/semidx/runtime/evaluation.clj)
 
-**Knows about**
+## Definition Of Done
 
-- dataset structure
-- thresholds
-- metrics
-- gate decision
+This decision is fully implemented when all of the following are true:
 
-**Does not know about**
-
-- shell concerns
-- markdown summary file writing
-- stdout contract
-- CI artifact UX
-
-**Why this boundary exists**
-
-- report-generation policy should remain reusable and testable independently of runner UX
-
-### B. `semidx.runtime.semantic-quality-runner`
-
-**Responsibility**
-
-- orchestrate semantic-quality report execution for tooling and CI
-
-**Knows about**
-
-- dataset path
-- output paths
-- summary rendering
-- report validation
-- atomic writes
-- stdout lines
-- exit semantics
-
-**Does not know about**
-
-- workflow YAML details
-- shell defaults
-
-**Why this boundary exists**
-
-- runner UX and artifact semantics are a separate axis of change from report generation
-
-### C. `scripts/run-semantic-quality-report.sh`
-
-**Responsibility**
-
-- thin process launcher
-
-**Knows about**
-
-- default paths
-- how to invoke the Clojure command
-
-**Does not know about**
-
-- JSON parsing
-- summary rendering
-- advisory vs execution semantics
-- temp-file handling rules
-
-**Why this boundary exists**
-
-- shell remains cheap and replaceable instead of becoming the owner of business logic
-
----
-
-## Contract Shape
-
-### Runner Command
-
-Suggested command:
-
-- `clojure -M:eval semantic-quality-runner --dataset <...> --out <...> --summary-out <...>`
-
-Why a separate command:
-
-- keeps `semantic-quality-report` focused on report generation
-- avoids overloading one command with both report semantics and CI UX semantics
-- gives the shell wrapper a single stable target
-
-### Helper Functions
-
-Introduce small Clojure helpers:
-
-- `render-semantic-quality-summary`
-- `validate-semantic-quality-report`
-- `write-json-atomically`
-- `write-text-atomically`
-
-These should be simple functions, not protocols, because there is no credible second implementation yet.
-
----
-
-## Risks
-
-### 1. Command Sprawl In `evaluation.clj`
-
-**Why it matters**
-
-- `evaluation.clj` already contains several command paths
-
-**Mitigation**
-
-- place runner helpers in a dedicated namespace and expose only a thin command adapter from `evaluation.clj`
-
-### 2. Recreating Drift In Workflow Or Shell
-
-**Why it matters**
-
-- if shell or workflow starts rebuilding runner logic, the same class of bug returns
-
-**Mitigation**
-
-- keep shell and workflow consuming only the runner contract, never reproducing report semantics
-
-### 3. Overengineering A Small Utility Path
-
-**Why it matters**
-
-- this is a tooling path, not the main product runtime
-
-**Mitigation**
-
-- keep the design to one thin shell wrapper plus one Clojure runner seam, no plugin architecture
-
----
-
-## Implementation Sequence
-
-1. Add pure Clojure helpers for summary rendering, report validation, and atomic file writing.
-2. Add a dedicated runner command that calls report generation and owns stdout + exit semantics.
-3. Reduce `scripts/run-semantic-quality-report.sh` to a thin launcher.
-4. Keep workflow paths explicit and unchanged from the caller perspective.
-5. Add regression tests for:
-   - advisory success with final-path stdout
-   - nonzero execution failure
-   - invalid report rejection
-   - atomic overwrite of stale output
-
----
-
-## Follow-Ups
-
-1. If runner behavior evolves again, prefer extending the Clojure runner rather than reintroducing shell-side parsing.
-2. Consider moving the runner implementation into a dedicated namespace instead of growing `evaluation.clj` further.
-3. Reassess whether the shell wrapper is still needed once the Clojure command contract is stable.
+1. Semantic-quality runner post-processing no longer depends on inline Python.
+2. Shell acts only as a thin launcher and does not own report validation, summary rendering, or exit semantics.
+3. The runner emits final artifact paths on stdout rather than temp paths.
+4. Advisory failure is represented as a successful run with a negative gate result, while execution failure exits nonzero.
+5. Regression tests cover the runner contract at the Clojure-owned seam.
