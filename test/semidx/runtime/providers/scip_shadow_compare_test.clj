@@ -9,7 +9,8 @@
             [clojure.test :refer [deftest is testing]]
             [semidx.runtime.providers.scip-shadow-compare :as cmp]
             [semidx.runtime.providers.scip-typescript :as st]
-            [semidx.runtime.scip :as scip]))
+            [semidx.runtime.scip :as scip]
+            [semidx.test-support.scip-toolchain :as toolchain]))
 
 (def ^:private corpus-root
   (io/file "fixtures/provider-authority/corpus/typescript"))
@@ -108,4 +109,4 @@
       (is (= modelled-symbols (set (get-in report [:comparison :agreed])))
           "the CLI path agrees with the fixture path")
       (is (zero? (get-in report [:co_arbitration :diagnostic_count]))))
-    (println "scip-typescript CLI not resolved; skipping shadow-report end-to-end test")))
+    (toolchain/unresolved! "scip-typescript CLI" "shadow-report end-to-end test")))

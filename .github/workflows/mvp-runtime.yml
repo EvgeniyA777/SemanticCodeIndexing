@@ -75,10 +75,34 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      # plans/018 Stages 3 and 4 ship provider adapters that shell out to a real
+      # indexer. Without these toolchains their four end-to-end tests skipped and
+      # the suite still reported green, so the CLI resolution chain, the
+      # javac + semanticdb-javac + scip-semanticdb pipeline, and the freshness
+      # gate against a live artifact ran in no environment at all — the same
+      # shape as the Elixir lane defect fixed in #3.
+      #
+      # Both setup scripts fail closed on version drift: `npm ci` against the
+      # committed lockfile, and sha256-verified pinned jars.
+      - name: Setup scip-typescript toolchain
+        run: |
+          ./scripts/setup-scip-typescript.sh --write-env-file .scip.env
+          cat .scip.env >> "$GITHUB_ENV"
+
+      - name: Setup Java SCIP toolchain
+        run: |
+          ./scripts/setup-scip-java.sh --write-env-file .scip-java.env
+          cat .scip-java.env >> "$GITHUB_ENV"
+
       - name: Verify generated gRPC sources
         run: clojure -T:build grpc-verify-generated
 
       - name: Run MVP Gates
+        env:
+          # Assert the end-to-end tests actually ran instead of trusting the
+          # steps above: with this set, an unresolved SCIP toolchain fails the
+          # test rather than printing a skip.
+          SEMIDX_REQUIRE_SCIP_TOOLCHAINS: "1"
         run: ./scripts/run-mvp-gates.sh
 
   semantic-quality-report:
@@ -184,6 +208,11 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+      # The SCIP toolchains are deliberately NOT installed here. This job runs
+      # the same suite as runtime-gates, which already exercises the SCIP
+      # end-to-end tests under SEMIDX_REQUIRE_SCIP_TOOLCHAINS; installing them
+      # again would add an `npm ci` and eight jar downloads for no extra signal.
+      # The four end-to-end tests skip in this job, and that is the intent.
       - name: Run PostgreSQL Integration Smoke
         env:
           SEMIDX_TEST_POSTGRES_URL: jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass

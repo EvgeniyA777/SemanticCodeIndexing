@@ -9,7 +9,8 @@
             [clojure.test :refer [deftest is testing]]
             [semidx.runtime.fact-arbitration :as fa]
             [semidx.runtime.providers.scip-typescript :as st]
-            [semidx.runtime.scip :as scip]))
+            [semidx.runtime.scip :as scip]
+            [semidx.test-support.scip-toolchain :as toolchain]))
 
 (def ^:private fixture-scip
   "fixtures/provider-authority/scip/typescript-corpus.scrubbed.scip")
@@ -147,4 +148,4 @@
       (is (= modelled-symbols (symbols-of result))
           "the CLI path produces the same facts as the committed fixture")
       (is (every? #(= "exact" (:authority %)) (:facts result))))
-    (println "scip-typescript CLI not resolved; skipping end-to-end test")))
+    (toolchain/unresolved! "scip-typescript CLI" "end-to-end test")))
