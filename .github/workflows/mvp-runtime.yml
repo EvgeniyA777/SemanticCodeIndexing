@@ -107,15 +107,22 @@ jobs:
       #
       # Both setup scripts fail closed on version drift: `npm ci` against the
       # committed lockfile, and sha256-verified pinned jars.
+      #
+      # Deliberately WITHOUT --write-env-file, unlike the tree-sitter step above.
+      # Exporting SEMIDX_SCIP_TYPESCRIPT_CLI_PATH job-wide breaks three tests
+      # that force the unavailable branch by pointing :scip_toolchain_dir at a
+      # nonexistent directory, because ADR-047 ranks the environment variable
+      # ABOVE the repo-managed directory, so the override resolved a real CLI and
+      # `resolve-cli` stopped returning nil. Both adapters already fall back to
+      # `.scip-toolchain/` and `.scip-java-toolchain/` relative to the checkout,
+      # which is the resolution step the end-to-end tests are named for — the
+      # repo-managed one. Setting the override would have had CI exercise the
+      # environment branch instead, and no branch at all for absence.
       - name: Setup scip-typescript toolchain
-        run: |
-          ./scripts/setup-scip-typescript.sh --write-env-file .scip.env
-          cat .scip.env >> "$GITHUB_ENV"
+        run: ./scripts/setup-scip-typescript.sh
 
       - name: Setup Java SCIP toolchain
-        run: |
-          ./scripts/setup-scip-java.sh --write-env-file .scip-java.env
-          cat .scip-java.env >> "$GITHUB_ENV"
+        run: ./scripts/setup-scip-java.sh
 
       - name: Verify generated gRPC sources
         run: clojure -T:build grpc-verify-generated
