@@ -13,6 +13,12 @@
 (def unit-id bounded-long-string)
 (def string-array [:vector {:max 25} bounded-string])
 (def unit-id-array [:vector {:max 25} unit-id])
+;; The query schema permits 20 each of paths, symbols, modules and tests, and
+;; `summarize-query` echoes all four into one vector. Bounding that echo at the
+;; generic 25 made a legal query produce an illegal packet: 17 paths + 13
+;; symbols resolved and expanded fine, then failed the detail stage with
+;; `internal_contract_error`. The bound now matches what the input allows.
+(def targets-summary-array [:vector {:max 80} bounded-string])
 (def code-array [:vector {:max 12} code])
 
 (def coded-item
@@ -359,7 +365,7 @@
    [:query
     [:map {:closed true}
      [:intent bounded-string]
-     [:targets_summary string-array]
+     [:targets_summary targets-summary-array]
      [:constraints_summary string-array]
      [:hints_summary string-array]]]
    [:repo_map
@@ -417,7 +423,7 @@
    [:query
     [:map {:closed true}
      [:intent bounded-string]
-     [:targets_summary string-array]
+     [:targets_summary targets-summary-array]
      [:constraints_summary string-array]
      [:hints_summary string-array]
      [:options_summary string-array]

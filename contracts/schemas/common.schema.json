@@ -59,6 +59,16 @@
       "uniqueItems": true,
       "default": []
     },
+    "targetsSummaryArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/boundedString"
+      },
+      "maxItems": 80,
+      "uniqueItems": true,
+      "default": [],
+      "description": "Echo of the query's targets. Bounded to the total the query schema permits (paths + symbols + modules + tests, 20 each), so a legal query can never produce a packet that violates this contract."
+    },
     "unitIdArray": {
       "type": "array",
       "items": {

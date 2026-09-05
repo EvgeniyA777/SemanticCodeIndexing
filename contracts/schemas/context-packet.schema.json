@@ -35,7 +35,7 @@
           "$ref": "common.schema.json#/$defs/boundedString"
         },
         "targets_summary": {
-          "$ref": "common.schema.json#/$defs/stringArray"
+          "$ref": "common.schema.json#/$defs/targetsSummaryArray"
         },
         "constraints_summary": {
           "$ref": "common.schema.json#/$defs/stringArray"
