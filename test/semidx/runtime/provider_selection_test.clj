@@ -1,8 +1,10 @@
 (ns semidx.runtime.provider-selection-test
   "Stage 2 (plans/018) planning policy: deterministic, bounded provider plans
-  that explain their own exclusions."
+  that explain their own exclusions, plus the Stage 4.5 project-scoped plan and
+  the batch-coverage input to per-file planning."
   (:require [clojure.test :refer [deftest testing is]]
-            [semidx.runtime.provider-selection :as selection]))
+            [semidx.runtime.provider-selection :as selection]
+            [semidx.runtime.providers :as providers]))
 
 (def ^:private java-path "src/example/OrderService.java")
 
@@ -100,3 +102,109 @@
             {:operation :definitions :provider_id "java-regex" :authority "heuristic"}]
            (selection/planned-tasks p))
         "one task per (operation, provider), so a batch can name the operation it answered")))
+
+;; --- Stage 4.5: project-scoped planning -------------------------------
+
+(def ^:private ts-path "src/orders.ts")
+
+(def ^:private scip-ready
+  {"scip-typescript" (status "ready")})
+
+(defn- comparable-plan
+  "A plan with the wall-clock observation time removed. `:observed_at` is the one
+  field two otherwise identical plans always differ on."
+  [plan]
+  (update plan :statuses #(into {} (map (fn [[k v]] [k (dissoc v :observed_at)])) %)))
+
+(deftest a-plan-without-batch-input-is-the-pre-stage-plan-test
+  (testing "the project catalog cannot influence a plan built without batch coverage"
+    (let [with-catalog (selection/provider-plan {:path ts-path})
+          without-catalog (with-redefs [providers/project-descriptors []]
+                            (selection/provider-plan {:path ts-path}))]
+      (is (= (comparable-plan without-catalog) (comparable-plan with-catalog))
+          "emptying the project catalog must change nothing on the default path")))
+
+  (testing "no project provider appears anywhere in the plan"
+    (let [plan (selection/provider-plan {:path ts-path})
+          mentioned (set (concat (keys (:statuses plan))
+                                 (map :provider_id (mapcat :providers (vals (:operations plan))))
+                                 (map :provider_id (mapcat :excluded (vals (:operations plan))))))]
+      (is (not (contains? mentioned "scip-typescript")))
+      (is (= [:definitions] (vec (keys (:operations plan))))
+          "references is claimed only by the exact tier and must not appear"))))
+
+(deftest batch-coverage-admits-the-exact-tier-first-test
+  (let [plan (selection/provider-plan {:path ts-path
+                                       :statuses {"typescript-regex" (status "ready")}
+                                       :batch_coverage {"scip-typescript" [ts-path]}
+                                       :batch_statuses scip-ready})]
+    (testing "exact outranks the file tiers for definitions"
+      (is (= ["scip-typescript" "typescript-regex"]
+             (mapv :provider_id (get-in plan [:operations :definitions :providers])))))
+
+    (testing "an operation only the exact tier claims becomes plannable"
+      (is (= ["scip-typescript"]
+             (mapv :provider_id (get-in plan [:operations :references :providers])))))))
+
+(deftest batch-coverage-is-per-path-not-per-selector-test
+  (testing "a provider whose batch did not cover this path is not a candidate"
+    (let [plan (selection/provider-plan {:path ts-path
+                                         :statuses {"typescript-regex" (status "ready")}
+                                         :batch_coverage {"scip-typescript" ["src/other.ts"]}
+                                         :batch_statuses scip-ready})]
+      (is (= ["typescript-regex"]
+             (mapv :provider_id (get-in plan [:operations :definitions :providers]))))
+      (is (= [:definitions] (vec (keys (:operations plan))))))))
+
+(deftest covered-but-unobserved-batch-provider-is-excluded-test
+  (testing "coverage is not a status: without an observed status the exact tier is
+            excluded with the same reason any unobserved provider gets"
+    (let [plan (selection/provider-plan {:path ts-path
+                                         :statuses {"typescript-regex" (status "ready")}
+                                         :batch_coverage {"scip-typescript" [ts-path]}})
+          definitions (get-in plan [:operations :definitions])
+          exclusion (first (filter #(= "scip-typescript" (:provider_id %))
+                                   (:excluded definitions)))]
+      (is (= ["typescript-regex"] (mapv :provider_id (:providers definitions))))
+      (is (= "provider_status_unknown" (:reason exclusion)))
+      (is (= ["status_not_observed"] (:reason_codes exclusion))))))
+
+(deftest project-plan-refuses-an-unobserved-provider-test
+  (testing "no statuses at all: everything is excluded, nothing is assumed ready"
+    (let [plan (selection/project-plan {:root_path "/tmp/project" :languages ["java"]})]
+      (is (empty? (selection/planned-provider-ids plan)))
+      (is (= [["scip-java" "provider_status_unknown"]]
+             (mapv (juxt :provider_id :reason)
+                   (get-in plan [:operations :definitions :excluded]))))))
+
+  (testing "an unavailable toolchain is excluded with its own reason codes"
+    (let [plan (selection/project-plan
+                {:root_path "/tmp/project"
+                 :languages ["java"]
+                 :statuses {"scip-java" (status "unavailable" "scip_java_toolchain_missing")}})
+          excluded (first (get-in plan [:operations :definitions :excluded]))]
+      (is (= "provider_unavailable" (:reason excluded)))
+      (is (= ["scip_java_toolchain_missing"] (:reason_codes excluded))))))
+
+(deftest project-plan-admits-once-per-provider-test
+  (let [plan (selection/project-plan {:root_path "/tmp/project"
+                                      :statuses {"scip-java" (status "ready")
+                                                 "scip-typescript" (status "ready")}})]
+    (testing "both operations are planned"
+      (is (= [:definitions :references] (vec (keys (:operations plan))))))
+
+    (testing "but a batch runner iterates each provider once, not once per operation"
+      (is (= ["scip-java" "scip-typescript"] (selection/planned-provider-ids plan))))
+
+    (testing "the plan carries its scope and language set"
+      (is (= "project" (:scope plan)))
+      (is (= #{"java" "typescript"} (set (:languages plan)))))))
+
+(deftest project-plan-honours-denied-providers-test
+  (let [plan (selection/project-plan {:root_path "/tmp/project"
+                                      :languages ["typescript"]
+                                      :statuses scip-ready
+                                      :denied_providers ["scip-typescript"]})]
+    (is (empty? (selection/planned-provider-ids plan)))
+    (is (= ["denied_by_override"]
+           (mapv :reason (get-in plan [:operations :definitions :excluded]))))))

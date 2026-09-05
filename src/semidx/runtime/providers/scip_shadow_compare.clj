@@ -1,8 +1,6 @@
 (ns semidx.runtime.providers.scip-shadow-compare
-  "Stage 3 of the Semantic Provider Authority Migration (plans/018, ADR-046):
-  shadow comparison of the TypeScript SCIP provider against the Stage 2
-  tree-sitter / regex shadow facts, plus latency and fact-set size measurement
-  for a SCIP run.
+  "Shadow comparison of the SCIP exact tier against the Stage 2 tree-sitter /
+  regex tier, plus latency and fact-set size measurement.
 
   Read-only. Runs both shadow producers over a corpus, never writes a snapshot,
   and changes no default extraction. Its purpose is to record — before the
@@ -16,13 +14,22 @@
   - the per-fact evidence expansion and SCIP run latency are measured
     (plans/018 [Medium] snapshot-size and latency risks).
 
+  Two entry points. `shadow-report` is the Stage 3 TypeScript harness: it drives
+  the TypeScript adapter directly. `project-shadow-report` is the Stage 4.5
+  form: it runs the project seam in `semidx.runtime.provider-batch` for every
+  admitted project provider, then splits the two tiers back out of the per-file
+  runs that merged them. The second is language-neutral and is the shape the
+  Stage 6 admission evidence is recorded in.
+
   On a host without a tree-sitter grammar the legacy tier is regex only; the
   comparison is identical in shape."
   (:require [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
             [semidx.runtime.fact-arbitration :as fact-arbitration]
+            [semidx.runtime.provider-batch :as provider-batch]
             [semidx.runtime.provider-execution :as provider-execution]
+            [semidx.runtime.providers :as providers]
             [semidx.runtime.providers.scip-typescript :as scip-typescript]))
 
 (defn measure
@@ -158,3 +165,87 @@
     (-> (compare-scip-run scip opts)
         (assoc :cli (:cli scip)
                :latency {:scip_run_ms (:elapsed_ms scip-run)}))))
+
+;; ---------------------------------------------------------------------------
+;; Stage 4.5: project-level comparison over the provider-batch seam
+;; ---------------------------------------------------------------------------
+
+(defn discover-paths
+  "Root-relative paths under `root` that some project provider selects, sorted.
+
+  Language-neutral by construction: eligibility comes from the catalog's
+  selectors, so a third project provider needs no change here."
+  ([root] (discover-paths root nil))
+  ([root languages]
+   (let [descriptors (providers/descriptors-for-project languages)
+         prefix (str (.getPath (io/file (str root))) "/")]
+     (->> (file-seq (io/file (str root)))
+          (filter #(.isFile ^java.io.File %))
+          (map #(.getPath ^java.io.File %))
+          (keep (fn [p]
+                  (when (str/starts-with? p prefix)
+                    (let [relative (subs p (count prefix))]
+                      (when (some #(providers/selects-path? % relative) descriptors)
+                        relative)))))
+          sort
+          vec))))
+
+(defn- batches-by-scope
+  "Raw provider batches from a project run, split by the scope of the provider
+  that produced them: `:project` is the exact tier, `:file` the structural and
+  heuristic ones. Scope comes from the catalog, so the split needs no provider
+  id list to maintain."
+  [files]
+  (->> (mapcat :raw_batches files)
+       (group-by (fn [batch]
+                   (or (:scope (providers/descriptor (:provider_id batch))) :file)))))
+
+(defn project-report
+  "Standard project-level shadow comparison for a
+  `semidx.runtime.provider-batch/shadow-facts-for-project` result.
+
+  Stage 4.5 turns what Stage 3 ran as a one-off harness into ordinary
+  diagnostic output. The two tiers are separated back out of the per-file runs
+  that merged them, diffed on `canonical_fact_key_id`, and co-arbitrated in one
+  pass. Document states and coverage travel with the diff, because a comparison
+  is only readable next to how much of the project the exact tier actually
+  covered: a small `:exact_only` list means something different when half the
+  documents are stale."
+  [batch-result]
+  (let [by-scope (batches-by-scope (:files batch-result))
+        exact-batches (vec (get by-scope :project))
+        legacy-batches (vec (get by-scope :file))
+        exact-facts (:facts (fact-arbitration/arbitrate-batches exact-batches))
+        legacy-facts (:facts (fact-arbitration/arbitrate-batches legacy-batches))
+        exact-raw (vec (mapcat :facts exact-batches))
+        legacy-raw (vec (mapcat :facts legacy-batches))]
+    {:root_path (:root_path batch-result)
+     :languages (:languages batch-result)
+     :providers (into (sorted-map)
+                      (map (fn [[provider-id result]]
+                             [provider-id (select-keys result [:result :reason_codes :coverage])]))
+                      (get-in batch-result [:project_execution :results]))
+     :batch_coverage (:batch_coverage batch-result)
+     :documents (:documents batch-result)
+     :comparison (compare-fact-sets exact-facts legacy-facts)
+     :co_arbitration (co-arbitrate exact-raw legacy-raw)
+     :size {:exact (fact-set-size exact-facts)
+            :legacy (fact-set-size legacy-facts)}
+     :diagnostics_by_code (->> (:diagnostics batch-result)
+                               (map #(str (:code %)))
+                               frequencies
+                               (into (sorted-map)))}))
+
+(defn project-shadow-report
+  "Run the Stage 4.5 project seam and report the comparison plus its latency.
+
+  Options are `provider-batch/shadow-facts-for-project` options. `:paths`
+  defaults to every path a project provider selects under `:root_path`. When no
+  project provider is admitted the report still renders: the comparison is
+  simply the legacy tier against an empty exact tier, which is what a workspace
+  without a toolchain should look like."
+  [{:keys [root_path paths languages] :as opts}]
+  (let [paths (vec (or (seq paths) (discover-paths root_path languages)))
+        run (measure #(provider-batch/shadow-facts-for-project (assoc opts :paths paths)))]
+    (assoc (project-report (:value run))
+           :latency {:project_run_ms (:elapsed_ms run)})))

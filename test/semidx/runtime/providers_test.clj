@@ -59,10 +59,14 @@
                   (:reason_codes status))))))
 
 (deftest unknown-provider-is-refused-not-guessed-test
-  (is (= "unavailable" (:state (providers/provider-status "scip-java"))))
-  (is (= ["unknown_provider"] (:reason_codes (providers/provider-status "scip-java"))))
+  ;; This used "scip-java" as the stand-in for an unknown id until Stage 4.5 put
+  ;; that provider in the catalog. The refusal it proves is about ids the
+  ;; catalog does not know at all; a known-but-project-scoped id is refused for
+  ;; its own reason, covered by project-scoped-status-is-refused-not-guessed-test.
+  (is (= "unavailable" (:state (providers/provider-status "no-such-provider"))))
+  (is (= ["unknown_provider"] (:reason_codes (providers/provider-status "no-such-provider"))))
   (is (thrown? clojure.lang.ExceptionInfo
-               (providers/run-provider "scip-java" {:path java-path :lines []}))))
+               (providers/run-provider "no-such-provider" {:path java-path :lines []}))))
 
 (deftest java-facts-commit-arity-only-per-variant-c-test
   (let [{:keys [facts]} (run "java-regex" java-root java-path)
@@ -173,3 +177,54 @@
           (is (= 4 (count (:facts regex-batch))))
           (is (= #{"heuristic"}
                  (set (map #(get-in % [:evidence 0 :authority]) (:facts regex-batch))))))))))
+
+;; --- Stage 4.5: provider scope ----------------------------------------
+
+(deftest project-descriptors-are-catalog-owned-and-scoped-test
+  (testing "every file descriptor names its scope"
+    (is (every? #(= :file (:scope %)) providers/descriptors)))
+
+  (testing "the SCIP descriptors live in the catalog, not only in the adapters"
+    (is (= #{"scip-typescript" "scip-java"}
+           (set (map :provider_id providers/project-descriptors))))
+    (is (every? #(= :project (:scope %)) providers/project-descriptors)))
+
+  (testing "lookup by id finds a project provider, because evidence carries its version"
+    (is (= "1" (:provider_version (providers/descriptor "scip-java")))))
+
+  (testing "narrowing by language"
+    (is (= ["scip-java"]
+           (mapv :provider_id (providers/descriptors-for-project ["java"]))))
+    (is (= 2 (count (providers/descriptors-for-project))))))
+
+(deftest path-eligibility-never-yields-a-project-provider-test
+  (testing "a .ts path selects only the file-scoped tiers"
+    (is (= ["typescript-tree-sitter" "typescript-regex"]
+           (mapv :provider_id (providers/descriptors-for ts-path)))))
+
+  (testing "and a .java path likewise"
+    (is (= ["java-tree-sitter" "java-regex"]
+           (mapv :provider_id (providers/descriptors-for java-path))))))
+
+(deftest project-scoped-status-is-refused-not-guessed-test
+  (testing "the file probe cannot observe a SCIP toolchain and must not claim it can"
+    (let [status (providers/provider-status "scip-typescript")]
+      (is (= "unavailable" (:state status))
+          "reporting ready here would let the planner admit an unprobed provider")
+      (is (= ["provider_scope_not_file"] (:reason_codes status)))))
+
+  (testing "the refusal is specific: a file-scoped non-tree-sitter provider is still ready"
+    (is (= "ready" (:state (providers/provider-status "java-regex"))))))
+
+(deftest project-scoped-run-is-refused-not-parsed-test
+  (testing "run-provider dispatches on language, so a SCIP id would parse with the
+            language lane and return heuristic units under an exact claim"
+    (let [thrown (try
+                   (providers/run-provider "scip-typescript"
+                                           {:root_path ts-root
+                                            :path ts-path
+                                            :lines (lines-for ts-root ts-path)})
+                   nil
+                   (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :provider_scope_not_file (:error_code thrown)))
+      (is (= :project (:scope thrown))))))

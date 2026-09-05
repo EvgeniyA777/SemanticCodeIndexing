@@ -1940,3 +1940,169 @@ condition from a stale one. `workspace-digest` no longer throws.
   English-only clean.
 - `./scripts/scip-java-corpus-snapshot.sh` regenerates the committed fixture
   byte-identically after the change.
+
+---
+
+# Stage 4.5 — Project-Scoped Provider Consolidation (2026-09-05)
+
+Status: **complete**.
+
+The owner chose the consolidation slice over Stage 5, it was written into
+`plans/018` as Stage 4.5, and then executed. Goal: make the two SCIP providers
+ordinary participants of the catalog, planner, and execution boundary without
+changing default extraction, public confidence, or the legacy Java/TypeScript
+paths.
+
+## Delivered
+
+| Artifact | Role |
+| --- | --- |
+| `src/semidx/runtime/providers.clj` | `:scope` on every descriptor; `project-descriptors` (the two SCIP claims, moved out of the adapters); `descriptors-for-project`; scope refusal in `provider-status` and `run-provider` |
+| `src/semidx/runtime/provider_selection.clj` | `project-plan`; optional `:batch_coverage` / `:batch_statuses` on `provider-plan` |
+| `src/semidx/runtime/provider_execution.clj` | the same two keys forwarded from `shadow-facts-for-file` |
+| `src/semidx/runtime/provider_batch.clj` | new: role registry, status probing, one run per admitted provider, failure isolation, coverage, document states, per-file delivery, `shadow-facts-for-project` |
+| `src/semidx/runtime/providers/scip_typescript.clj`, `scip_java.clj` | descriptors re-exported from the catalog; stale "not wired in" docstrings corrected |
+| `src/semidx/runtime/providers/scip_shadow_compare.clj` | `discover-paths`, `project-report`, `project-shadow-report` — the comparison as standard output |
+| `test/.../provider_batch_test.clj` | new, 13 tests |
+| `test/.../providers_test.clj`, `provider_selection_test.clj`, `scip_shadow_compare_test.clj` | 4 + 6 + 3 new tests |
+
+## Two defects the code contained before this stage
+
+Both were reproduced, not reasoned about.
+
+**A project descriptor reaching `provider-status` is reported `ready`.** The
+probe's shape is `unknown -> unavailable`, `not tree-sitter -> ready`,
+`tree-sitter -> test the CLI and grammar`. A SCIP descriptor takes the second
+branch, so putting it in the catalog without a scope check would have declared
+it ready without its toolchain being looked at once — and the planner admits a
+`ready` provider. It now returns `unavailable` with `provider_scope_not_file`.
+
+**A project descriptor reaching `run-provider` parses the file.**
+`parse-with-engine` dispatches on **language**, not engine, so `scip-typescript`
+would have been handed to the TypeScript lane's own parser and its regex units
+returned under the descriptor's `exact` claim — heuristic evidence laundered as
+compiler-grade. It now throws `:provider_scope_not_file`. Neither path is
+reachable through `descriptors-for`, which stays file-scoped; both guards are
+defence for the id-addressed callers.
+
+## Design decisions worth keeping
+
+- **The catalog owns the descriptors; `provider-batch` owns the roles.** The
+  SCIP adapters load generated protobuf classes through `semidx.runtime.scip`,
+  and `providers.clj` sits on the per-file planning path. Confining that
+  dependency to one namespace is what keeps the default path free of it. This is
+  not theoretical: the repo-local `:nrepl` alias lacks `target/classes`, so a
+  REPL there cannot load the SCIP namespaces at all, while per-file planning
+  loads fine.
+- **Coverage is the admission signal, not the selector.** A project provider is
+  a candidate for a file only when a completed run reported that path as
+  covered. An unavailable run, a failed run, a stale document, and an unsafe
+  document path all report no coverage, so degradation needs no separate branch.
+- **Substitution happens on the role registry, never on the runner.** The first
+  version injected the runner itself, which silently bypassed the try/catch —
+  an injected role could take the run down and the isolation was untestable. The
+  seam is now `:project_roles`, and every role, injected or registered, runs
+  inside the same wrapper.
+- **`:batch_coverage` absent means the pre-stage plan.** Proven by emptying
+  `project-descriptors` under `with-redefs` and asserting the plan is unchanged,
+  rather than by a hand-written expectation that could drift with the code.
+
+## Exit criteria check (plan Stage 4.5)
+
+| Criterion | Result |
+| --- | --- |
+| Plans/execution unchanged without batch input | met — `a-plan-without-batch-input-is-the-pre-stage-plan-test`, `a-workspace-without-a-toolchain-degrades-to-the-file-tiers-test` |
+| `adapters/parse-file` untouched | met — not edited; full suite green |
+| Admission only with an observed `ready` status | met — `project-plan-refuses-an-unobserved-provider-test`, `covered-but-unobserved-batch-provider-is-excluded-test` |
+| Missing toolchain / failed run / stale / invalid path degrade, never fail | met — four tests; coverage empty in every case |
+| One document-state vocabulary, no language branch in `provider-batch` | met — `document-states-use-one-vocabulary-for-every-language-test`; the namespace contains no language name outside the role registry |
+| One canonical fact from both tiers, both evidences retained | met — `project-seam-merges-exact-and-legacy-into-one-identity-test`, and 0 arbitration diagnostics on both corpora |
+| Execution order does not change arbitrated output | met — `batch-execution-order-does-not-change-arbitration-test` |
+| Project comparison recorded as Stage 6 admission evidence | met — below |
+
+## Observed project comparison (both protected corpora, real toolchains)
+
+`scip-shadow-compare/project-shadow-report`, both toolchains resolved locally
+(`.scip-toolchain`, `.scip-java-toolchain`), every document fresh, no withheld
+facts, no arbitration diagnostics.
+
+| | TypeScript | Java |
+| --- | --- | --- |
+| provider result | `ready` | `ready` |
+| documents fresh / stale / invalid / uncovered | 3 / 0 / 0 / 0 | 2 / 0 / 0 / 0 |
+| agreed symbols | 4 | 5 |
+| exact-only | 0 | 1 (`Validator#Validator`) |
+| legacy-only | 2 (`index.ts` re-export aliases) | 0 |
+| authority upgrades heuristic -> exact | 4 | 5 |
+| co-arbitrated canonical facts / diagnostics | 6 / 0 | 6 / 0 |
+| multi-provider symbols | 4 | 5 |
+| exact facts / evidence / bytes | 4 / 9 / 5326 | 6 / 8 / 6800 |
+| legacy facts / evidence / bytes | 6 / 6 / 4968 | 5 / 5 / 4323 |
+| project run latency | ~2.1 s | ~0.9 s |
+
+Both known asymmetries are the ones Stages 3 and 4 already recorded: SCIP mints
+no re-export unit for TypeScript, and the Java regex tier emits no constructor
+unit. Neither is new, and neither is a regression.
+
+## Deferred (unchanged from Stage 4, plus one)
+
+- SCIP `Relationship` / implementations and `call/*` relations.
+- Nested Java types; corpus coverage the two-file fixtures cannot exercise.
+- Wiring into `semidx.runtime.index` / `adapters.clj` — that is Stage 6's
+  default switch, and this stage stops short of it by design.
+- New: the batch runs providers sequentially. Concurrency across project
+  providers is not needed at two providers and would add an ordering surface for
+  no measured gain.
+
+## Verification
+
+- `clojure -M:test`: **574 tests, 3215 assertions, 0 failures, 0 errors**
+  (was 533 / 3077 after the Stage 4 review repair).
+- `SEMIDX_REQUIRE_SCIP_TOOLCHAINS=1 clojure -M:test -n semidx.runtime.provider-batch-test`:
+  13 tests, 38 assertions, 0 failures — the end-to-end test is asserted to run,
+  not skipped.
+- `./scripts/validate-contracts.sh`: ok, 72 files.
+- `./scripts/run-mvp-gates.sh`: ok, 23/23 benchmarks, 4 gate smokes.
+- `clojure -M:ccc check --root .`: up to date after `ccc refresh` (a new
+  namespace was added).
+- Both toolchain branches are exercised: presence through the two end-to-end
+  tests, absence deterministically through injected `unavailable` results rather
+  than through the host environment.
+
+## Changed test that was not new
+
+`unknown-provider-is-refused-not-guessed-test` used `"scip-java"` as its stand-in
+for an unknown provider id. Stage 4.5 put that id in the catalog, so the test now
+uses `"no-such-provider"`; the refusal it proves is unchanged, and the
+project-scope refusal has its own test.
+
+## NextStageRoutingRecommendation
+
+```text
+completed_stage: 4.5 (project-scoped provider consolidation)
+recommended_next_stage: 5 (LSP live overlay)
+recommended_executor: Claude Code team lead
+recommended_model: Claude Opus 4.6
+effort: high
+effort_justification: live freshness, document versions, cancellation, and
+  crash isolation interact, and Stage 5 is the first tier whose evidence can
+  disagree with a fresh batch artifact rather than merely add to it.
+rationale: the seam Stage 5 needs now exists. An exact-tier provider is planned,
+  executed, and merged through the ordinary path, coverage is the admission
+  signal, and degradation is recorded rather than inferred. LSP joins that model
+  as a second exact contributor instead of introducing it.
+prerequisites_or_blockers:
+  - Stage 5 must not assume the java-lsp typed-signature capability; the
+    identity fixture deliberately holds it at the arity_only floor pending real
+    jdtls output.
+  - the live overlay is per-document, not per-project, so it needs a third
+    execution shape rather than reusing provider-batch as is; decide that shape
+    before writing the adapter.
+  - no default switch: Stage 6 still owns authority.
+file_ownership_and_conflict_risk: MEDIUM. Stage 5 touches provider-selection and
+  a new LSP adapter; provider-batch and the SCIP adapters should not need edits.
+fallback_executor_or_model: none recommended for the freshness and cancellation
+  logic.
+model_availability_checked_at: not checked this session.
+confidence: high (every Stage 4.5 exit criterion has an executing test)
+```

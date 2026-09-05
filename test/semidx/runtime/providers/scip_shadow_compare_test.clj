@@ -1,12 +1,14 @@
 (ns semidx.runtime.providers.scip-shadow-compare-test
-  "Stage 3 (plans/018, ADR-046): the SCIP-vs-Stage-2 shadow comparison harness.
+  "Stage 3 (plans/018, ADR-046): the SCIP-vs-Stage-2 shadow comparison harness,
+  plus the Stage 4.5 project-level report over the provider-batch seam.
 
-  Deterministic assertions drive `compare-scip-run` with a SCIP result built
-  from the committed `typescript-corpus.scrubbed.scip` fixture (no toolchain);
-  one end-to-end test runs `shadow-report` through the real CLI and is skipped
-  when it does not resolve."
+  Deterministic assertions drive `compare-scip-run` and `project-report` with a
+  SCIP result built from the committed `typescript-corpus.scrubbed.scip` fixture
+  (no toolchain); one end-to-end test runs `shadow-report` through the real CLI
+  and is skipped when it does not resolve."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
+            [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.providers.scip-shadow-compare :as cmp]
             [semidx.runtime.providers.scip-typescript :as st]
             [semidx.runtime.scip :as scip]
@@ -110,3 +112,57 @@
           "the CLI path agrees with the fixture path")
       (is (zero? (get-in report [:co_arbitration :diagnostic_count]))))
     (toolchain/unresolved! "scip-typescript CLI" "shadow-report end-to-end test")))
+
+;; --- Stage 4.5: project-level report over the provider-batch seam ------
+
+(def ^:private corpus-paths ["src/orders.ts" "src/validator.ts" "src/index.ts"])
+
+(defn- project-roles-returning [result]
+  {"scip-typescript" {:status-fn (fn [_] {:state "ready" :reason_codes []})
+                      :run-fn (fn [_] result)}})
+
+(deftest discover-paths-is-driven-by-catalog-selectors
+  (is (= (sort corpus-paths) (cmp/discover-paths corpus-root))
+      "eligibility comes from the project descriptors, not a hard-coded extension")
+  (is (= (cmp/discover-paths corpus-root)
+         (cmp/discover-paths corpus-root ["typescript"]))))
+
+(deftest project-report-separates-the-two-tiers-again
+  (let [scip (st/facts-from-index (scip/read-index fixture-scip) {:project-root corpus-root})
+        result (batch/shadow-facts-for-project {:root_path (.getPath corpus-root)
+                                                :paths corpus-paths
+                                                :project_roles (project-roles-returning scip)})
+        report (cmp/project-report result)]
+    (testing "the exact tier is recovered from the merged per-file runs"
+      (is (seq (get-in report [:comparison :agreed]))
+          "symbols both tiers produced land on one canonical key")
+      (is (pos? (get-in report [:size :exact :fact_count])))
+      (is (pos? (get-in report [:size :legacy :fact_count]))))
+
+    (testing "co-arbitration still proves one identity per shared symbol"
+      (is (zero? (get-in report [:co_arbitration :diagnostic_count])))
+      (is (seq (get-in report [:co_arbitration :multi_provider_symbols]))))
+
+    (testing "coverage and document states travel with the diff"
+      (is (= "ready" (get-in report [:providers "scip-typescript" :result])))
+      (is (seq (get-in report [:batch_coverage "scip-typescript"])))
+      (is (contains? (:documents report) "scip-typescript")))
+
+    (testing "the exact tier raises authority on the symbols both found"
+      (is (every? #(= "exact" (:exact %)) (get-in report [:comparison :authority_upgrade]))))))
+
+(deftest project-report-renders-without-an-admitted-provider
+  (testing "no toolchain: the report is the legacy tier against an empty exact tier,
+            not an error"
+    (let [result (batch/shadow-facts-for-project
+                  {:root_path (.getPath corpus-root)
+                   :paths corpus-paths
+                   :project_statuses {"scip-typescript" {:state "unavailable"
+                                                         :reason_codes ["scip_cli_missing"]}}})
+          report (cmp/project-report result)]
+      (is (= {} (:batch_coverage report)))
+      (is (empty? (get-in report [:comparison :agreed])))
+      (is (empty? (get-in report [:comparison :exact_only])))
+      (is (seq (get-in report [:comparison :legacy_only]))
+          "the file tiers still produced facts")
+      (is (zero? (get-in report [:size :exact :fact_count]))))))

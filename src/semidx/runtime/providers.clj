@@ -29,7 +29,7 @@
 (def catalog-version "1")
 
 (def descriptors
-  "Versioned provider descriptors available in Stage 2.
+  "Versioned file-scoped provider descriptors.
 
   `operation_capabilities` are claims bounded by runtime status and freshness,
   not unconditional confidence grants.
@@ -37,12 +37,17 @@
   Stage 2 claims `definitions` only. These adapters emit unit facts from the
   existing parsers, so claiming `document_symbols` or `call_hierarchy` would
   make every run report a permanent gap for an operation nothing produces. Those
-  claims belong to the providers that actually implement them."
+  claims belong to the providers that actually implement them.
+
+  Stage 4.5 made `:scope` explicit. Every descriptor here is `:file`: one run
+  parses one file, and `run-provider` executes it. Project-scoped providers live
+  in `project-descriptors` and are executed by `semidx.runtime.provider-batch`."
   [{:provider_id "java-tree-sitter"
     :provider_version "1"
     :languages ["java"]
     :classification "structural"
     :engine :tree-sitter
+    :scope :file
     :selectors {:extensions [".java"]}
     :operation_capabilities {:definitions "structural"}}
    {:provider_id "java-regex"
@@ -50,6 +55,7 @@
     :languages ["java"]
     :classification "lexical"
     :engine :regex
+    :scope :file
     :selectors {:extensions [".java"]}
     :operation_capabilities {:definitions "heuristic"}}
    {:provider_id "typescript-tree-sitter"
@@ -57,6 +63,7 @@
     :languages ["typescript"]
     :classification "structural"
     :engine :tree-sitter
+    :scope :file
     :selectors {:extensions [".ts" ".tsx"]}
     :operation_capabilities {:definitions "structural"}}
    {:provider_id "typescript-regex"
@@ -64,11 +71,51 @@
     :languages ["typescript"]
     :classification "lexical"
     :engine :regex
+    :scope :file
     :selectors {:extensions [".ts" ".tsx"]}
     :operation_capabilities {:definitions "heuristic"}}])
 
+(def project-descriptors
+  "Versioned project-scoped provider descriptors (Stage 4.5).
+
+  SCIP indexes a project in one run and then yields facts for the documents that
+  run covered, so these providers are not per-file parsers. The descriptor data
+  lives here because the catalog is the single source of truth for every
+  provider claim; the executable roles do not, because
+  `semidx.runtime.providers.scip-typescript` and
+  `semidx.runtime.providers.scip-java` load generated protobuf classes through
+  `semidx.runtime.scip`, and this namespace is on the per-file planning path
+  that must keep loading without them. `semidx.runtime.provider-batch` owns the
+  roles and is the only namespace that requires both adapters.
+
+  Both providers remain default-off: nothing plans them unless a caller supplies
+  an observed status and batch coverage."
+  [{:provider_id "scip-typescript"
+    :provider_version "1"
+    :languages ["typescript"]
+    :classification "semantic"
+    :engine :scip
+    :scope :project
+    :selectors {:extensions [".ts" ".tsx"]}
+    :operation_capabilities {:definitions "exact"
+                             :references "exact"}}
+   {:provider_id "scip-java"
+    :provider_version "1"
+    :languages ["java"]
+    :classification "semantic"
+    :engine :scip
+    :scope :project
+    :selectors {:extensions [".java"]}
+    :operation_capabilities {:definitions "exact"
+                             :references "exact"}}])
+
 (def descriptors-by-id
-  (into {} (map (juxt :provider_id identity)) descriptors))
+  "Every descriptor the catalog knows, file-scoped and project-scoped alike.
+
+  Lookup by id must find a project provider — evidence, plans, and batches all
+  carry its `provider_version` — while eligibility by path stays scope-aware in
+  `descriptors-for` and `descriptors-for-project`."
+  (into {} (map (juxt :provider_id identity)) (concat descriptors project-descriptors)))
 
 (defn descriptor [provider-id]
   (get descriptors-by-id provider-id))
@@ -80,7 +127,11 @@
                  (get-in descriptor [:selectors :extensions]))))
 
 (defn descriptors-for
-  "Descriptors eligible for one path and operation, in catalog order."
+  "File-scoped descriptors eligible for one path and operation, in catalog order.
+
+  It reads `descriptors`, never `project-descriptors`: a project provider cannot
+  be planned from a path alone, only from batch coverage a run actually produced
+  (`semidx.runtime.provider-selection/provider-plan`, key `:batch_coverage`)."
   ([path] (descriptors-for path nil))
   ([path operation]
    (->> descriptors
@@ -90,6 +141,20 @@
                       (contains? (:operation_capabilities d) operation))))
         vec)))
 
+(defn descriptors-for-project
+  "Project-scoped descriptors, optionally narrowed to `languages`.
+
+  `languages` is a collection of language names; nil or empty means every
+  project provider in the catalog."
+  ([] (descriptors-for-project nil))
+  ([languages]
+   (let [wanted (set (map str languages))]
+     (->> project-descriptors
+          (filter (fn [d]
+                    (or (empty? wanted)
+                        (some wanted (:languages d)))))
+          vec))))
+
 ;; ---------------------------------------------------------------------------
 ;; Runtime status
 ;; ---------------------------------------------------------------------------
@@ -97,11 +162,18 @@
 (defn- now-iso [] (str (Instant/now)))
 
 (defn provider-status
-  "Observe whether a provider can run right now.
+  "Observe whether a file-scoped provider can run right now.
 
   A tree-sitter provider needs both the CLI and a grammar for its language; the
   reason codes name which one is missing, so a degradation is explicit rather
-  than an empty result."
+  than an empty result.
+
+  A project-scoped provider is refused here rather than answered. This probe
+  reports `ready` for every engine it does not know how to test, so a SCIP
+  descriptor reaching it would be declared ready without its toolchain having
+  been looked at once — a false status the planner would then admit. Project
+  status is observed by `semidx.runtime.provider-batch/project-statuses`, which
+  calls each adapter's own probe."
   ([provider-id] (provider-status provider-id {}))
   ([provider-id parser-opts]
    (let [descriptor (descriptor provider-id)
@@ -110,6 +182,9 @@
      (cond
        (nil? descriptor)
        (assoc base :state "unavailable" :reason_codes ["unknown_provider"])
+
+       (not= :file (:scope descriptor))
+       (assoc base :state "unavailable" :reason_codes ["provider_scope_not_file"])
 
        (not= :tree-sitter (:engine descriptor))
        (assoc base :state "ready" :reason_codes [])
@@ -269,16 +344,29 @@
                        :diagnostic fallback})))))
 
 (defn run-provider
-  "Execute one provider against one file and return its facts and diagnostics.
+  "Execute one file-scoped provider against one file and return its facts and
+  diagnostics.
 
   Returns `{:facts [...] :diagnostics [...] :parser_mode ...}`. It does not
   decide authority beyond the descriptor's static claim, does not merge, and
-  does not touch the default extraction path."
+  does not touch the default extraction path.
+
+  A project-scoped provider is refused rather than run. `parse-with-engine`
+  dispatches on language, not engine, so a SCIP descriptor arriving here would
+  quietly parse the file with the language lane's own parser and return those
+  units under an `exact` claim. Project providers are executed by
+  `semidx.runtime.provider-batch`, and their facts reach per-file execution
+  through the injected `run-provider` role."
   [provider-id {:keys [path lines] :as request}]
   (let [descriptor (or (descriptor provider-id)
                        (throw (ex-info "Unknown provider"
                                        {:error_code :unknown_provider
                                         :provider_id provider-id})))
+        _ (when (not= :file (:scope descriptor))
+            (throw (ex-info "run-provider executes file-scoped providers only"
+                            {:error_code :provider_scope_not_file
+                             :provider_id provider-id
+                             :scope (:scope descriptor)})))
         language (first (:languages descriptor))
         authority (get-in descriptor [:operation_capabilities :definitions])
         parsed (parse-with-engine descriptor request)

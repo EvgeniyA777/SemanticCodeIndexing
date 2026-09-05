@@ -31,10 +31,16 @@
 
   Source mode mirrors the TypeScript adapter: production generates the artifact
   with the repo-managed toolchain, a missing toolchain is an `:unavailable`
-  result rather than an error, and `facts-from-index` is the test/fixture seam."
+  result rather than an error, and `facts-from-index` is the test/fixture seam.
+
+  Execution shape also mirrors it: this is a project-level batch index, not a
+  `run-provider` engine, and since Stage 4.5 `semidx.runtime.provider-batch`
+  owns its status and run roles and turns its output into batch coverage for
+  per-file planning. The provider stays default-off."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as sh]
             [clojure.string :as str]
+            [semidx.runtime.providers :as providers]
             [semidx.runtime.providers.scip-adapter :as scip-adapter]
             [semidx.runtime.scip :as scip]))
 
@@ -45,17 +51,10 @@
 (def descriptor
   "Catalog descriptor for the SCIP Java provider.
 
-  As with the TypeScript adapter, it is kept here rather than in the per-file
-  `semidx.runtime.providers` catalog while the provider is project-scoped."
-  {:provider_id provider-id
-   :provider_version provider-version
-   :languages [language]
-   :classification "semantic"
-   :engine :scip
-   :scope :project
-   :selectors {:extensions [".java"]}
-   :operation_capabilities {:definitions "exact"
-                            :references "exact"}})
+  As with the TypeScript adapter, the data lives in
+  `semidx.runtime.providers/project-descriptors` since Stage 4.5 and this var
+  re-exports it."
+  (providers/descriptor provider-id))
 
 ;; ---------------------------------------------------------------------------
 ;; Toolchain resolution (ADR-047-style chain)

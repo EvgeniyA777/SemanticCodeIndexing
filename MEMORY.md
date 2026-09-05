@@ -170,7 +170,7 @@ after this memory file.
 - Compact-first staged retrieval is now fully aligned as the canonical public flow: `resolve_context` is compact-first, `expand_context` / `fetch_context_detail` are the explicit later stages, selection artifacts are snapshot-bound, and the implementation/docs/examples line is captured by `ADR-024` plus the completed `plans/002_compact_first_staged_retrieval_plan.md`.
 - `plans/019` is the planned LLM one-shot delivery track: add an external `get_context` facade over the same snapshot-bound staged state machine, retain ContextPacket as the structured source of truth, make Markdown an optional bounded projection, and contribute staged/one-shot strategy adapters to the benchmark substrate owned exclusively by `plans/020`. Its top-level response budget is authoritative, `structured`/`markdown`/diagnostic allocations are disjoint, and usage telemetry distinguishes aggregate from stage accounting. ADR-024 remains current; changing the documented canonical default requires comparative evidence and a new ADR.
 - `plans/020` is in progress and is the exclusive owner of the real-repository task corpus, immutable `BenchmarkRun`/`TaskAttempt` identities, A/B/C/D strategy harness, provider/API/model usage adapters, price schedules, and success-per-cost aggregation. Stage 1 (`returned_tokens` fidelity) is delivered. Stage 0 now separates harness executor models from `evaluated_*` attempt identities, uses `implicit_cache_observed_v1` (no explicit cache objects; implicit reads recorded), and gates the current Gemini 2.5 schedule at 2026-10-16; calibration/final lock remain pending, and Stage 2 has not started.
-- `plans/018` is in progress. Stages 0-3 are delivered and committed (see the numbered next-steps section below for the detail). Stage 3 (TypeScript SCIP) is complete: toolchain preflight, JVM SCIP reader, SCIP->CanonicalFactKey normalization, the shadow/default-off SCIP provider adapter (`semidx.runtime.providers.scip-typescript`) with a per-document stale gate, and the SCIP-vs-Stage-2 shadow comparison harness (`semidx.runtime.providers.scip-shadow-compare`) with latency/size metrics. Stage 4 (Java SCIP) is complete (2026-09-05): preflight (which invalidated Variant C's typed-refinement premise for Java and reproduced a same-arity false-exact-identity defect), a repo-managed external toolchain, language bridges in `scip-normalize`, the shared `scip-adapter` boundary, the `scip-java` adapter, and the same-arity overload guard. Stages 4.5-7 are not started. The owner decision on the next stage is settled (2026-09-05): the consolidation slice is now written into the plan as Stage 4.5, project-scoped provider consolidation, and runs before Stage 5. All of it is additive and default-off: `adapters/parse-file` still owns default Java/TypeScript extraction, and the SCIP adapter is a standalone entry point not wired into `providers.clj` / `provider-selection` / `provider-execution` (project-level batch index vs per-file parse; catalog/planner integration is a scheduled open slice). Multi-provider evidence must normalize to a provider-neutral `CanonicalFactKey` before arbitration; provider ids, native symbols, source identity, and mutable evidence are not stable merge keys. Cross-provider Java overload and TypeScript re-export identity fixtures are Stage 0/1 admission gates (executed as goldens).
+- `plans/018` is in progress. Stages 0-3 are delivered and committed (see the numbered next-steps section below for the detail). Stage 3 (TypeScript SCIP) is complete: toolchain preflight, JVM SCIP reader, SCIP->CanonicalFactKey normalization, the shadow/default-off SCIP provider adapter (`semidx.runtime.providers.scip-typescript`) with a per-document stale gate, and the SCIP-vs-Stage-2 shadow comparison harness (`semidx.runtime.providers.scip-shadow-compare`) with latency/size metrics. Stage 4 (Java SCIP) is complete (2026-09-05): preflight (which invalidated Variant C's typed-refinement premise for Java and reproduced a same-arity false-exact-identity defect), a repo-managed external toolchain, language bridges in `scip-normalize`, the shared `scip-adapter` boundary, the `scip-java` adapter, and the same-arity overload guard. Stage 4.5 (project-scoped provider consolidation) is complete (2026-09-05): the two SCIP descriptors now live in `providers.clj` with an explicit `:scope`, `provider-selection` has `project-plan` plus an optional `:batch_coverage` input to per-file planning, and the new `semidx.runtime.provider-batch` runs each admitted project provider once and delivers its facts into per-file arbitration. Stages 5-7 are not started. All of it is still additive and default-off: `adapters/parse-file` owns default Java/TypeScript extraction, and a project provider is planned only when a caller supplies both an observed status and coverage from a completed run. Multi-provider evidence must normalize to a provider-neutral `CanonicalFactKey` before arbitration; provider ids, native symbols, source identity, and mutable evidence are not stable merge keys. Cross-provider Java overload and TypeScript re-export identity fixtures are Stage 0/1 admission gates (executed as goldens).
 - `plans/007` remains an active architecture reference, not an executable queue. It closes only after its continuation ownership, freshness/lifecycle, provider-catalog, relation-parity, public-boundary, and documentation-handoff gates have recorded evidence; a future successor must be self-contained rather than merely linked. On closure its frontmatter becomes `completed` / `historical_reference_only`, and active implementation must use the named successor plans and ADRs instead.
 - Stage execution routing is explicit in `plans/018`, `plans/019`, and `plans/020`: Claude Code owns the provider-authority track, while Antigravity owns the benchmark and one-shot delivery tracks. High effort is allowed when justified by contract irreversibility, identity/arbitration, freshness, benchmark verdicts, public defaults, conflicting evidence, or repeated verification failures, and a high-effort handoff must record its concrete justification. Every stage-closing model must read the candidate next stage, cross-plan gates, progress/MEMORY/SPEC state, completed diff and checks, file ownership, and current model/quota constraints, then record a `NextStageRoutingRecommendation`; it may recommend `stop` or `defer` and never auto-bypasses an admission gate.
 - Dedicated `impact_analysis` now computes impact hints directly from the resolved selection artifact instead of reading `expand_context`'s budget-gated `:impact_hints` field; it must return a non-null map with `:callers`, `:dependents`, `:related_tests`, and `:risky_neighbors` vectors even when `expand_context` omits impact hints for token-budget reasons.
@@ -496,19 +496,11 @@ after this memory file.
    integration of the project-scoped providers, Java latency/storage metrics, and
    the coverage the two-file corpus cannot exercise (inheritance, static imports,
    method references, entity fields — extending the corpus would change the
-   Stage 0 baseline and needs its own decision). **Next stage decided by the
-   owner (2026-09-05): the consolidation slice, now written into `plans/018` as
-   Stage 4.5 (project-scoped provider consolidation), runs before Stage 5.** It
-   is planned, not started: no source work, no progress-log entry, nothing
-   default-on. Its shape is catalog ownership of the two SCIP descriptors with an
-   explicit `:scope`, a project status probe that cannot report a false `ready`
-   (today's `providers/provider-status` returns `ready` for every non-tree-sitter
-   engine), project batch planning, a separate `semidx.runtime.provider-batch`
-   namespace that confines the protobuf-backed SCIP dependency, an optional
-   `:batch_coverage` input that keeps per-file plans identical when absent, and
-   the shadow comparison as a standard project-level diagnostic. Stage 5
-   must not assume the `java-lsp` typed-signature capability, which the fixture
-   deliberately holds at the `arity_only` floor pending real jdtls output.
+   Stage 0 baseline and needs its own decision). Catalog/planner integration was
+   the item the owner picked next, and it is now **Stage 4.5, COMPLETE
+   (2026-09-05)** — see below. Stage 5 must not assume the `java-lsp`
+   typed-signature capability, which the fixture deliberately holds at the
+   `arity_only` floor pending real jdtls output.
    **Stage 4 review repair (2026-09-05), two findings, both reproduced first and
    both worse than reported.** S3 (High): `signature-arity` used the FIRST paren
    in `signature_documentation`, but scip-java prefixes the declaration with its
@@ -530,6 +522,46 @@ after this memory file.
    `coverage.invalid_documents` field (an unsafe path is not a stale one);
    `workspace-digest` no longer throws. Suite after repair: 533 tests / 3077
    assertions / 0 failures.
+   **Stage 4.5 is COMPLETE (2026-09-05): the SCIP providers are now ordinary
+   participants of the catalog, planner, and execution boundary, still
+   default-off.** Descriptors carry an explicit `:scope`; the two SCIP claims
+   moved from the adapter namespaces into `providers/project-descriptors` and the
+   adapters re-export them, so the dependency runs adapter -> catalog and the
+   per-file planning path never loads the generated protobuf classes. Roles (a
+   status probe and a run function per provider) live in the new
+   `semidx.runtime.provider-batch`, the only namespace requiring both adapters.
+   `provider-selection/project-plan` reuses `plan-operation`, so project
+   admission has the same rules and the same recorded exclusions as per-file
+   admission, and `provider-plan` takes optional `:batch_coverage` /
+   `:batch_statuses`; with neither supplied the plan is provably the pre-stage
+   plan (asserted by emptying `project-descriptors` under `with-redefs`, not by a
+   hand-written expectation). Facts reach per-file arbitration through the
+   already-injectable `run-provider` role keyed by `(path, operation)`, so
+   `provider-execution` needed no behavioural change. **Two real defects were
+   reproduced and fixed on the way in.** `providers/provider-status` returns
+   `ready` for every non-tree-sitter engine, so a catalogued SCIP descriptor
+   would have been declared ready with no toolchain probe at all — it now refuses
+   a non-file scope (`provider_scope_not_file`). And `run-provider`'s
+   `parse-with-engine` dispatches on **language, not engine**, so a SCIP id would
+   have been parsed by the language lane and its regex units returned under the
+   descriptor's `exact` claim — it now throws. **Admission signal: coverage, not
+   selectors.** A project provider is a candidate for a file only when a
+   completed run reported that path covered, so unavailable/failed runs, stale
+   documents, and path-invalid documents all degrade with no separate branch.
+   **Injection seam: `:project_roles`, never the runner** — the first version
+   injected the runner itself, which bypassed the failure-isolation try/catch and
+   made isolation untestable. `scip-shadow-compare` gained `project-report` /
+   `project-shadow-report`: the two tiers are split back out of the merged
+   per-file runs by descriptor scope, so the comparison is language-neutral.
+   Measured on both protected corpora with real toolchains, every document fresh,
+   zero arbitration diagnostics: TypeScript 4 agreed / 0 exact-only / 2
+   legacy-only (the re-export aliases) / 4 authority upgrades, ~2.1 s; Java 5
+   agreed / 1 exact-only (`Validator#Validator`, no regex constructor unit) / 0
+   legacy-only / 5 upgrades, ~0.9 s. Suite: 574 tests / 3215 assertions / 0
+   failures, plus contracts, MVP gates, and CCC. Deferred and unchanged: index
+   and `adapters.clj` wiring (Stage 6 owns the default switch), SCIP
+   relationships and `call/*`, nested Java types; newly named: batch providers
+   run sequentially, which is right at two providers.
 3. Execute `plans/019` as an additive one-shot delivery track after its budget
    ledger and the `plans/020` run/strategy contracts are accepted. Its evaluation
    stage contributes adapters to `plans/020`; it does not own a second corpus,

@@ -134,9 +134,15 @@
   "Plan, execute, and arbitrate one file's providers in shadow mode.
 
   This is the Stage 2 seam end to end. Its result is a shadow artifact: no
-  caller writes it into a snapshot, and default extraction is untouched."
+  caller writes it into a snapshot, and default extraction is untouched.
+
+  `:batch_coverage` and `:batch_statuses` are the Stage 4.5 passthrough to
+  `provider-selection/provider-plan`. They let a project provider's already
+  computed facts join this file's arbitration, delivered through the injected
+  `run-provider` role; with neither supplied the plan and the result are what
+  they were before Stage 4.5."
   [{:keys [root_path path lines parser_opts mode denied_providers execution_policy
-           run-provider]
+           run-provider batch_coverage batch_statuses]
     :or {mode "shadow"}}]
   (let [lines (or lines (shared/slurp-lines (File. (str root_path) (str path))))
         source-identity (providers/source-identity {:root_path root_path
@@ -148,7 +154,9 @@
                :mode mode
                :parser_opts parser_opts
                :denied_providers denied_providers
-               :execution_policy execution_policy})
+               :execution_policy execution_policy
+               :batch_coverage batch_coverage
+               :batch_statuses batch_statuses})
         execution (execute-plan plan {:root_path root_path
                                       :lines lines
                                       :parser_opts parser_opts
