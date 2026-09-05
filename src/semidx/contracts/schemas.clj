@@ -10,7 +10,15 @@
    (fn [k] (and (keyword? k) (re-matches #"^[a-z0-9_]+$" (name k))))])
 (def bounded-string [:string {:min 1 :max 240}])
 (def bounded-long-string [:string {:min 1 :max 2000}])
+(def unit-id bounded-long-string)
 (def string-array [:vector {:max 25} bounded-string])
+(def unit-id-array [:vector {:max 25} unit-id])
+;; The query schema permits 20 each of paths, symbols, modules and tests, and
+;; `summarize-query` echoes all four into one vector. Bounding that echo at the
+;; generic 25 made a legal query produce an illegal packet: 17 paths + 13
+;; symbols resolved and expanded fine, then failed the detail stage with
+;; `internal_contract_error`. The bound now matches what the input allows.
+(def targets-summary-array [:vector {:max 80} bounded-string])
 (def code-array [:vector {:max 12} code])
 
 (def coded-item
@@ -219,7 +227,7 @@
 
 (def compact-focus-unit
   [:map {:closed true}
-   [:unit_id bounded-string]
+   [:unit_id unit-id]
    [:symbol {:optional true} bounded-string]
    [:path bounded-string]
    [:span span]
@@ -231,7 +239,7 @@
    [:recommended_action bounded-string]
    [:available_actions string-array]
    [:reason bounded-string]
-   [:target_unit_ids string-array]])
+   [:target_unit_ids unit-id-array]])
 
 (def selection-budget-summary
   [:map {:closed true}
@@ -258,7 +266,7 @@
 
 (def relevant-unit
   [:map {:closed true}
-   [:unit_id bounded-string]
+   [:unit_id unit-id]
    [:kind unit-kind]
    [:symbol {:optional true} bounded-string]
    [:path bounded-string]
@@ -267,7 +275,7 @@
 
 (def skeleton
   [:map {:closed true}
-   [:unit_id bounded-string]
+   [:unit_id unit-id]
    [:signature bounded-long-string]
    [:summary bounded-string]
    [:docstring_excerpt {:optional true} bounded-long-string]])
@@ -287,7 +295,7 @@
   facts the index already has; `path` and `symbol` are optional because some
   referenced units expose only an identifier."
   [:map {:closed true}
-   [:unit_id bounded-string]
+   [:unit_id unit-id]
    [:path {:optional true} bounded-string]
    [:symbol {:optional true} bounded-string]])
 
@@ -316,7 +324,7 @@
    [:field_writes {:optional true}
     [:vector {:max 12}
      [:map {:closed true}
-      [:unit_id bounded-string]
+      [:unit_id unit-id]
       [:symbol {:optional true} bounded-string]
       [:writes [:vector {:max 24} bounded-string]]]]]
    [:assertion_tests [:vector {:max 12} bounded-string]]
@@ -357,7 +365,7 @@
    [:query
     [:map {:closed true}
      [:intent bounded-string]
-     [:targets_summary string-array]
+     [:targets_summary targets-summary-array]
      [:constraints_summary string-array]
      [:hints_summary string-array]]]
    [:repo_map
@@ -415,7 +423,7 @@
    [:query
     [:map {:closed true}
      [:intent bounded-string]
-     [:targets_summary string-array]
+     [:targets_summary targets-summary-array]
      [:constraints_summary string-array]
      [:hints_summary string-array]
      [:options_summary string-array]
@@ -427,7 +435,7 @@
      [:selected_files_count nat-int?]
      [:raw_fetch_level_reached raw-fetch-level]
      [:packet_size_estimate nat-int?]
-     [:top_authority_targets string-array]
+     [:top_authority_targets unit-id-array]
      [:result_status [:enum "completed" "degraded" "failed"]]]]
    [:warnings coded-item-array]
    [:degradations coded-item-array]
@@ -537,7 +545,7 @@
    [:followup_action {:optional true} followup-action]
    [:confidence_level {:optional true} confidence-level]
    [:retrieval_issue_codes {:optional true} [:vector {:max 12} retrieval-issue-code]]
-   [:ground_truth_unit_ids {:optional true} string-array]
+   [:ground_truth_unit_ids {:optional true} unit-id-array]
    [:ground_truth_paths {:optional true} string-array]
    [:payload bounded-payload-map]])
 
@@ -582,14 +590,14 @@
 
 (def relation-traversal-node
   [:map {:closed true}
-   [:unit_id bounded-string]
+   [:unit_id unit-id]
    [:depth nat-int?]])
 
 (def relation-traversal-edge
   [:map {:closed true}
    [:relation_id bounded-string]
-   [:from bounded-string]
-   [:to bounded-string]
+   [:from unit-id]
+   [:to unit-id]
    [:relation_type bounded-string]
    [:resolution_status [:enum "resolved" "ambiguous" "unresolved"]]
    [:depth pos-int?]])
@@ -600,7 +608,7 @@
   [:map {:closed true}
    [:api_version {:optional true} bounded-string]
    [:schema_version schema-version]
-   [:start_nodes [:vector {:min 1 :max 200} bounded-string]]
+   [:start_nodes [:vector {:min 1 :max 200} unit-id]]
    [:direction [:enum "downstream" "upstream"]]
    [:relation_types {:optional true} [:vector {:min 1 :max 12} bounded-string]]
    [:resolved_only {:optional true} boolean?]
@@ -620,7 +628,7 @@
    [:schema_version schema-version]
    [:snapshot_id bounded-string]
    [:direction [:enum "downstream" "upstream"]]
-   [:start_nodes [:vector {:max 200} bounded-string]]
+   [:start_nodes [:vector {:max 200} unit-id]]
    [:relation_types [:vector {:max 12} bounded-string]]
    [:budgets
     [:map {:closed true}

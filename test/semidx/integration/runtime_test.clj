@@ -245,6 +245,113 @@
       (is (= "high" (get-in packet [:capabilities :confidence_ceiling])))
       (is (string? (get-in packet [:capabilities :index_snapshot_id]))))))
 
+(deftest long-java-unit-id-survives-staged-context-contracts-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-long-java-unit-id" (make-array java.nio.file.attribute.FileAttribute 0)))
+        path "src/test/java/com/foxminded/readerlens/security/TrustedIssuerAuthenticationManagerResolverTest.java"
+        class-name "TrustedIssuerAuthenticationManagerResolverTest"
+        package-name "com.foxminded.readerlens.security"
+        method-name "aTokenForAnotherAudienceIsRejectedEvenFromATrustedIssuer"
+        symbol (str package-name "." class-name "#" method-name)]
+    (write-file! tmp-root path
+                 (str "package " package-name ";\n\n"
+                      "public class " class-name " {\n"
+                      "  void " method-name "() {\n"
+                      "    String token = \"rejected\";\n"
+                      "  }\n"
+                      "}\n"))
+    (let [index (sci/create-index {:root_path tmp-root
+                                   :language_policy {:allow_languages ["java"]}})
+          unit (->> (vals (:units index))
+                    (filter #(= symbol (:symbol %)))
+                    first)
+          query {:schema_version "1.0"
+                 :api_version "1.0"
+                 :intent {:purpose "bug_investigation"
+                          :details "Locate the long Java test method that must remain addressable as a public unit handle."}
+                 :targets {:symbols [symbol]
+                           :paths [path]}
+                 :constraints {:token_budget 16000
+                               :max_raw_code_level "local_neighborhood"
+                               :freshness "current_snapshot"
+                               :language_allowlist ["java"]}
+                 :hints {:prefer_definitions_over_callers true}
+                 :options {:include_tests true
+                           :include_impact_hints true
+                           :allow_raw_code_escalation true}
+                 :trace {:trace_id "66666666-6666-4666-8666-666666666666"
+                         :request_id "runtime-test-long-java-unit-id-001"
+                         :actor_id "test_runner"}}
+          selection (sci/resolve-context index query)
+          expansion (sci/expand-context index {:selection_id (:selection_id selection)
+                                               :snapshot_id (:snapshot_id selection)
+                                               :include_impact_hints true})
+          detail (sci/fetch-context-detail index {:selection_id (:selection_id selection)
+                                                  :snapshot_id (:snapshot_id selection)
+                                                  :detail_level "local_neighborhood"})
+          packet (:context_packet detail)
+          diagnostics (:diagnostics_trace detail)]
+      (is unit)
+      (is (> (count (:unit_id unit)) 240))
+      (is (nil? (m/explain (:example/context-packet contracts/contracts) packet)))
+      (is (nil? (m/explain (:example/diagnostics-trace contracts/contracts) diagnostics)))
+      (is (some #(= (:unit_id unit) (:unit_id %)) (:focus selection)))
+      (is (some #(= (:unit_id unit) (:unit_id %)) (:skeletons expansion)))
+      (is (some #(= (:unit_id unit) (:unit_id %)) (:skeletons packet)))
+      (is (some #(= (:unit_id unit) (:unit_id %)) (:relevant_units packet)))
+      (is (some #(= (:unit_id unit) %) (get-in diagnostics [:result :top_authority_targets]))))))
+
+(deftest many-targets-survive-staged-context-contracts-test
+  ;; The query schema permits 20 each of paths, symbols, modules and tests, but
+  ;; `summarize-query` echoes all four into one vector that was bounded at the
+  ;; generic 25. A legal query therefore produced an illegal packet: resolve and
+  ;; expand succeeded and the detail stage failed with `internal_contract_error`
+  ;; saying targets_summary "should have at most 25 elements". Reproduces the
+  ;; reported shape exactly: 17 paths + 13 symbols = 30.
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-many-targets" (make-array java.nio.file.attribute.FileAttribute 0)))
+        package-name "com.example.api"
+        class-names (mapv #(str "Dto" %) (range 1 18))
+        paths (mapv #(str "src/main/java/com/example/api/" % ".java") class-names)
+        symbols (mapv #(str package-name "." % "#value") (take 13 class-names))]
+    (doseq [class-name class-names]
+      (write-file! tmp-root (str "src/main/java/com/example/api/" class-name ".java")
+                   (str "package " package-name ";\n\n"
+                        "public class " class-name " {\n"
+                        "  public String value() {\n"
+                        "    return \"" class-name "\";\n"
+                        "  }\n"
+                        "}\n")))
+    (let [index (sci/create-index {:root_path tmp-root
+                                   :language_policy {:allow_languages ["java"]}})
+          query {:schema_version "1.0"
+                 :api_version "1.0"
+                 :intent {:purpose "edit_preparation"
+                          :details "Prepare a package refactor across many DTO classes at once."}
+                 :targets {:paths paths :symbols symbols}
+                 :constraints {:token_budget 16000
+                               :freshness "current_snapshot"
+                               :language_allowlist ["java"]}
+                 :hints {:prefer_breadth_over_depth true}
+                 :options {:include_tests true :include_impact_hints true}
+                 :trace {:trace_id "77777777-7777-4777-8777-777777777777"
+                         :request_id "runtime-test-many-targets-001"
+                         :actor_id "test_runner"}}
+          selection (sci/resolve-context index query)
+          expansion (sci/expand-context index {:selection_id (:selection_id selection)
+                                               :snapshot_id (:snapshot_id selection)
+                                               :include_impact_hints true})
+          detail (sci/fetch-context-detail index {:selection_id (:selection_id selection)
+                                                  :snapshot_id (:snapshot_id selection)
+                                                  :detail_level "enclosing_unit"})
+          packet (:context_packet detail)
+          diagnostics (:diagnostics_trace detail)]
+      (is (= 30 (+ (count paths) (count symbols)))
+          "the query must stay over the old 25 bound for this test to mean anything")
+      (is (> (count (get-in packet [:query :targets_summary])) 25)
+          "the packet echoes every target, so it exercises the bound")
+      (is (some? expansion))
+      (is (nil? (m/explain (:example/context-packet contracts/contracts) packet)))
+      (is (nil? (m/explain (:example/diagnostics-trace contracts/contracts) diagnostics))))))
+
 (deftest clojure-related-tests-link-via-imported-test-namespace-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-clj-related-tests" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)

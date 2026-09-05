@@ -44,10 +44,35 @@
       "minLength": 1,
       "maxLength": 2000
     },
+    "unitId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "Opaque public unit handle. It may be longer than display strings because language-native class, path, and method names can be long."
+    },
     "stringArray": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/boundedString"
+      },
+      "maxItems": 25,
+      "uniqueItems": true,
+      "default": []
+    },
+    "targetsSummaryArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/boundedString"
+      },
+      "maxItems": 80,
+      "uniqueItems": true,
+      "default": [],
+      "description": "Echo of the query's targets. Bounded to the total the query schema permits (paths + symbols + modules + tests, 20 each), so a legal query can never produce a packet that violates this contract."
+    },
+    "unitIdArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unitId"
       },
       "maxItems": 25,
       "uniqueItems": true,

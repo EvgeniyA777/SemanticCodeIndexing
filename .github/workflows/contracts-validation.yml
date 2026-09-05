@@ -10,7 +10,8 @@ on:
       - "scripts/validate-contracts.sh"
       - ".github/workflows/contracts-validation.yml"
   push:
-    branches: ["main", "master"]
+    # `dev` is the integration branch; see the note in mvp-runtime.yml.
+    branches: ["main", "master", "dev"]
     paths:
       - "contracts/**"
       - "fixtures/**"

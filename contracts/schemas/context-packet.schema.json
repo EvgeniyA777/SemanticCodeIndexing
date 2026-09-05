@@ -35,7 +35,7 @@
           "$ref": "common.schema.json#/$defs/boundedString"
         },
         "targets_summary": {
-          "$ref": "common.schema.json#/$defs/stringArray"
+          "$ref": "common.schema.json#/$defs/targetsSummaryArray"
         },
         "constraints_summary": {
           "$ref": "common.schema.json#/$defs/stringArray"
@@ -70,7 +70,7 @@
         "additionalProperties": false,
         "properties": {
           "unit_id": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "kind": {
             "$ref": "common.schema.json#/$defs/unitKind"
@@ -99,7 +99,7 @@
         "additionalProperties": false,
         "properties": {
           "unit_id": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "signature": {
             "$ref": "common.schema.json#/$defs/boundedLongString"

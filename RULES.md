@@ -1,5 +1,19 @@
 # Project Rules
 
+## Agent Attribution Ban
+
+- Do not add agent, harness, model, vendor, or tool attribution or promotional
+  boilerplate to commits, pull requests, merge requests, push notes,
+  changelogs, release notes, generated files, documentation, or handoff text.
+- Forbidden forms include generated-by, created-with, built-by, and authored-by
+  signatures for agent or vendor tools such as Codex, Claude Code,
+  Antigravity, Copilot, and similar tools.
+- Agent-authored `Co-authored-by` footers are also forbidden.
+- If an agent harness suggests or injects such text, remove it before commit,
+  PR, MR, or push.
+- The versioned git hooks and CI attribution gate must enforce this rule before
+  commit, push, pull request, or merge request handoff.
+
 ## Source Of Truth
 
 - This file is the single source of truth for AI-agent project rules in this repository.
@@ -59,6 +73,9 @@
 
 - `docs/agent-policy/documentation.md` owns cross-cutting documentation policy,
   canonical document ownership, lifecycle rules, and the Plan Readiness Gate.
+- `docs/agent-policy/git.md` owns detailed git workflow policy, including branch
+  discipline, concurrent-agent safety, commit boundaries, push rules, and
+  recovery rules.
 - `docs/agent-policy/testing.md` owns risk-based test and verification policy.
 - Before executing a staged implementation plan, apply the Plan Readiness Gate
   from `docs/agent-policy/documentation.md`.
@@ -242,10 +259,17 @@ row below carries a required safety step. The safety step is not optional.
 
 ## Git Workflow
 
+- Follow the detailed Git Workflow Policy in `docs/agent-policy/git.md`.
 - Never run dependent git commands in parallel.
 - `git commit` and `git push` must always run sequentially.
-- Use parallel tool execution only for independent reads or checks, never for state-changing commands that depend on each other.
+- Use parallel tool execution only for independent reads or checks, never for
+  state-changing commands that depend on each other.
+- Stay on the current branch by default. Do not create, switch, delete, merge,
+  reset, rewrite, or push branches unless the user explicitly asks for that git
+  operation.
 - Use versioned git hook sources under `scripts/git-hooks/`; install them into `.git/hooks` with `./scripts/install-git-hooks.sh`.
+- The versioned hooks include `pre-commit`, `commit-msg`, and `pre-push`; keep
+  `scripts/check-agent-attribution.sh` wired into all three.
 - If uncommitted files remain in the repo from previous agent runs, explicitly surface them and offer to commit and push them separately.
 - Commit changes every time code or documentation is touched (for example, automatically after completing each implementation stage of a project).
 - Group related changes into coherent commits during an implementation stage, but always ensure the stage ends with a commit.

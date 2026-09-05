@@ -7,7 +7,12 @@
             [semidx.runtime.languages.shared :as shared]))
 
 (def ^:private clj-def-re
-  #"^\s*\((defn-|defn|defmacro|defmulti|defmethod|defprotocol|def|deftest)\s+([^\s\[\]\)]+)")
+  ;; The optional group before the name skips reader metadata, which otherwise
+  ;; becomes the captured "name": `(def ^:private secret 2)` yielded the symbol
+  ;; `^:private`, and because every annotated form collapsed onto its marker,
+  ;; two different vars annotated `^:private` produced the SAME unit id. Covers
+  ;; `^:keyword`, `^Type`, and a single-line `^{:doc "..."}` map, repeated.
+  #"^\s*\((defn-|defn|defmacro|defmulti|defmethod|defprotocol|def|deftest)\s+(?:\^(?:\{[^}]*\}|[^\s(){}\[\]]+)\s+)*([^\s\[\]\)]+)")
 
 (def ^:private clj-call-re
   #"\(([a-zA-Z][a-zA-Z0-9\-\.!/<>\?]*)")
@@ -1279,13 +1284,34 @@
          (sort-by (juxt :start-row :start-col))
          vec)))
 
-(defn- sym-names-in-range [ts-lines start-row end-row]
-  (->> ts-lines
-       (filter #(= "sym_name" (:node-type %)))
-       (filter #(<= start-row (:start-row %) end-row))
-       (sort-by (juxt :start-row :start-col))
-       (keep :value)
-       vec))
+(defn- within-node?
+  "True when `node` lies inside `outer`'s row/column span."
+  [node outer]
+  (and (or (> (:start-row node) (:start-row outer))
+           (and (= (:start-row node) (:start-row outer))
+                (>= (:start-col node) (:start-col outer))))
+       (or (< (:end-row node) (:end-row outer))
+           (and (= (:end-row node) (:end-row outer))
+                (<= (:end-col node) (:end-col outer))))))
+
+(defn- sym-names-in-range
+  "Symbol names in a row range, in source order, excluding any that belong to
+  reader metadata.
+
+  A symbol type hint nests its own `sym_name` inside a `meta_lit` that precedes
+  the name being defined, so `(def ^String typed \"s\")` yielded `def` then
+  `String` and the var was named after its type hint. Keyword and map metadata
+  never had this problem because they contain no `sym_name`, which is why only
+  the symbol-hint form was wrong."
+  [ts-lines start-row end-row]
+  (let [meta-nodes (->> ts-lines (filter #(= "meta_lit" (:node-type %))) vec)]
+    (->> ts-lines
+         (filter #(= "sym_name" (:node-type %)))
+         (filter #(<= start-row (:start-row %) end-row))
+         (remove (fn [node] (some (partial within-node? node) meta-nodes)))
+         (sort-by (juxt :start-row :start-col))
+         (keep :value)
+         vec)))
 
 (defn- parse-clojure-tree-sitter [root-path path src-lines parser-opts]
   (let [grammar-path (parser-grammar-path parser-opts :clojure)

@@ -16,12 +16,18 @@ input_seen=0
 while read local_ref local_sha remote_ref remote_sha
 do
   input_seen=1
+  if ! ./scripts/check-agent-attribution.sh --pre-push "$local_sha" "$remote_sha"; then
+    status=1
+  fi
   if ! ./scripts/check-memory-freshness.sh --pre-push "$local_sha" "$remote_sha"; then
     status=1
   fi
 done
 
 if [ "$input_seen" -eq 0 ]; then
+  if ! ./scripts/check-agent-attribution.sh --range HEAD; then
+    status=1
+  fi
   if ! ./scripts/check-memory-freshness.sh --range HEAD; then
     status=1
   fi

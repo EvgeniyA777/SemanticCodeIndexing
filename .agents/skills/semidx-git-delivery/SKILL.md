@@ -8,6 +8,9 @@ description: "Apply safe semidx git delivery discipline for repository mutations
 Use this skill after coherent verified changes or whenever inspecting or
 changing branch, upstream, remote, commit, push, merge, or recovery state.
 
+Follow the detailed policy in `docs/agent-policy/git.md`. This skill is the
+procedure for applying that policy, not a second source of normative git rules.
+
 ## Worktree Ownership
 
 - Check `git status --short` before staging or committing.
@@ -15,7 +18,8 @@ changing branch, upstream, remote, commit, push, merge, or recovery state.
   task.
 - If unrelated dirty files remain, surface them and continue only with explicit
   paths that belong to the current change.
-- Do not silently create, switch, merge, delete, reset, or rewrite branches.
+- Do not silently create, switch, merge, delete, reset, rewrite, or push
+  branches.
 
 ## Checkpoint Commits
 

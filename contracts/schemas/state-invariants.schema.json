@@ -21,7 +21,7 @@
       "additionalProperties": false,
       "properties": {
         "unit_id": {
-          "$ref": "common.schema.json#/$defs/boundedString"
+          "$ref": "common.schema.json#/$defs/unitId"
         },
         "path": {
           "$ref": "common.schema.json#/$defs/boundedString"
@@ -91,7 +91,7 @@
         "additionalProperties": false,
         "properties": {
           "unit_id": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "symbol": {
             "$ref": "common.schema.json#/$defs/boundedString"
