@@ -24,6 +24,13 @@ after this memory file.
   identities, especially Java test method handles that include path + package +
   class + method, must remain addressable through staged retrieval and relation
   traversal contracts without truncation or surrogate encoding.
+- `targets_summary` has its own bound (80) rather than the generic 25-item
+  `stringArray`. The query schema permits 20 each of paths, symbols, modules and
+  tests and `summarize-query` echoes all four into one vector, so the generic
+  bound let a legal query produce an illegal packet: 17 paths + 13 symbols
+  resolved and expanded, then failed the detail stage with
+  `internal_contract_error`. The echo is a diagnostic record of what was asked,
+  so it is bounded to match the input rather than truncated.
 - MVP runtime is implemented with public API in `semidx.core`.
 - Agent attribution and promotional boilerplate are banned in git-facing and
   documentation artifacts. The policy is enforced by
