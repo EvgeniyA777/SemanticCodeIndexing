@@ -14,7 +14,11 @@ on:
       - "deps.edn"
       - ".github/workflows/mvp-runtime.yml"
   push:
-    branches: ["main", "master"]
+    # `dev` is the integration branch: everything lands there first and only
+    # reaches `main` through a release PR. Without it here a push to `dev` ran
+    # nothing at all, so work accumulated unverified until someone happened to
+    # open a PR — which is exactly how CI stayed red from April to September.
+    branches: ["main", "master", "dev"]
     paths:
       - "src/**"
       - "test/**"
