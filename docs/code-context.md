@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: 8859af42d6c9b5d76da0f67a21cd73868966e1ba
+- fingerprint: 0d2b52e4944421b1749345233a4709f4af538387
 
 ## Tree
 ```text
@@ -53,7 +53,7 @@ semidx
 - semidx.integration.lua-onboarding-test
 - semidx.integration.policy-governance-test
 - semidx.integration.runtime-test
-- ... +42 more
+- ... +43 more
 ### other
 - semidx.contracts.cli
 - semidx.contracts.schemas
@@ -99,7 +99,7 @@ semidx
 - semidx.core -> semidx.runtime.usage-metrics
 - semidx.integration.css-onboarding-test -> clojure.java.io
 - semidx.integration.css-onboarding-test -> clojure.test
-- ... +537 more
+- ... +541 more
 
 ## Namespaces
 ### semidx.contracts.cli
@@ -128,12 +128,12 @@ semidx
 - symbols:
 - example-root [section]
 - fixture-root [section]
-- ^:private [section]
 - schema-root [section]
 - read-json-file [function]
 - json-files-under [function]
 - rel-path [function]
 - schema-key-for-path [function]
+- validate-schema-json-file [function]
 ### semidx.core
 - path: src/semidx/core.clj
 - requires: semidx.runtime.capabilities, semidx.runtime.compression, semidx.runtime.errors, semidx.runtime.index, semidx.runtime.literal-slice, semidx.runtime.retrieval, semidx.runtime.retrieval-policy, semidx.runtime.semantic-quality, semidx.runtime.snapshot-diff, semidx.runtime.storage, semidx.runtime.usage-metrics
@@ -166,19 +166,18 @@ semidx
 - aliases: core -> semidx.mcp.core, io -> clojure.java.io, json -> clojure.data.json, sessions -> semidx.mcp.session-registry, str -> clojure.string
 - symbols:
 - default-host [section]
-- ^:private [section]
 - default-port [section]
 - parse-args [function]
 - request-method [function]
 - request-uri [function]
 - request-header [function]
 - write-json! [function]
+- read-json-body [function]
 ### semidx.mcp.server
 - path: src/semidx/mcp/server.clj
 - requires: clojure.data.json, clojure.string, semidx.core, semidx.mcp.core, semidx.runtime.retrieval-policy, semidx.runtime.usage-metrics
 - aliases: core -> semidx.mcp.core, json -> clojure.data.json, rp -> semidx.runtime.retrieval-policy, sci -> semidx.core, str -> clojure.string, usage -> semidx.runtime.usage-metrics
 - symbols:
-- ^:private [section]
 - default-max-indexes [section]
 - parse-args [function]
 - headers-complete? [function]
@@ -186,6 +185,7 @@ semidx
 - read-header-block [function]
 - read-json-line-text [function]
 - read-next-byte [function]
+- parse-headers [function]
 ### semidx.mcp.session-registry
 - path: src/semidx/mcp/session_registry.clj
 - requires: semidx.mcp.core
