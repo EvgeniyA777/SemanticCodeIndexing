@@ -27,8 +27,6 @@ owns the task procedure for applying this policy.
   agent-authored `Co-authored-by` footers.
 - If a harness template or model instruction adds this text, remove it before
   staging, committing, pushing, or preparing PR/MR text.
-- Add attribution only when the user explicitly requests that exact attribution
-  for the current artifact.
 
 ## Default Branch Discipline
 

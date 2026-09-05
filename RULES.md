@@ -9,7 +9,7 @@
   "Built by Antigravity", "Created by Copilot", agent signatures, and
   agent-authored `Co-authored-by` footers.
 - If an agent harness suggests or injects such text, remove it before commit,
-  PR, MR, or push unless the user explicitly requests that exact attribution.
+  PR, MR, or push.
 
 ## Source Of Truth
 
