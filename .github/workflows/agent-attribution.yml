@@ -1,0 +1,26 @@
+name: Agent Attribution Gate
+
+on:
+  pull_request:
+  push:
+    branches: ["main", "master"]
+
+jobs:
+  agent-attribution:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check tracked content
+        run: ./scripts/check-agent-attribution.sh --all
+
+      - name: Check pull request commits
+        if: github.event_name == 'pull_request'
+        run: ./scripts/check-agent-attribution.sh --range "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+
+      - name: Check pushed commits
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+        run: ./scripts/check-agent-attribution.sh --range "${{ github.event.before }}..${{ github.sha }}"
