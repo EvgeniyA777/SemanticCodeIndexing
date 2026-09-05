@@ -34,7 +34,7 @@
     "start_nodes": {
       "type": "array",
       "items": {
-        "$ref": "common.schema.json#/$defs/boundedString"
+        "$ref": "common.schema.json#/$defs/unitId"
       },
       "maxItems": 200
     },
@@ -78,7 +78,7 @@
         "additionalProperties": false,
         "properties": {
           "unit_id": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "depth": {
             "type": "integer",
@@ -99,10 +99,10 @@
             "$ref": "common.schema.json#/$defs/boundedString"
           },
           "from": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "to": {
-            "$ref": "common.schema.json#/$defs/boundedString"
+            "$ref": "common.schema.json#/$defs/unitId"
           },
           "relation_type": {
             "$ref": "common.schema.json#/$defs/boundedString"

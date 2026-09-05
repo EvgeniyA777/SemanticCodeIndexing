@@ -151,7 +151,7 @@
           "minimum": 0
         },
         "top_authority_targets": {
-          "$ref": "common.schema.json#/$defs/stringArray"
+          "$ref": "common.schema.json#/$defs/unitIdArray"
         },
         "result_status": {
           "type": "string",

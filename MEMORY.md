@@ -19,6 +19,11 @@ after this memory file.
 
 - Contract layer is established (`contracts/schemas`, `contracts/examples`, `fixtures/retrieval`).
 - Clojure-side contract mirror is implemented with `malli`.
+- Public `unit_id` fields use a dedicated opaque handle bound (`unit-id`,
+  max 2000) instead of the 240-character display string bound. Long language
+  identities, especially Java test method handles that include path + package +
+  class + method, must remain addressable through staged retrieval and relation
+  traversal contracts without truncation or surrogate encoding.
 - MVP runtime is implemented with public API in `semidx.core`.
 - Agent attribution and promotional boilerplate are banned in git-facing and
   documentation artifacts. The policy is enforced by

@@ -72,7 +72,7 @@
       "uniqueItems": true
     },
     "ground_truth_unit_ids": {
-      "$ref": "common.schema.json#/$defs/stringArray"
+      "$ref": "common.schema.json#/$defs/unitIdArray"
     },
     "ground_truth_paths": {
       "$ref": "common.schema.json#/$defs/stringArray"

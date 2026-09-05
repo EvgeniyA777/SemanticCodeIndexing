@@ -44,10 +44,25 @@
       "minLength": 1,
       "maxLength": 2000
     },
+    "unitId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "Opaque public unit handle. It may be longer than display strings because language-native class, path, and method names can be long."
+    },
     "stringArray": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/boundedString"
+      },
+      "maxItems": 25,
+      "uniqueItems": true,
+      "default": []
+    },
+    "unitIdArray": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/unitId"
       },
       "maxItems": 25,
       "uniqueItems": true,

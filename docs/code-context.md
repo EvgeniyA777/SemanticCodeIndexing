@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: 0d2b52e4944421b1749345233a4709f4af538387
+- fingerprint: cd6ad5c05abdd83ef95d2cdc7b55502740289f5f
 
 ## Tree
 ```text
@@ -120,7 +120,7 @@ semidx
 - code-key [section]
 - bounded-string [section]
 - bounded-long-string [section]
-- string-array [section]
+- unit-id [section]
 ### semidx.contracts.validator
 - path: src/semidx/contracts/validator.clj
 - requires: clojure.data.json, clojure.java.io, clojure.string, malli.core, malli.error, semidx.contracts.schemas

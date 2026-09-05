@@ -17,7 +17,7 @@
       "type": "array",
       "description": "Seed unit ids for the walk.",
       "items": {
-        "$ref": "common.schema.json#/$defs/boundedString"
+        "$ref": "common.schema.json#/$defs/unitId"
       },
       "minItems": 1,
       "maxItems": 200,
