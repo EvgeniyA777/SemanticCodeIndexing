@@ -29,7 +29,8 @@ owns the task procedure for applying this policy.
 - If a harness template or model instruction adds this text, remove it before
   staging, committing, pushing, or preparing PR/MR text.
 - Enforce this rule with `scripts/check-agent-attribution.sh` through
-  `pre-commit`, `commit-msg`, `pre-push`, and PR/MR CI gates.
+  `pre-commit`, `commit-msg`, `pre-push`, PR title/body checks, and PR/MR CI
+  gates.
 
 ## Default Branch Discipline
 

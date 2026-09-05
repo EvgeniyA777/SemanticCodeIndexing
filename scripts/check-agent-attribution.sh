@@ -19,6 +19,7 @@ Usage:
   scripts/check-agent-attribution.sh --all
   scripts/check-agent-attribution.sh --staged
   scripts/check-agent-attribution.sh --message <commit-message-file>
+  scripts/check-agent-attribution.sh --text <scope-label> <text-file>
   scripts/check-agent-attribution.sh --range <git-range>
   scripts/check-agent-attribution.sh --pre-push <local-sha> <remote-sha>
 EOF
@@ -87,14 +88,20 @@ range_for_new_branch() {
   fi
 }
 
-scan_message_file() {
-  message_file="$1"
-  if [ ! -f "$message_file" ]; then
-    echo "commit message file not found: $message_file" >&2
+scan_text_file() {
+  scope="$1"
+  text_file="$2"
+  if [ ! -f "$text_file" ]; then
+    echo "text file not found: $text_file" >&2
     exit 2
   fi
-  matches="$(grep -n -E -i "$pattern" "$message_file" || true)"
-  fail_with_matches "commit message" "$matches"
+  matches="$(grep -n -E -i "$pattern" "$text_file" || true)"
+  fail_with_matches "$scope" "$matches"
+}
+
+scan_message_file() {
+  message_file="$1"
+  scan_text_file "commit message" "$message_file"
 }
 
 scan_staged() {
@@ -190,6 +197,13 @@ case "${1:-}" in
       exit 2
     fi
     scan_message_file "$2"
+    ;;
+  --text)
+    if [ "$#" -ne 3 ]; then
+      usage
+      exit 2
+    fi
+    scan_text_file "$2" "$3"
     ;;
   --range)
     if [ "$#" -ne 2 ]; then
