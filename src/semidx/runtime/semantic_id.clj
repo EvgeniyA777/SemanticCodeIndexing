@@ -133,10 +133,26 @@
 (defn enrich-index [index]
   (if (and (map? (:units index))
            (vector? (:unit_order index)))
-    (let [ordered (->> (:unit_order index)
-                       (map #(get (:units index) %))
-                       (remove nil?)
-                       enrich-units)
-          units-by-id (into {} (map (juxt :unit_id identity) ordered))]
+    ;; Look units up by the `:unit_id` carried inside each unit rather than by
+    ;; the `:units` map key. A snapshot round-tripped through JSON comes back
+    ;; with KEYWORD map keys (the reader keywordises every object key, including
+    ;; unit ids used as data) while `:unit_order` is a JSON array whose entries
+    ;; stay STRINGS. Looking up a string in a keyword-keyed map missed every
+    ;; unit, so a stored snapshot reloaded with an empty `:units` while
+    ;; `snapshot_id`, `files`, and `unit_order` all looked healthy.
+    (let [by-id (into {}
+                      (keep (fn [[_ unit]]
+                              (when-let [id (:unit_id unit)]
+                                [id unit])))
+                      (:units index))
+          ordered-ids (:unit_order index)
+          ordered (keep #(get by-id %) ordered-ids)
+          ordered-id-set (set (keep :unit_id ordered))
+          ;; Units the order vector does not mention are still real units; the
+          ;; previous shape dropped them silently.
+          remaining (remove #(contains? ordered-id-set (:unit_id %)) (vals by-id))
+          units-by-id (into {}
+                            (map (juxt :unit_id identity))
+                            (enrich-units (vec (concat ordered remaining))))]
       (assoc index :units units-by-id))
     index))
