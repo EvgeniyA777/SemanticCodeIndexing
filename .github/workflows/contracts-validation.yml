@@ -20,6 +20,13 @@ on:
       - "scripts/validate-contracts.sh"
       - ".github/workflows/contracts-validation.yml"
 
+# Collapses the duplicate push/pull_request pair on the same content; see the
+# note on the same block in mvp-runtime.yml for why the key is `head_ref` rather
+# than `ref`.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   validate-contracts:
     runs-on: ubuntu-latest

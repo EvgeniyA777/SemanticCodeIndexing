@@ -31,6 +31,29 @@ on:
       - "deps.edn"
       - ".github/workflows/mvp-runtime.yml"
 
+# While a PR is open, a push to `dev` fires this workflow twice on the same
+# content: once for `push` and once for `pull_request`. Adding `dev` to
+# `push.branches` was necessary (see the note above); the duplicate pair is its
+# side effect, and it costs ~20 minutes of runner time per push.
+#
+# The key deliberately is NOT `github.ref`: that is `refs/heads/dev` for the push
+# and `refs/pull/N/merge` for the pull_request, so the two events would land in
+# different groups and nothing would collapse. `github.head_ref` is set only on
+# `pull_request` (the source branch) and empty on `push`, so this expression
+# resolves to the branch name for both and puts the pair in one group.
+#
+# Which of the two survives is decided by arrival order, not configured. In
+# practice the `push` event is delivered 2-4 seconds before `pull_request`, so
+# the `pull_request` run cancels the `push` run and the surviving run is the one
+# the PR displays and the one that tests the merge commit. Nothing enforces that
+# ordering; the repository has no branch protection or rulesets, so a cancelled
+# run blocks nothing either way. To get the duplicate pair back for a flaky-test
+# investigation — it is what proved the MCP teardown race in #3 — re-run the
+# cancelled run from the Actions UI.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   runtime-gates:
     runs-on: ubuntu-latest
@@ -184,8 +207,9 @@ jobs:
           # CI parses the same way a developer machine does.
           clj-kondo: "2026.01.19"
 
-      # This job runs the same suite as runtime-gates, so it needs the same
-      # toolchain. It previously ran without Node, the tree-sitter CLI, or the
+      # The narrowed namespace set still needs the tree-sitter toolchain
+      # (semidx.integration.runtime-test) and ripgrep (benchmark-report-test).
+      # This job previously ran without Node, the tree-sitter CLI, or the
       # grammars, which meant it was testing a degraded runtime and failing for
       # reasons that had nothing to do with PostgreSQL.
       - name: Setup Node
@@ -208,12 +232,25 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      # The SCIP toolchains are deliberately NOT installed here. This job runs
-      # the same suite as runtime-gates, which already exercises the SCIP
-      # end-to-end tests under SEMIDX_REQUIRE_SCIP_TOOLCHAINS; installing them
-      # again would add an `npm ci` and eight jar downloads for no extra signal.
-      # The four end-to-end tests skip in this job, and that is the intent.
+      # This job used to run the entire suite to gain 16 assertions, repeating
+      # verbatim in the same runner image, on the same commit, what runtime-gates
+      # had just run. Only four namespaces read SEMIDX_TEST_POSTGRES_URL, and
+      # measurement confirms they hold the whole delta: the full suite is 3128
+      # assertions without the variable and 3144 with it, while these four alone
+      # are 821 without and 837 with. Everything else was a repeat.
+      #
+      # The job is narrowed, not deleted: the PostgreSQL path is what caught the
+      # snapshot round-trip defect that reports/021 had carried as a known issue
+      # since August and that #3 fixed.
+      #
+      # The SCIP toolchains are therefore not installed here either — none of
+      # these four namespaces touches them.
       - name: Run PostgreSQL Integration Smoke
         env:
           SEMIDX_TEST_POSTGRES_URL: jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass
-        run: clojure -M:test
+        run: |
+          clojure -M:test \
+            -n semidx.integration.runtime-test \
+            -n semidx.runtime.storage-test \
+            -n semidx.runtime.fact-arbitration-test \
+            -n semidx.runtime.benchmark-report-test
