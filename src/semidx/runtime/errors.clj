@@ -70,10 +70,42 @@
                              :error_category "client"
                              :http_status 400
                              :grpc_status Status/INVALID_ARGUMENT}
+   :rate_limited {:error_code "rate_limited"
+                  :error_category "capacity"
+                  :http_status 429
+                  :grpc_status Status/RESOURCE_EXHAUSTED}
    :internal_error {:error_code "internal_error"
                     :error_category "internal"
                     :http_status 500
-                    :grpc_status Status/INTERNAL}})
+                    :grpc_status Status/INTERNAL}
+   :policy_not_found {:error_code "policy_not_found"
+                      :error_category "not_found"
+                      :http_status 404
+                      :grpc_status Status/NOT_FOUND}
+   :policy_not_eligible {:error_code "policy_not_eligible"
+                         :error_category "conflict"
+                         :http_status 409
+                         :grpc_status Status/FAILED_PRECONDITION}
+   :policy_blocked {:error_code "policy_blocked"
+                    :error_category "conflict"
+                    :http_status 409
+                    :grpc_status Status/FAILED_PRECONDITION}
+   :stale_promotion_decision {:error_code "stale_promotion_decision"
+                              :error_category "conflict"
+                              :http_status 409
+                              :grpc_status Status/FAILED_PRECONDITION}
+   :policy_approval_required {:error_code "policy_approval_required"
+                              :error_category "conflict"
+                              :http_status 409
+                              :grpc_status Status/FAILED_PRECONDITION}
+   :policy_registry_not_configured {:error_code "policy_registry_not_configured"
+                                    :error_category "not_found"
+                                    :http_status 404
+                                    :grpc_status Status/NOT_FOUND}
+   :registry_persistence_failed {:error_code "registry_persistence_failed"
+                                 :error_category "internal"
+                                 :http_status 500
+                                 :grpc_status Status/INTERNAL}})
 
 (def ^:private grpc-error-code-key
   (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER))

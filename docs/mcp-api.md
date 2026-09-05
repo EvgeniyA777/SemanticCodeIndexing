@@ -28,6 +28,14 @@ The MCP server does not enforce a `root_path` allowlist. Any existing directory 
 
 The MCP server exposes only `tools` capability in v1 and keeps cached indexes in-process for the lifetime of the server/session.
 
+Process model:
+
+- `clojure -M:mcp` is long-lived for the lifetime of the MCP stdio process. If a host restarts that process per request or per short session, semidx cannot reuse the JVM across those restarts.
+- `clojure -M:mcp-http` is the reuse-friendly MCP transport for clients that can keep calling the same local Streamable HTTP endpoint.
+- The launcher (`clojure -M:launcher`) owns the process lifetime of both local
+  profiles: `runtime-http` (default, port 8787) and `mcp-http` (port 8791). See
+  "Launcher-managed MCP HTTP reuse" below.
+
 Client-facing MCP payloads do not expose internal root restriction state. In particular:
 
 - `health` does not return `allowed_roots`
@@ -41,6 +49,79 @@ Client-facing MCP payloads do not expose internal root restriction state. In par
 - transport-level session errors for missing/expired sessions instead of silent implicit recreation outside `initialize`
 
 The HTTP MCP transport is local-only by default because `mcp-http` binds to `127.0.0.1` unless overridden explicitly.
+
+## Launcher-managed MCP HTTP reuse
+
+Which transport a client should use is decided by whether it can keep talking to
+one endpoint:
+
+| Client capability | Transport | Process lifetime |
+| --- | --- | --- |
+| speaks Streamable HTTP to a URL | `mcp-http` | launcher-managed and reusable across host restarts |
+| spawns a command and speaks stdio | `clojure -M:mcp` | bound to the host's process; the JVM dies with it |
+
+A stdio host owns the server process by definition, so launcher reuse cannot
+apply to it: when the host restarts the command, the JVM and its cached indexes
+are gone. That is a property of the transport, not a gap to fix.
+
+Manage the endpoint with the launcher:
+
+```bash
+clojure -M:launcher start  --root . --profile mcp-http            # starts, or adopts a running one
+clojure -M:launcher status --root . --profile mcp-http            # reports reuse without starting anything
+clojure -M:launcher stop   --root . --profile mcp-http            # stops only a runtime the launcher started
+```
+
+`request` is not available for this profile. It drives the runtime HTTP
+retrieval contract, while an MCP endpoint is driven by the MCP client itself, so
+the launcher refuses it with `request_unsupported_for_profile` rather than
+forwarding to a path the MCP server does not serve.
+
+The launcher checks the `service` field of `GET /health` before reusing an
+endpoint, so a `runtime-http` server listening on the MCP port is refused with
+`health_service_mismatch` instead of being adopted as an MCP runtime.
+
+### Client configuration
+
+Streamable HTTP client (`.mcp.json`), pointing at the launcher-managed endpoint:
+
+```json
+{
+  "mcpServers": {
+    "semidx": {
+      "type": "http",
+      "url": "http://127.0.0.1:8791/mcp"
+    }
+  }
+}
+```
+
+The client sends no `Mcp-Session-Id` on `initialize`; the server creates the
+session and returns the id in the response header, and every later call reuses
+it.
+
+stdio client, for hosts that cannot speak Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "semidx": {
+      "type": "stdio",
+      "command": "clojure",
+      "args": ["-M:mcp"]
+    }
+  }
+}
+```
+
+Two practical notes:
+
+- Give each project its own `--port` when independent runtimes are wanted. Two
+  projects that both accept the default port adopt one another's runtime, which
+  is safe because every MCP request carries its own `root_path`, but `stop` from
+  the non-owning project then reports `not_launcher_owned`.
+- The endpoint binds to `127.0.0.1` and has no authentication in v1, so it is a
+  local development surface only.
 
 ## Agent Onboarding
 
@@ -109,7 +190,7 @@ Both HTTP transports reuse the same tool/session core as stdio, so `initialize`,
 
 If `SCI_USAGE_METRICS_JDBC_URL` is configured, the server records:
 
-- tool usage events by operation (`create_index`, `repo_map`, `resolve_context`, `expand_context`, `fetch_context_detail`, `impact_analysis`, `skeletons`)
+- tool usage events by operation (`create_index`, `repo_map`, `resolve_context`, `expand_context`, `fetch_context_detail`, `impact_analysis`, `traverse_relations`, `skeletons`)
 - cache-hit/cache-miss behavior for `create_index`
 - cache eviction events
 - normalized correlation fields such as `session_id`, `task_id`, `trace_id`, `request_id`, and `actor_id` where available
@@ -441,6 +522,33 @@ Returns:
 - `index_id`
 - `impact_hints`
 
+When seed selection is unsafe, `impact_hints` remains shape-compatible with
+empty `callers`, `dependents`, `related_tests`, and `risky_neighbors`, and adds
+`result_status: "degraded"`, `degradations`, `confidence`, and `guardrails`.
+This prevents ambiguous or low-confidence retrieval from being presented as a
+trustworthy blast-radius result.
+
+### `traverse_relations`
+
+Run a bounded traversal over typed semantic relations (dataflow) from one or more start unit ids, reusing the Stage 3 traversal kernel (ADR-040). It is a bounded relation walk, not a general-purpose graph-query language. Exposed on library and MCP; HTTP/gRPC are not exposed in this stage.
+
+Inputs:
+
+- `index_id`
+- `start_nodes` (array of unit ids)
+- `direction` => `"downstream"` (source -> target / flows-to) or `"upstream"` (target -> source / flows-from)
+- `relation_types` (optional allow-list; empty means all)
+- `resolved_only` (optional boolean, default `true`; ambiguous/unresolved edges are skipped)
+- `budgets` (optional `max_depth` / `max_nodes` / `max_discovery_paths`, clamped to the kernel ceiling)
+
+Returns:
+
+- `index_id`
+- `snapshot_id`, `direction`, `start_nodes`, `relation_types`
+- `budgets` (the applied bounds, including `resolved_only`)
+- `nodes` (`unit_id` + `depth`), `edges`, `discovery_paths`, `truncated`
+- `selection_id` — pass it (with `snapshot_id`) to `expand_context` / `fetch_context_detail` to deliver the discovered units' code through the staged-retrieval flow
+
 ### `skeletons`
 
 Return lightweight code skeletons for selected files or semantic units so an agent can inspect structure before loading raw code.
@@ -458,6 +566,8 @@ Returns:
 - `recommended_projection_profile` => `"detail"`
 
 ## Operational Notes
+
+- Stage 6 policy lifecycle mutation is intentionally HTTP-only. MCP can consume a configured policy registry for retrieval selection, but it does not expose registry introspection, promotion, approval, or retirement tools.
 
 - MCP does not enforce a root allowlist; `create_index` accepts any existing directory visible to the MCP process.
 - `paths` must be relative and must not contain traversal segments such as `..`.

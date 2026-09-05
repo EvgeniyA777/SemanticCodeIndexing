@@ -1,0 +1,131 @@
+{
+  "fixture_id": "provider_authority_typescript_re_export_canonical_key_001",
+  "category": "cross_provider_identity",
+  "purpose": "Prove that regex, tree-sitter, SCIP, and LSP spellings of the SAME TypeScript re-export resolve to one provider-neutral CanonicalFactKey for the origin definition, while an alias rename (normalize -> canonicalize) keeps a distinct exported-symbol identity.",
+  "plan_refs": [
+    "plans/018"
+  ],
+  "adr_refs": [
+    "ADR-039",
+    "ADR-046"
+  ],
+  "corpus_ref": "fixtures/provider-authority/corpus/typescript/src/index.ts",
+  "status": "golden_executed_by_stage_1_tests",
+  "notes": [
+    "regex and tree-sitter spellings are GROUND TRUTH from semidx.runtime.languages.typescript/parse-file. Both paths run re-export-defs; the tree-sitter path adds regex re-exports as supplemental defs, so the two agree.",
+    "2026-08-29 (Stage 3): the scip-typescript spelling is now VERIFIED against real tool output (@sourcegraph/scip-typescript@0.4.0, TypeScript 5.9.3). See fixtures/provider-authority/scip/typescript-corpus.observed.json. The representative form was wrong on two points: scip-typescript emits NO alias symbol for `canonicalize` and NO SCIP Relationship for the re-export. The main claim is unchanged and confirmed: the alias still canonicalizes to the ONE origin CanonicalFactKey, via occurrence resolution rather than a distinct fact.",
+    "LSP spellings remain REPRESENTATIVE, not verified tool output; Stage 5 must re-verify.",
+    "Module prefixes are expressed relative to a conceptual module root `src`. Concrete dotted module prefixes emitted by semidx depend on the index root path (ts-module-name derives the module from the file path).",
+    "2026-08-28 (Stage 1): each distinct_facts_must_not_merge entry gained a structured expected_canonical_key so the fixture can be executed as a golden test; no claim was changed."
+  ],
+  "re_export_edge_must_resolve_to_origin": {
+    "fact": "src/index.ts re-exports normalize from ./orders as canonicalize",
+    "origin_definition": {
+      "conceptual_symbol": "src.orders/normalize",
+      "path": "src/orders.ts",
+      "fact_kind": "unit"
+    },
+    "provider_spellings": [
+      {
+        "provider_id": "typescript-regex",
+        "authority": "heuristic",
+        "native_exported_symbol": "src/canonicalize",
+        "native_re_export_target": "src.orders/normalize",
+        "represented_as": "synthetic call from re-export unit to origin symbol",
+        "ground_truth": true
+      },
+      {
+        "provider_id": "typescript-tree-sitter",
+        "authority": "structural",
+        "native_exported_symbol": "src/canonicalize",
+        "native_re_export_target": "src.orders/normalize",
+        "represented_as": "synthetic call from re-export unit to origin symbol (supplemental def)",
+        "ground_truth": true
+      },
+      {
+        "provider_id": "scip-typescript",
+        "authority": "exact",
+        "native_exported_symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+        "native_re_export_target": "scip-typescript npm . . src/`orders.ts`/normalize().",
+        "represented_as": "scip-typescript emits NO `canonicalize` symbol and NO SCIP Relationship for the re-export. On `export { normalize as canonicalize } from './orders'` both the `normalize` and the `canonicalize` tokens are non-definition occurrences that resolve to the origin symbol scip-typescript npm . . src/`orders.ts`/normalize(). The re-export edge is recovered from occurrence resolution on the export statement, not from a symbol or a relationship.",
+        "alias_symbol_emitted": false,
+        "relationship_emitted": false,
+        "edge_source": "occurrence_resolution",
+        "ground_truth": true,
+        "verified_with": {
+          "tool": "@sourcegraph/scip-typescript",
+          "version": "0.4.0",
+          "typescript_version": "5.9.3",
+          "toolchain_pinned_by": "scripts/scip-toolchain/package-lock.json (npm ci)",
+          "command": "scip-typescript index --no-progress-bar (cwd fixtures/provider-authority/corpus/typescript, committed tsconfig.json)",
+          "observed_artifact": "fixtures/provider-authority/scip/typescript-corpus.observed.json",
+          "verified_on": "2026-08-29"
+        }
+      },
+      {
+        "provider_id": "typescript-lsp",
+        "authority": "exact",
+        "native_exported_symbol": "src/index.ts::canonicalize",
+        "native_re_export_target": "src/orders.ts::normalize",
+        "represented_as": "definition location of canonicalize resolves to normalize",
+        "ground_truth": false
+      }
+    ],
+    "expected_canonical_key_of_origin": {
+      "fact_schema_version": "1",
+      "language": "typescript",
+      "path": "src/orders.ts",
+      "fact_kind": "unit",
+      "owner": "src.orders",
+      "symbol": "src.orders/normalize",
+      "overload_identity": null,
+      "dispatch_identity": null
+    },
+    "expected_re_export_relation": {
+      "fact_kind": "relation",
+      "relation_type": "module/re-exports",
+      "source_symbol": "src/canonicalize",
+      "target_key": {
+        "language": "typescript",
+        "symbol": "src.orders/normalize"
+      }
+    },
+    "normalization_obligations": [
+      "Every provider's native re-export target moniker must resolve to the ONE canonical key of the origin definition (src.orders/normalize).",
+      "Provider-native monikers (scip-typescript ..., LSP file::symbol) are evidence only and must never be the merge key.",
+      "scip-typescript does not model the re-export as a fact of its own: the SCIP adapter derives the re-export edge from occurrence resolution on the export statement (both alias and origin tokens point at the origin symbol). A missing SCIP alias fact is not a conflict; the heuristic/structural tier supplies the distinct exported-symbol unit and the SCIP evidence corroborates the origin resolution."
+    ]
+  },
+  "distinct_facts_must_not_merge": [
+    {
+      "fact": "src/canonicalize (alias) vs src.orders/normalize (origin)",
+      "reason": "The alias creates a distinct EXPORTED symbol at a distinct path. The re-export unit and the origin unit are different facts joined by a re-exports relation; they must not collapse into one unit. scip-typescript@0.4.0 does not corroborate `src/canonicalize` as its own symbol (it emits none), so this distinct exported-symbol unit rests on the heuristic/structural tier; SCIP only confirms that the alias token resolves to the origin.",
+      "regex_ground_truth": {
+        "alias_symbol": "src/canonicalize",
+        "origin_symbol": "src.orders/normalize"
+      },
+      "expected_canonical_key": {
+        "language": "typescript",
+        "fact_kind": "unit",
+        "path": "src/index.ts",
+        "owner": "src.index",
+        "symbol": "src/canonicalize"
+      }
+    },
+    {
+      "fact": "src/createOrder (re-export, name preserved)",
+      "reason": "A separate re-export whose exported name equals the origin name; still a distinct index-module export from src/orders createOrder and must resolve to that origin.",
+      "regex_ground_truth": {
+        "alias_symbol": "src/createOrder",
+        "re_export_target": "src.orders/createOrder"
+      },
+      "expected_canonical_key": {
+        "language": "typescript",
+        "fact_kind": "unit",
+        "path": "src/index.ts",
+        "owner": "src.index",
+        "symbol": "src/createOrder"
+      }
+    }
+  ]
+}

@@ -1,22 +1,43 @@
 ---
 title: "semidx Extension Architecture Resolution Plan"
 doc_type: "architecture_plan"
-lifecycle: "active"
-status: "draft"
-agent_action: "reference_for_context"
-updated: "2026-08-01"
+lifecycle: "archived"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-27"
 ---
 
 # Semidx Extension Architecture Resolution Plan
 
-Status: Active architecture plan
+Status: Archived historical architecture bridge
+
+## Closure Note
+
+This document is no longer an active execution queue. It resolved the extension
+architecture boundaries that later work now owns through more specific plans
+and ADRs.
+
+Current continuation owners:
+
+- `plans/018_semantic_provider_authority_migration_plan.md` owns provider
+  authority, canonical fact identity, evidence, arbitration, and SCIP/LSP
+  migration.
+- `plans/019_llm_one_shot_context_delivery_and_evaluation_plan.md` owns
+  additive one-shot context delivery.
+- `plans/020_retrieval_value_benchmark_harness_plan.md` owns comparative
+  value measurement and is the current highest-priority execution substrate.
+- `ideas/015_semidx_feature_inventory_for_prioritization.md` records the
+  feature inventory that will feed a new plan after owner prioritization.
+
+Do not execute this plan directly. Use it only as historical context for why the
+provider, lifecycle, typed-relation, and degradation boundaries exist.
 
 ## Goal
 
 Resolve the structural gaps identified in:
 
-- [План работ: расширение `semidx`](../notes/2026-06-09-1015-95e50b0e-5dfa-4033-bc2b-db6db47ffda4.md);
-- [SOLID-обзор: план расширения semidx](../notes/2026-06-09-solid-architecture-review.md).
+- [Original `semidx` extension work plan](../notes/2026-06-09-1015-95e50b0e-5dfa-4033-bc2b-db6db47ffda4.md);
+- [SOLID review of the `semidx` extension plan](../notes/2026-06-09-solid-architecture-review.md).
 
 This document defines the architecture that later implementation plans must
 follow. It answers the open questions around:
@@ -50,7 +71,8 @@ This plan does not cover:
 
 - detailed Markdown or YAML extraction rules;
 - AutoParts-specific reference policies;
-- Kotlin, Swift, LSP, or JetBrains implementation details;
+- Kotlin, Swift, or JetBrains implementation details; Java/TypeScript LSP and
+  SCIP authority are defined by ADR-046 and plans/018.
 - user-facing editing, rename, or refactoring operations;
 - embedding model selection.
 
@@ -69,6 +91,9 @@ This plan does not cover:
   freshness guarantees.
 - The first provider-registry version is an in-process Clojure data registry,
   not a plugin framework or remote extension marketplace.
+- ADR-046 amends the V1 one-primary-provider limitation for Java and TypeScript:
+  they use bounded, capability-specific multi-provider plans. A single primary
+  provider remains sufficient for unrelated simple document-provider cases.
 
 ## Change Model
 
@@ -328,18 +353,21 @@ This follows the interface-segregation pattern also visible in LSP, where
 capabilities are advertised per operation instead of treating all servers as
 equivalent.
 
-### Decision 9. Provider Selection Uses A Dedicated Deterministic Policy
+### Decision 9. Provider Planning Uses A Dedicated Deterministic Policy
 
 Provider selection is a pure policy owned outside the orchestrator:
 
 ```text
-select_provider(file_metadata, provider_descriptors, project_overrides)
-  -> selected_provider | no_provider | ambiguous_selection
+plan_providers(file_metadata, requested_operations, provider_descriptors,
+               runtime_status, source_identity, project_overrides)
+  -> ProviderPlan | no_provider | ambiguous_selection
 ```
 
-V1 chooses exactly one primary indexing provider per file. Multi-provider
-enrichment is explicitly postponed until a real use case requires merging
-facts from multiple providers.
+For simple document providers, one primary provider per file remains the
+default. For Java and TypeScript, ADR-046 requires a bounded plan per operation:
+fresh SCIP/LSP semantic evidence, tree-sitter structural gap filling, and regex
+only as degraded fallback. The planner, not a provider implementation, decides
+which providers are eligible and when lower-tier gap filling is needed.
 
 Selection precedence:
 
@@ -356,9 +384,10 @@ Within the same selector class:
 3. a non-fallback provider always beats fallback;
 4. an unresolved top-level tie produces `ambiguous_provider_selection`.
 
-An unresolved tie does not silently select by registration order or provider
-identifier. The affected file is reported as failed or skipped; the rest of the
-repository may still be indexed.
+An unresolved equal-authority tie does not silently select by registration order
+or provider identifier. The affected operation is reported as ambiguous; the
+rest of the repository may still be indexed through eligible non-conflicting
+providers.
 
 This borrows the useful part of VS Code's document-selector model: providers
 declare applicability, selectors receive specificity scores, and selection is
@@ -590,7 +619,7 @@ Primary expected location:
 
 Responsibility:
 
-- select one primary provider or produce an explicit selection diagnostic.
+- produce a bounded ProviderPlan or an explicit selection diagnostic.
 
 Knows about:
 
@@ -785,6 +814,8 @@ Exit criteria:
 - fallback cannot outrank a specific provider;
 - unresolved ties are reported explicitly;
 - provider selection is independently testable.
+- Java/TypeScript multi-provider plans preserve deterministic authority and
+  explicit degradation under ADR-046.
 
 ### Stage 3. Discovery Separation
 
@@ -871,8 +902,9 @@ Goal:
 - add Kotlin, Gradle Kotlin DSL, project structure, and external providers
   without changing the stable provider-selection and relation contracts.
 
-LSP and JetBrains providers must adapt their operation capabilities and runtime
-status into the same runtime-owned schemas.
+Java/TypeScript SCIP and LSP providers are sequenced by plans/018. Future LSP
+and JetBrains providers must adapt their operation capabilities and runtime
+status into the same runtime-owned schemas without changing provider planning.
 
 ## Contract Tests
 
@@ -894,6 +926,8 @@ status into the same runtime-owned schemas.
 - fallback is selected only when no stronger provider is eligible;
 - tied primary providers produce `ambiguous_provider_selection`;
 - registration order does not affect selection.
+- Java/TypeScript lower-authority providers cannot overwrite fresh exact facts;
+  equal-authority conflicts remain observable.
 
 ### Provider Substitution Contract
 
@@ -1008,7 +1042,8 @@ Why it matters:
 Mitigation:
 
 - data registry only;
-- one primary provider per file;
+- bounded provider plans with one primary only where no multi-provider semantic
+  authority is required;
 - no external loading before a concrete provider requires it.
 
 ### [Medium] Relation Dual-Write Diverges
@@ -1060,34 +1095,86 @@ system wholesale:
   while others explicitly merge provider results:
   - <https://code.visualstudio.com/api/references/vscode-api#DocumentSelector>
 
-The `semidx` design intentionally chooses one primary indexing provider per file
-for V1. This is stricter than VS Code's operation-specific merging behavior and
-avoids premature multi-provider fact reconciliation.
+For simple document-provider cases, `semidx` intentionally retains one primary
+indexing provider per file. ADR-046 and plans/018 introduce the first justified
+exception: bounded Java/TypeScript semantic-provider reconciliation with stable
+fact identity, source-identity checks, and explicit conflict diagnostics.
 
-## First Executable Plan Boundary
+## Historical First Boundary And Current Continuations
 
-The next implementation plan must cover only Stages 0 and 1:
+The original first executable boundary covered only Stages 0 and 1: contract
+baselines, workspace state, freshness policy, lifecycle coordination, snapshot
+payload persistence, stale-cache prevention, atomic publication, tests, and
+public lifecycle diagnostics. That boundary was executed by
+[`plans/008`](./008_stage_0_1_workspace_freshness.md) and is historical; agents
+must not treat it as the next work queue.
 
-- contract baselines;
-- workspace state;
-- freshness policy;
-- lifecycle coordination;
-- snapshot payload persistence;
-- stale-cache prevention;
-- atomic publication;
-- tests and public lifecycle diagnostics.
+Current continuations are owned by narrower active plans:
 
-Provider catalog, discovery separation, typed relations, Markdown, and YAML must
-remain outside that first executable plan.
+- [`plans/018`](./018_semantic_provider_authority_migration_plan.md) owns the
+  provider catalog/planning, fact evidence/arbitration, and Java/TypeScript
+  semantic-authority migration. Its provider-neutral `CanonicalFactKey` must be
+  established before multi-provider arbitration.
+- [`plans/019`](./019_llm_one_shot_context_delivery_and_evaluation_plan.md) owns
+  additive one-shot delivery and its strategy adapters.
+- [`plans/020`](./020_retrieval_value_benchmark_harness_plan.md) owns the shared
+  real-repository corpus, benchmark-run identity, cross-strategy harness, usage
+  normalization, price schedules, and comparative aggregation.
+- Markdown/YAML discovery and vertical slices remain later stages of this plan;
+  they require dedicated executable plans after the provider seam is stable.
 
-## Completion Criteria For This Architecture Plan
+The typed-relation substrate for new graph semantics is delivered, while legacy
+call/import compatibility migration remains governed by the Stage 4 parity gate.
 
-This architecture plan is satisfied when:
+## Closure Criteria And Lifecycle Transition
 
-- all implementation plans use the boundaries and dependency direction defined
-  here;
-- stale cache hits are impossible under the documented freshness contract;
-- Markdown and YAML are introduced through the provider catalog;
-- typed relations reach parity before replacing existing graph projections;
-- operation capabilities and degradations are explicit and additive;
-- transports remain free of workspace, provider-selection, and relation policy.
+This document remains `active` only while it is the current architecture
+reference for an unresolved scope. It is never an executable work queue. Mark it
+`completed` only when **all** of the following closure gates have recorded
+evidence:
+
+1. **Continuation ownership is terminal or independently transferred.** Each
+   current continuation (`plans/018`, `plans/019`, `plans/020`) is either
+   `completed`, `cancelled`, or `superseded`, or an explicitly named active
+   successor repeats the boundaries, dependency direction, and admission gates
+   it needs without relying on this plan as its sole implementation source.
+2. **Freshness and lifecycle foundation is closed.** The Stage 0/1 freshness
+   boundary remains delivered with deterministic stale-cache prevention and
+   atomic publication, and any remaining lifecycle compatibility exception is
+   either resolved or accepted in an ADR with a named owner and review trigger.
+3. **Provider-catalog scope is disposed.** Markdown and YAML are introduced by
+   dedicated provider-catalog plans with verified degradation behavior, or an
+   accepted ADR explicitly cancels or defers each scope and defines the condition
+   that reopens it. Java/TypeScript semantic-provider authority is likewise
+   closed by `plans/018` or an equivalent successor.
+4. **Relation migration has a terminal parity decision.** Typed relation
+   identities, storage projection, traversal, retrieval/impact projection, and
+   legacy call/import compatibility have either met their parity gates before
+   replacement, or an accepted ADR has retained the compatibility projection
+   with an explicit reason and reassessment trigger.
+5. **Public architecture boundaries are proven.** Current library, MCP, HTTP,
+   and gRPC surfaces keep workspace state, provider selection, relation policy,
+   capability reporting, and degradation policy in runtime-owned boundaries;
+   applicable contract, replay, and transport-parity verification is recorded.
+6. **Documentation handoff is complete.** No active plan or ADR treats this
+   document as its only current source of implementation direction. The closure
+   progress record links the terminal successor/ADR decisions, verification
+   results, exceptions, and closing commit.
+
+A mere link to a future plan does not satisfy a gate: the successor must be
+active and self-contained for its remaining scope, or its terminal disposition
+must be recorded. If any gate is open, retain `lifecycle: active`,
+`status: in_progress`, and `agent_action: reference_for_context`.
+
+When every gate closes, make this lifecycle transition in the same commit:
+
+```yaml
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+```
+
+Also relabel the "Current Continuations" section as historical, update
+`MEMORY.md`, and create or update the companion progress log under `reports/`.
+Future implementation must then rely on the named active successor plans and
+accepted ADRs rather than reopening this umbrella plan.

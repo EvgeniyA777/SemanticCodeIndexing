@@ -1,10 +1,15 @@
 ---
+title: "Antigravity MCP Follow-Up"
+doc_type: "followup_note"
+lifecycle: "active"
+agent_action: "reference_for_context"
+updated: "2026-08-02"
 file_type: working-note
 topic: antigravity-mcp-follow-up
 created_at: 2026-03-11T15:50:00-0700
 author: ae
 language: en
-status: active-follow-up
+status: open
 ---
 
 # Working Note: Antigravity MCP Follow-Up

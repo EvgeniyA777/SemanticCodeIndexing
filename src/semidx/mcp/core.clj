@@ -965,6 +965,33 @@
                    :path_count (count (:paths selector))
                    :unit_id_count (count (:unit_ids selector))}}))))
 
+(defn tool-traverse-relations [state args]
+  (when-not (map? args)
+    (invalid-request "traverse_relations arguments must be an object"))
+  (let [entry (resolve-entry! state args)
+        start-nodes (normalize-unit-ids (:start_nodes args))
+        direction (:direction args)]
+    (when-not (contains? #{"downstream" "upstream"} direction)
+      (invalid-request "direction must be \"downstream\" or \"upstream\""))
+    (when-not (seq start-nodes)
+      (invalid-request "start_nodes must contain at least one unit id"))
+    (let [request (cond-> {:direction direction
+                           :start_nodes start-nodes}
+                    (seq (:relation_types args)) (assoc :relation_types (vec (:relation_types args)))
+                    (contains? args :resolved_only) (assoc :resolved_only (boolean (:resolved_only args)))
+                    (map? (:budgets args)) (assoc :budgets (:budgets args)))
+          result (sci/relation-traversal (:index entry) request {:suppress_usage_metrics true})]
+      (with-usage-event
+        (merge {:index_id (:index_id entry)} result)
+        {:root_path_hash (usage/hash-root-path (:root_path entry))
+         :payload (cond-> {:index_id (:index_id entry)
+                           :direction (:direction result)
+                           :node_count (count (:nodes result))
+                           :edge_count (count (:edges result))
+                           :path_count (count (:paths result))
+                           :snapshot_id (:snapshot_id result)}
+                    (:selection_id result) (assoc :selection_id (:selection_id result)))}))))
+
 (def tool-definitions
   [{:name "create_index"
     :description "Index a repository root or reuse a cached index. ALWAYS call this first before any codebase exploration. Returns an index_id for all subsequent calls. Use INSTEAD OF directory listing or glob search."
@@ -1050,6 +1077,22 @@
                   :required ["index_id"]
                   :oneOf [{:required ["intent"]} {:required ["query"]}]
                   :additionalProperties false}}
+   {:name "traverse_relations"
+    :description "Bounded traversal over typed semantic relations (dataflow) from start unit ids. direction \"downstream\" follows source->target (flows-to); \"upstream\" follows target->source (flows-from). Returns discovered nodes, edges, paths, applied budgets, truncation state, and a selection_id you can pass to expand_context / fetch_context_detail. Reuses the Stage 3 traversal kernel; ambiguous/unresolved edges are skipped unless resolved_only is false."
+    :inputSchema {:type "object"
+                  :properties {"index_id" {:type "string"}
+                               "start_nodes" {:type "array" :items {:type "string"}}
+                               "direction" {:type "string" :enum ["downstream" "upstream"]}
+                               "relation_types" {:type "array" :items {:type "string"}}
+                               "resolved_only" {:type "boolean"}
+                               "budgets" {:type "object"
+                                          :properties {"max_depth" {:type "integer"}
+                                                       "max_nodes" {:type "integer"}
+                                                       "max_discovery_paths" {:type "integer"}}
+                                          :additionalProperties false}
+                               "snapshot_id" {:type "string"}}
+                  :required ["index_id" "start_nodes" "direction"]
+                  :additionalProperties false}}
    {:name "skeletons"
     :description "Return lightweight code skeletons (signatures, structure) for files or units. Use INSTEAD OF reading full source files when you only need API shapes."
     :inputSchema {:type "object"
@@ -1093,6 +1136,7 @@
    "literal_file_slice" tool-literal-file-slice
    "snapshot_diff" tool-snapshot-diff
    "impact_analysis" tool-impact-analysis
+   "traverse_relations" tool-traverse-relations
    "skeletons" tool-skeletons
    "health" tool-health
    "capabilities" tool-capabilities})

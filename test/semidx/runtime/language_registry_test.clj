@@ -22,6 +22,7 @@
    ["src/app.mjs" "javascript"]
    ["src/app.cjs" "javascript"]
    ["src/app.lua" "lua"]
+   ["src/app.zig" "zig"]
    ["public/index.html" "html"]
    ["public/index.htm" "html"]
    ["public/styles.css" "css"]])
@@ -43,7 +44,7 @@
                                                            :symbol "README"}))))))
 
 (deftest language-registry-public-metadata-alignment-test
-  (is (= ["clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "html" "css"]
+  (is (= ["clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "zig" "html" "css"]
          registry/supported-language-order))
   (is (= registry/supported-language-order
          (activation/supported-languages)))

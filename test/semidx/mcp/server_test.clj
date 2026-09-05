@@ -291,7 +291,7 @@
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
+          (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
@@ -588,6 +588,25 @@
             (is (map? (:impact_hints impact-data)))
             (is (contains? (:impact_hints impact-data) :callers))))
 
+        (testing "traverse_relations returns a bounded relation walk with a selection handle"
+          (let [traverse-response (call-tool! handle 71 "traverse_relations"
+                                              {:index_id index-id
+                                               :start_nodes ["src/my/app/order.clj::my.app.order/validate-order"]
+                                               :direction "downstream"
+                                               :budgets {:max_depth 2}})
+                traverse-data (get-in traverse-response [:result :structuredContent])]
+            (is (not (:isError (:result traverse-response))))
+            (is (= index-id (:index_id traverse-data)))
+            (is (= "downstream" (:direction traverse-data)))
+            (is (contains? (set (map :unit_id (:nodes traverse-data)))
+                           "src/my/app/order.clj::my.app.order/validate-order"))
+            (is (string? (:snapshot_id traverse-data))))
+          (let [bad-direction (call-tool! handle 72 "traverse_relations"
+                                          {:index_id index-id
+                                           :start_nodes ["src/my/app/order.clj::my.app.order/validate-order"]
+                                           :direction "sideways"})]
+            (is (true? (:isError (:result bad-direction))))))
+
         (testing "skeletons returns selected unit skeletons"
           (let [skeletons-response (call-tool! handle 8 "skeletons" {:index_id index-id
                                                                      :paths ["src/my/app/order.clj"]})
@@ -714,7 +733,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "skeletons" "health"}
+        (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health"}
                tool-names)))
       (finally
         (destroy-process! handle)))))

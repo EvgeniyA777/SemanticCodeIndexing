@@ -1,0 +1,149 @@
+;; Retrieval value benchmark task suite (plans/020 Stage 2).
+;;
+;; Frozen inputs for the v1 suite. Every task is scored by the harness against
+;; the ground truth recorded here, so a task definition is an experimental
+;; input and must not be edited after a scored run starts. Repository revisions
+;; are NOT recorded here: the harness resolves the checked-out revision of each
+;; repository at run time and records it in the BenchmarkRun.
+{:suite_version "benchmark_task_suite_v1"
+ :task_prompt_policy_id "agent_default_v1"
+
+ :repositories
+ [{:repo_key "semidx"
+   :language "clojure"
+   :external false
+   :default_workspace_path "."
+   :workspace_path_env "SEMIDX_BENCH_SEMIDX_PATH"}
+  {:repo_key "aegis-zig"
+   :language "zig"
+   :external true
+   :default_workspace_path "/Users/ae/workspaces/Zig/aegis"
+   :workspace_path_env "SEMIDX_BENCH_AEGIS_PATH"}]
+
+ :tasks
+ [;; ---------------------------------------------------------------------
+  ;; Negative-utility calibration cases (preregistration report 023 section 2.5).
+  ;; ---------------------------------------------------------------------
+  {:task_id "zig_api_surface_signatures_v1"
+   :task_type "api_surface_extraction"
+   :repo_key "aegis-zig"
+   :language "zig"
+   :arms ["A" "B" "C" "D"]
+   :prompt "List the public API surface of the control-plane runtime seam in src/control/runtime.zig: every public declaration and its signature. Do not include private helpers."
+   :negative_utility
+   {:expected_failure_mode "skeletons returns more context than needed for public signatures"
+    :comparator_requirement "Arm B must use targeted lexical patterns for public declarations, not whole-file reads"
+    :scoring_rule "Arm A wins only if returned context is compact and sufficient; otherwise excess cost is recorded"}
+   :ground_truth
+   {:required_paths ["src/control/runtime.zig"]
+    :required_symbols ["AwaitError" "ControlledRuntime" "RuntimeFactory" "PlanCompiler"]
+    :required_facts ["ControlledRuntime.awaitOutcome" "ControlledRuntime.actors"]}
+   :cost_ceiling {:max_returned_tokens 1200}}
+
+  {:task_id "zig_struct_config_fields_v1"
+   :task_type "field_fact_discovery"
+   :repo_key "aegis-zig"
+   :language "zig"
+   :arms ["A" "B" "C" "D"]
+   :prompt "Which fields does the actor engine Config struct declare, and how are they consumed by engine init and start?"
+   :negative_utility
+   {:expected_failure_mode "missing container/config field facts"
+    :comparator_requirement "Arm B may combine targeted lexical search with bounded reads around the struct and init/start functions"
+    :scoring_rule "missing required fields is a false negative"}
+   :ground_truth
+   {:required_paths ["src/engine/actor.zig"]
+    :required_symbols ["Config" "ActorEngine"]
+    :required_facts ["behaviors" "schemas" "output" "clock" "ids" "io" "dispatcher"
+                     "capability_workers" "capability_queue_capacity"
+                     "max_handoff_wait_ns" "deadline_poll_interval_ns"
+                     "ActorEngine.init" "ActorEngine.start"]}}
+
+  {:task_id "zig_controlled_runtime_blast_radius_v1"
+   :task_type "blast_radius"
+   :repo_key "aegis-zig"
+   :language "zig"
+   :arms ["A" "B" "C" "D"]
+   :prompt "What is the blast radius of changing the ControlledRuntime struct? List every file that defines, re-exports, constructs, or consumes it."
+   :negative_utility
+   {:expected_failure_mode "impact_analysis or staged selection seeds an unrelated module"
+    :comparator_requirement "Arm B must produce exact references or bounded source links for the named runtime symbol"
+    :scoring_rule "unrelated seed selection is a failure, even if impact output is non-empty"}
+   :ground_truth
+   {:required_paths ["src/control/runtime.zig" "src/control/root.zig"
+                     "src/control/service.zig" "src/app/process.zig"
+                     "src/control/fixture.zig"]
+    :required_symbols ["ControlledRuntime"]
+    :forbidden_path_prefixes ["src/adapters/"]}}
+
+  {:task_id "stale_snapshot_after_edit_v1"
+   :task_type "snapshot_freshness"
+   :repo_key "semidx"
+   :language "clojure"
+   :arms ["A" "B" "C" "D"]
+   :prompt "A new public function was just added to this repository. Name the function that marks benchmark freshness and the file it lives in, using the current working tree."
+   :negative_utility
+   {:expected_failure_mode "a pre-edit snapshot is reused after material file changes"
+    :comparator_requirement "Arm B reads the current working tree"
+    :scoring_rule "stale snapshot reuse is recorded separately from ranking quality"}
+   :workspace_mutation
+   {:kind "append_text"
+    :path "src/semidx/runtime/benchmark_freshness_probe.clj"
+    :content "(ns semidx.runtime.benchmark-freshness-probe)\n\n(defn benchmark-freshness-probe-marker\n  \"Marker function appended by the stale_snapshot_after_edit_v1 benchmark task.\"\n  []\n  :benchmark-freshness-probe)\n"}
+   :freshness_check {:require_post_mutation_snapshot true}
+   :ground_truth
+   {:required_paths ["src/semidx/runtime/benchmark_freshness_probe.clj"]
+    :required_symbols ["benchmark-freshness-probe-marker"]}}
+
+  ;; ---------------------------------------------------------------------
+  ;; Ordinary retrieval tasks spanning the remaining task types.
+  ;; ---------------------------------------------------------------------
+  {:task_id "semidx_selection_stage_entrypoint_v1"
+   :task_type "symbol_lookup"
+   :repo_key "semidx"
+   :language "clojure"
+   :arms ["A" "B" "C" "D"]
+   :prompt "Where is the compact staged selection produced for resolve_context, and which public API function calls it?"
+   :ground_truth
+   {:required_paths ["src/semidx/runtime/retrieval.clj" "src/semidx/core.clj"]
+    :required_symbols ["resolve-context"]}}
+
+  {:task_id "semidx_usage_event_recording_callers_v1"
+   :task_type "caller_tracing"
+   :repo_key "semidx"
+   :language "clojure"
+   :arms ["A" "B" "C" "D"]
+   :prompt "Which code records usage events into the usage-metrics sink, and through which helper does it go?"
+   :ground_truth
+   {:required_paths ["src/semidx/core.clj" "src/semidx/runtime/usage_metrics.clj"]
+    :required_symbols ["safe-record-event!" "record-event!"]}}
+
+  {:task_id "semidx_mcp_tool_dispatch_edit_prep_v1"
+   :task_type "edit_preparation"
+   :repo_key "semidx"
+   :language "clojure"
+   :arms ["A" "B" "C" "D"]
+   :prompt "I need to add a new MCP tool. Which file declares the MCP tool list and dispatches tool calls to handlers?"
+   :ground_truth
+   {:required_paths ["src/semidx/mcp/core.clj"]
+    :required_symbols ["tool-definitions"]}}
+
+  {:task_id "semidx_language_registry_test_targeting_v1"
+   :task_type "test_targeting"
+   :repo_key "semidx"
+   :language "clojure"
+   :arms ["A" "B" "C" "D"]
+   :prompt "Which test namespace covers the language registry, and where does it live?"
+   :ground_truth
+   {:required_paths ["test/semidx/runtime/language_registry_test.clj"]
+    :required_symbols ["semidx.runtime.language-registry-test"]}}
+
+  {:task_id "aegis_capability_worker_config_flow_v1"
+   :task_type "code_understanding"
+   :repo_key "aegis-zig"
+   :language "zig"
+   :arms ["A" "B" "C" "D"]
+   :prompt "How does capability execution stay off the actor threads? Point at the configuration fields and the engine code that uses them."
+   :ground_truth
+   {:required_paths ["src/engine/actor.zig"]
+    :required_symbols ["ActorEngine"]
+    :required_facts ["capability_workers" "capability_queue_capacity"]}}]}

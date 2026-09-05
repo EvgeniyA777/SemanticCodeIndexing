@@ -1,10 +1,17 @@
 ---
+title: "Agent Codebase Exploration Protocol"
+doc_type: "policy_note"
+lifecycle: "superseded"
+agent_action: "do_not_use_for_current_work"
+updated: "2026-08-02"
+superseded_by:
+  - RULES.md
 file_type: working-note
 topic: agent-exploration-protocol
 created_at: 2026-03-27T00:30:00-0700
 author: claude
 language: en
-status: draft
+status: superseded
 ---
 
 # Working Note: Agent Codebase Exploration Protocol

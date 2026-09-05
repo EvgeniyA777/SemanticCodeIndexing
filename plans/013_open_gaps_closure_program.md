@@ -1,10 +1,10 @@
 ---
 title: "Open Semantic and Ops Gaps Closure Program"
 doc_type: "implementation_plan"
-lifecycle: "active"
-status: "in_progress"
-agent_action: "reference_for_context"
-updated: "2026-08-01"
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 ---
 
 # Implementation Plan: Open Semantic and Ops Gaps Closure Program
@@ -35,8 +35,9 @@ review findings and their disposition, blockers, skipped checks).
    lanes and shared helpers now own extraction; `adapters.clj` is the thin
    dispatch facade required by the deeper semantic stages.
 2. **Stage 2 — Remove tree-sitter external-CLI runtime dependency** (gap 6) —
-   delivered under ADR-036 with regex as the guaranteed default and the
-   repository-managed toolchain as optional acceleration.
+   delivered with the repository-managed toolchain now recorded by ADR-047. The
+   historical regex-default authority clause in ADR-036 is superseded by
+   ADR-046 and plans/018.
 3. **Stage 3 — Interprocedural / dataflow-sensitive resolution v1** (gap 1). The
    major semantic tranche, built on the clean adapter base from Stage 1.
 4. **Stage 4 — Semantic graph query surface** (gap 7). Builds on the stabilized
@@ -72,7 +73,7 @@ Each stage MUST run this loop and record it in the progress log:
    only explicit paths (`git add <file> ...`, never `git add .`/`-A`). Branch off
    first if on `main`. Commit only after verification is green.
 5. **Review** — run the stage-gated external reviewer loop captured in
-   `notes/2026-07-13_stage-gated-external-reviewer-loop.md` and/or
+   `notes/2026-07-13-stage-gated-external-reviewer-loop.md` and/or
    `/code-review` on the stage diff. Record every finding.
 6. **Fixes** — address accepted findings; re-verify; record fix summary +
    changed files/commit hash + verification results in the progress log. Mark
@@ -142,16 +143,21 @@ sub-step; benchmark/quality parity is the gate.
 **Goal:** Make tree-sitter extraction work without a runtime dependency on an
 externally-installed tree-sitter CLI; keep pinned-grammar reproducibility.
 
+**Historical-policy note:** this delivered stage established the toolchain only.
+Its original regex-default authority policy is no longer current; ADR-046 makes
+tree-sitter a structural provider and regex degraded fallback, with migration
+sequenced by plans/018.
+
 **Current shape:** `scripts/setup-tree-sitter-grammars.sh` pins grammar refs
 (Clojure/Java/TypeScript); `tree-sitter-available?` / `tree-sitter-cst` in the
 lane layer shell out to the external CLI; `.tree-sitter-grammars/` holds
 bootstrapped grammars.
 
 **Sub-steps:**
-1. Use ADR-036 as the accepted strategy: keep regex parsers as the guaranteed
-   default, keep tree-sitter as optional acceleration, and resolve acceleration
-   through explicit parser options, environment configuration, and a
-   repository-managed toolchain rather than a required external CLI.
+1. Historical implementation used ADR-036 to resolve tree-sitter through
+   explicit parser options, environment configuration, and a repository-managed
+   toolchain rather than a required external CLI. ADR-047 retains that toolchain
+   decision independently of parser authority.
 2. Implement the chosen path in `languages/shared.clj` tree-sitter helpers.
 3. Ensure clean degradation + a diagnostic when the accelerated path is
    unavailable (no silent fallback — surface it).
@@ -213,6 +219,15 @@ canonical graph for all new graph semantics.
    keeping ambiguous flows conservative (no over-linking) and avoiding a public
    graph-query API in Stage 3. Start with reason-coded, low-weight support and
    preserve existing caller/callee outputs.
+   **Delivered:** `retrieval/build-impact-hints` consumes `traverse-relations`
+   and attaches an optional, reason-coded `:relation_support` field to
+   `impact_hints` (downstream dataflow dependencies / upstream dataflow
+   dependents under a conservative `:resolved_only` sub-ceiling of depth 2 / 24
+   nodes / 12 paths). The field is omitted when there is no resolved
+   relation-backed unit, so legacy caller/callee/dependent/test outputs stay
+   byte-identical; ambiguous/unresolved relations are never surfaced. The
+   optional `relation_support` object is mirrored in the JSON and malli
+   `impact_hints` contracts. No public graph-query API was added.
 7. Recalibrate confidence ceilings only if evidence supports it; otherwise keep
    ceilings unchanged and document the non-bump (as done previously).
 
@@ -240,26 +255,30 @@ per lane if the diff grows.
 query surface and add a PostgreSQL physical projection without moving graph
 policy into storage.
 
-**Current shape:** `storage.clj` (453 lines) exposes single-hop caller/callee/
-unit queries over `semantic_index_call_edges` (in-memory + PostgreSQL).
+**Current shape:** `storage.clj` exposes single-hop caller/callee/unit queries
+over `semantic_index_call_edges` (in-memory + PostgreSQL). ADR-040 now fixes the
+Stage 4 public and execution contract; its implementation is in progress.
 
 **Sub-steps:**
-1. Specify the public query surface in a new ADR numbered with the next
-   available ADR at execution time. Reuse the Stage 3 traversal semantics and
-   bounds instead of defining a second graph walk.
+1. Use accepted ADR-040 as the public query decision: expose bounded relation
+   traversal through library + MCP first, report HTTP/gRPC as `not_exposed`, and
+   reuse the Stage 3 traversal semantics and bounds instead of defining a second
+   graph walk. **Delivered in Stage 4.1.**
 2. Add JSON Schema under `contracts/schemas/` + `malli` mirror in
-   `src/semidx/contracts/` for the new query request/response.
+   `src/semidx/contracts/` for the new query request/response. **Delivered in
+   Stage 4.1.**
 3. Add a `semantic_index_relations` PostgreSQL projection scoped by repository
    and snapshot, with source, target, relation-type, and evidence indexes plus
    an explicit migration/backfill policy.
 4. Implement a PostgreSQL execution adapter for the canonical traversal
    contract and prove parity with the pure in-memory kernel. Storage may
    optimize execution but must not own traversal semantics.
-5. Expose it on the public surfaces only where it fits the staged-retrieval
-   contract; keep MCP/library/HTTP/gRPC aligned.
+5. Expose `traverse_relations` through library + MCP and keep capability metadata
+   explicit: library/MCP `supported`, HTTP/gRPC `not_exposed`. HTTP/gRPC parity
+   is a follow-up and must reuse the same contract and traversal kernel.
 
 **Verification:** `./scripts/validate-contracts.sh`; storage parity tests
-(in-memory vs PostgreSQL, `SCI_TEST_POSTGRES_URL`) — detect/stop/fresh-start the
+(in-memory vs PostgreSQL, `SEMIDX_TEST_POSTGRES_URL`) — detect/stop/fresh-start the
 PostgreSQL instance before running; `clojure -M:test`.
 
 **Docs:** the new Stage 4 ADR; `contracts/` updates; `docs/runtime-api.md` +
@@ -278,8 +297,10 @@ the unrelated runtime-operations stages below:
    relations.
 3. Ship one Protobuf/OpenAPI vertical slice that links a contract operation to
    a client call site, implementation, generated artifact, and documentation.
-4. Evaluate SCIP as an evidence provider over the same relation contract; it
-   must enrich existing semantic relations rather than create a parallel graph.
+4. Execute the accepted ADR-046 / plans/018 semantic-provider migration:
+   SCIP/LSP evidence must enrich existing semantic relations rather than create
+   a parallel graph, tree-sitter fills structural gaps, and regex is degraded
+   fallback.
 
 This product sequence is independent of the ordering of operational Stages 5-7
 and should receive its own implementation plan before provider work begins.
@@ -288,20 +309,26 @@ and should receive its own implementation plan before provider work begins.
 
 ## Stage 5 — gRPC generated stubs (gap 3)
 
+**Status:** Delivered under ADR-042.
+
 **Goal:** Replace runtime descriptor-built gRPC messages with generated
 Java/Kotlin stubs from `proto/semidx/runtime/grpc/v1/runtime.proto`.
 
-**Current shape:** `grpc_proto.clj` (431 lines) builds messages from descriptors
-at runtime; `grpc.clj` is the edge; parity tests are `semidx.runtime-grpc-test`.
+**Delivered shape:** `runtime.proto` is the single editable wire-schema source;
+committed generated Java lives under `src-generated/java`; the build contour
+owns pinned code generation and drift verification; the test/runtime launchers
+perform offline idempotent javac preparation; and `grpc_proto.clj` / `grpc.clj`
+use generated messages and `RuntimeServiceGrpc` descriptors.
 
-**Sub-steps:**
+**Delivered sub-steps:**
 1. Add a protobuf codegen path (build alias in `deps.edn`) producing stubs from
    the pinned `.proto`; record the toolchain decision in a new ADR numbered
    with the next available ADR at execution time.
 2. Wire `grpc_proto.clj` / `grpc.clj` to the generated stubs while preserving the
    dedicated runtime envelope messages and error-trailer taxonomy
    (`x-sci-error-code` / `x-sci-error-category`).
-3. Keep a descriptor fallback only if it does not add silent divergence.
+3. Prove parity against the descriptor-built oracle and remove that oracle so
+   no fallback or parallel schema remains.
 
 **Verification:** `semidx.runtime-grpc-test` parity; `clojure -M:runtime-grpc`
 smoke; error-taxonomy trailers unchanged.
@@ -343,19 +370,26 @@ candidates).
 
 ## Stage 7 — Runtime-edge rate limiting (gap 5)
 
+**Status:** Delivered under ADR-044.
+
 **Goal:** Add optional in-runtime rate limiting on HTTP/gRPC edges as defense in
 depth, without displacing ingress/proxy responsibility.
 
-**Current shape:** rate limiting is delegated to ingress/proxy/host; runtime
-edges (`http.clj`, `grpc.clj`) have tenant/correlation context but no limiter.
+**Delivered shape:** `runtime/rate_limit.clj` owns one bounded, monotonic,
+fixed-window kernel shared by HTTP and gRPC. It is default-off, supports tenant
+or tenant+actor scopes, emits unified 429/`RESOURCE_EXHAUSTED` errors with retry
+metadata, and records allow/reject decisions for SLO rollups. Ingress remains
+authoritative for distributed quotas.
 
 **Sub-steps:**
-1. In a new ADR numbered with the next available ADR at execution time, scope
+1. ADR-044 scopes
    an optional, config-gated limiter (per-tenant / per-actor), default off,
-   emitting the unified error taxonomy on rejection.
+   emitting the unified error taxonomy on rejection. **Delivered.**
 2. Implement as edge middleware on HTTP and gRPC, fed by existing
    tenant/correlation context; surface limiter decisions in usage metrics.
+   **Delivered.**
 3. Keep it opt-in so the default in-memory/local path is unchanged.
+   **Delivered.**
 
 **Verification:** edge conformance tests with limiter on/off; usage-metrics
 rollup includes limiter rejections; error taxonomy on 429-equivalent responses.
@@ -375,3 +409,11 @@ rollup includes limiter rejections; error taxonomy on 429-equivalent responses.
 - ADRs 033-039 (as applicable) capture the durable decisions.
 - `clojure -M:test`, `./scripts/run-mvp-gates.sh`, `./scripts/run-benchmarks.sh`,
   and `./scripts/run-semantic-quality-report.sh` are green on the final state.
+
+## Completion Note
+
+All seven implementation stages are delivered. The final MVP gate and benchmark
+suite are green. The standalone semantic-quality command exits successfully but
+continues to report its pre-existing non-gating advisory baseline
+(`gate_eligible=false`, 5/6 expected-change matches); Stage 7 changes only
+runtime edges and does not alter extraction, ranking, resolution, or confidence.

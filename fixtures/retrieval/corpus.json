@@ -93,6 +93,18 @@
       "purpose": "Lua broad path targeting should remain ambiguity-aware and plan-safe."
     },
     {
+      "fixture_id": "retrieval_zig_happy_path_001",
+      "category": "zig_onboarding",
+      "path": "zig-happy-path.json",
+      "purpose": "Zig exact symbol targeting should keep authority units in top_authority with low-ceiling confidence."
+    },
+    {
+      "fixture_id": "retrieval_zig_ambiguity_001",
+      "category": "zig_ambiguity",
+      "path": "zig-ambiguity.json",
+      "purpose": "Zig broad path targeting should remain ambiguity-aware and plan-safe."
+    },
+    {
       "fixture_id": "retrieval_html_happy_path_001",
       "category": "html_onboarding",
       "path": "html-happy-path.json",

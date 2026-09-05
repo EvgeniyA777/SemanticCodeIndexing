@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-028
 title: "Prioritize Tree-Sitter Adoption by Language Risk and Parser Ceiling"
-status: proposed
+status: accepted
 date: 2026-03-18
 deciders:
   - project owner
@@ -16,7 +16,7 @@ links: []
 ---
 # ADR-028: Prioritize Tree-Sitter Adoption by Language Risk and Parser Ceiling
 
-**Status**: Proposed  
+**Status**: Accepted
 **Date**: 2026-03-18  
 **Deciders**: project owner
 
@@ -133,13 +133,16 @@ Reasons:
 
 ## Evidence in the Current Repository
 
-- The supported-language set is defined in `src/semantic_code_indexing/runtime/language_activation.clj`.
-- Shared tree-sitter probing, grammar lookup, and diagnostics wiring live in `src/semantic_code_indexing/runtime/adapters.clj`.
+- The supported-language set is defined in `src/semidx/runtime/language_registry.clj`
+  and consumed by `src/semidx/runtime/language_activation.clj`.
+- Shared tree-sitter probing, grammar lookup, and diagnostics wiring live in
+  `src/semidx/runtime/languages/shared.clj`.
 - Elixir’s current parser is heavily heuristic-driven in `parse-elixir-file`, including alias/use/import expansion and arity-aware call handling.
 - Python’s current parser already models indentation, nested scope, and import/call expansion in `parse-python-file`.
 - Lua’s current parser is explicitly narrow and module-table oriented in `parse-lua` / `parse-lua-file`.
 - Tree-sitter paths already exist for Clojure and Java in `runtime/adapters.clj`.
-- TypeScript has its own tree-sitter path in `src/semantic_code_indexing/runtime/languages/typescript.clj`.
+- TypeScript has its own tree-sitter path in
+  `src/semidx/runtime/languages/typescript.clj`.
 - Runtime tests already reflect the different maturity levels:
   - tree-sitter parser-path and TypeScript parity tests for existing tree-sitter lanes
   - many focused regression tests for Elixir and Python heuristics

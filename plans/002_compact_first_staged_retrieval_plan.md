@@ -2,9 +2,9 @@
 title: "Compact-First Staged Retrieval Plan"
 doc_type: "architecture_plan"
 lifecycle: "completed"
-status: "delivered"
+status: "completed"
 agent_action: "historical_reference_only"
-updated: "2026-07-13"
+updated: "2026-08-02"
 ---
 
 # Compact-First Staged Retrieval Plan

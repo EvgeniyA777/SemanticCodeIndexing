@@ -66,22 +66,83 @@ The semantic snapshot productization tail is now also delivered for the current 
 The `plans/013` Stage 1 adapter split is now delivered for the current scope:
 
 - `semidx.runtime.adapters` is a thin public parser facade over the language registry and per-language lane namespaces
-- Clojure, Java, Python, Lua, TypeScript, and JavaScript parser ownership now lives under `semidx.runtime.languages.*`
+- Clojure, Java, Python, Lua, Zig, TypeScript, and JavaScript parser ownership now lives under `semidx.runtime.languages.*`
+- Zig definition and container-ownership facts now use one bounded ZLS/LSP session per indexing operation, with exact-current-source `documentSymbol` requests and regex fallback/supplementation
 - shared line/signature/token and tree-sitter helper mechanics live in `semidx.runtime.languages.shared`
 - the remaining legacy TypeScript adapter block and adapter-private compatibility wrappers have been removed rather than carried forward
 
-The `plans/013` Stage 2 tree-sitter dependency cleanup is now delivered under `ADR-036`: regex parsing remains the guaranteed default, tree-sitter stays optional, runtime CLI resolution prefers explicit parser options, environment configuration, and the repo-managed `.tree-sitter-grammars/bin/tree-sitter` link, and ambient `PATH` is only a developer fallback.
+The `plans/013` Stage 2 tree-sitter dependency cleanup is delivered. ADR-036 is
+superseded: ADR-047 retains its repo-managed CLI/grammar resolution boundary,
+while accepted ADR-046 and plans/018 replace its regex-default authority policy.
+The current regex-first implementation is a legacy migration baseline, not the
+target architecture: fresh SCIP/LSP evidence is primary per operation,
+tree-sitter fills structural gaps, and regex is explicitly degraded fallback.
 
-The next semantic focus is Stage 3 under `ADR-034`, `ADR-037`, and `ADR-038`:
+Stage 3 of `plans/013` is code-complete under ADR-034, ADR-037, ADR-038, and
+ADR-039:
 
-- the typed-relation substrate now exists on snapshots without changing current retrieval behavior
-- the Clojure lane now emits and resolves the v1 `dataflow/*` relation facts on that substrate
-- the Python lane now emits and resolves the same v1 `dataflow/*` relation facts on that substrate
-- interprocedural/dataflow-sensitive semantic resolution using the canonical relation-first graph captured by `ADR-037` and `ADR-038`
-- relation identity is now separated from mutable resolution/evidence and invalid facts produce explicit diagnostics under `ADR-039`: `relation_id` derives only from relation type, source endpoint, semantic target key, and flow payload, while `relation-errors` validates facts against an explicit internal schema and `index-relations` surfaces invalid facts as snapshot `:relation_diagnostics`
-- the storage-independent bounded traversal kernel now exists as `semidx.runtime.relations/traverse-relations`: a pure, cycle-safe, deterministic breadth-first walk with `:downstream`/`:upstream` direction, a relation-type allow-list, conservative `:resolved_only` default, and `max_depth`/`max_nodes`/`max_paths` budgets (depth 4 / 200 nodes / 50 paths), with no consumer wired to it yet
-- the next Stage 3 implementation step is bounded, reason-coded retrieval/impact projections that consume the traversal kernel over relation indexes
-- continued benchmark/replay-driven validation as deeper semantic layers land
-- Elixir tree-sitter readiness is now tracked by [notes/2026-03-26-1800-13931a71-c700-4f43-84d0-701ff08273b8.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1800-13931a71-c700-4f43-84d0-701ff08273b8.md) and benchmark delta evidence by [notes/2026-03-26-1839-abc6454d-f08a-44ae-abe2-dba1557049d6.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-abc6454d-f08a-44ae-abe2-dba1557049d6.md)
-- Python parser-strategy frontier is now tracked in [notes/2026-03-26-1839-7815c5cd-3357-4776-a628-71dc7f695ee8.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-7815c5cd-3357-4776-a628-71dc7f695ee8.md)
-- Interprocedural/dataflow v1 frontier is now tracked in [notes/2026-03-26-1839-152b99e3-3b4b-4feb-93a9-957f43950934.md](/Users/ae/workspaces/SemanticCodeIndexing/notes/2026-03-26-1839-152b99e3-3b4b-4feb-93a9-957f43950934.md)
+- Clojure and Python emit and resolve the v1 `dataflow/*` relation facts on the
+  canonical typed-relation graph;
+- relation identity is separated from mutable resolution/evidence and invalid
+  facts produce explicit snapshot diagnostics;
+- `semidx.runtime.relations/traverse-relations` provides the pure, deterministic,
+  cycle-safe bounded traversal kernel;
+- `build-impact-hints` consumes the kernel through conservative, reason-coded
+  `relation_support`, with no confidence-ceiling increase.
+
+Stage 4 of `plans/013` (semantic graph query surface, gap 7) is now fully
+delivered across all four runtime surfaces under ADR-040:
+
+- the bounded relation traversal is exposed as `semidx.core/relation-traversal`
+  (usage-metrics-wrapped) and the MCP `traverse_relations` tool, returning the
+  compact `relation-traversal` contract result plus a staged-retrieval
+  `selection_id` that reuses `expand_context` / `fetch_context_detail`;
+- the kernel runs through a batched frontier provider seam
+  (`traverse-relations-with`) so execution backends batch neighbor lookups
+  without owning traversal policy;
+- a forward-only PostgreSQL `semantic_index_relations` projection plus
+  `storage/pg-relation-neighbor-provider` execute the same traversal at proven
+  parity with the pure in-memory kernel (with-redefs parity plus a
+  `SEMIDX_TEST_POSTGRES_URL`-gated real-PostgreSQL round-trip test);
+- the HTTP edge (`POST /v1/retrieval/traverse-relations`) and the gRPC edge
+  (`TraverseRelations`, descriptor-built JSON-string messages with the unified
+  error taxonomy) now expose the same contract and kernel, so all four surfaces
+  (library/MCP/HTTP/gRPC) are aligned and the ADR-040 phased-exposure follow-up
+  is complete.
+
+Stage 5 is delivered under ADR-042: `runtime.proto` is the complete authoritative
+contract for all 16 envelope messages and eight unary RPCs; the repo-managed
+pinned toolchain deterministically generates and verifies 34 committed Java
+sources; ordinary test/runtime starts perform offline idempotent javac; and the
+runtime uses generated messages plus `RuntimeServiceGrpc` descriptors. The
+temporary descriptor-built oracle was removed after parity was proven.
+
+Stage 6 is delivered under ADR-043: the HTTP edge now exposes an online policy control-plane (`/v1/policies/registry`, `/v1/policies/promote`, `/v1/policies/retire`) that reuses offline governance gates and optionally persists state back to the registry file.
+
+Stage 7 is delivered under ADR-044: HTTP and gRPC share an optional, default-off
+fixed-window runtime limiter with bounded process-local state, tenant or
+tenant+actor scoping, unified 429/`RESOURCE_EXHAUSTED` rejections, retry
+metadata, and decision-based usage/SLO metrics. Ingress remains authoritative
+for distributed quotas.
+
+With operational Stages 5-7 complete, the next semantic priority is the provider
+catalog/discovery foundation followed by the accepted ADR-046 / plans/018
+semantic-provider authority migration. SCIP batch evidence and LSP live-overlay
+evidence enrich the same canonical relation graph; they are not a future
+parallel-graph spike. The Protobuf/OpenAPI vertical slice follows the provider
+foundation, while broader parser-deepening remains evidence-driven.
+
+The independent `plans/019` delivery track is now planned alongside that data
+plane: an additive one-shot `get_context` facade composes the existing
+snapshot-bound staged operations, an optional renderer projects the canonical
+ContextPacket to bounded Markdown, and a comparative harness measures task
+value, latency, round trips, and output cost against staged and lexical
+baselines. ADR-024 remains current; one-shot does not become the documented
+canonical default without comparative evidence and a new decision.
+
+The independent `plans/021` runtime-reuse track is integration work, not
+semantic-core work: existing MCP stdio, MCP HTTP, runtime HTTP, and runtime gRPC
+modes are long-lived once started, while `clojure -M:runtime` is a one-shot CLI
+that exits after a request. Runtime HTTP and MCP HTTP launcher reuse both
+ship behind the `:launcher` alias, and `plans/021` is completed: hardening,
+command latency reporting, and the cold-versus-warm benchmark landed in Stage 4.

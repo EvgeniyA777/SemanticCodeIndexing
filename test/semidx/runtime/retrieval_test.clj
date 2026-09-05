@@ -1,7 +1,9 @@
 (ns semidx.runtime.retrieval-test
   (:require [clojure.test :refer [deftest is testing]]
-            [semidx.runtime.retrieval]))
+            [semidx.runtime.retrieval]
+            [semidx.runtime.retrieval-policy :as rp]))
 
+(def ^:private impact-analysis #'semidx.runtime.retrieval/impact-analysis)
 (def ^:private perform-raw-fetch #'semidx.runtime.retrieval/perform-raw-fetch)
 (def ^:private suggested-token-budget #'semidx.runtime.retrieval/suggested-token-budget)
 
@@ -18,6 +20,93 @@
 (defn- escalation-query [level]
   {:options {:allow_raw_code_escalation true}
    :constraints {:max_raw_code_level level}})
+
+(defn- selection-for-impact [confidence capabilities]
+  {:selection_id "selection-1"
+   :snapshot_id "snapshot-1"
+   :query {:intent {:purpose "change_impact"
+                    :details "Find impact for ControlledRuntime"}
+           :targets {:symbols ["ControlledRuntime"]}}
+   :policy (rp/resolve-policy nil nil)
+   :bound_index {}
+   :focus [{:unit_id "src/adapter.zig::wrong/OllamaAdapter"
+            :symbol "wrong/OllamaAdapter"
+            :path "src/adapter.zig"
+            :module "wrong"}]
+   :confidence confidence
+   :capabilities capabilities})
+
+(deftest impact-analysis-degrades-unsafe-seed-test
+  (let [query {:intent {:purpose "change_impact"
+                        :details "Find impact for ControlledRuntime"}
+               :targets {:symbols ["ControlledRuntime"]}}
+        selection (selection-for-impact
+                   {:schema_version "1.0"
+                    :level "low"
+                    :score 0.2
+                    :reasons []
+                    :warnings [{:code "target_ambiguous"
+                                :summary "ambiguous"}]
+                    :missing_evidence [{:code "exact_target_resolution_missing"
+                                        :summary "missing"}]}
+                   {:confidence_ceiling "low"
+                    :coverage_level "full"
+                    :index_stale false})
+        build-called? (atom false)]
+    (with-redefs [semidx.runtime.retrieval/resolve-context
+                  (fn [_index _query _opts]
+                    {:selection_id "selection-1" :snapshot_id "snapshot-1"})
+                  semidx.runtime.retrieval/ensure-selection!
+                  (fn [_index _selection-id _snapshot-id] selection)
+                  semidx.runtime.retrieval/build-impact-hints
+                  (fn [& _]
+                    (reset! build-called? true)
+                    {:callers ["should-not-return"]})]
+      (let [result (impact-analysis {} query {})]
+        (is (= "degraded" (:result_status result)))
+        (is (= [] (:callers result)))
+        (is (= [] (:dependents result)))
+        (is (false? @build-called?))
+        (is (= #{"impact_seed_confidence_low"
+                 "impact_seed_ambiguous"
+                 "impact_seed_exact_target_missing"
+                 "impact_seed_capability_limited"}
+               (set (map :code (:degradations result)))))
+        (is (= "autonomy_blocked"
+               (get-in result [:guardrails :autonomy_posture])))))))
+
+(deftest impact-analysis-keeps-trusted-seed-test
+  (let [query {:intent {:purpose "change_impact"
+                        :details "Find impact for normalize-mcp-query"}
+               :targets {:symbols ["semidx.mcp.core/normalize-mcp-query"]}}
+        selection (selection-for-impact
+                   {:schema_version "1.0"
+                    :level "high"
+                    :score 0.9
+                    :reasons [{:code "exact_target_resolved"
+                               :summary "resolved"}]
+                    :warnings []
+                    :missing_evidence []}
+                   {:confidence_ceiling "high"
+                    :coverage_level "full"
+                    :index_stale false})]
+    (with-redefs [semidx.runtime.retrieval/resolve-context
+                  (fn [_index _query _opts]
+                    {:selection_id "selection-1" :snapshot_id "snapshot-1"})
+                  semidx.runtime.retrieval/ensure-selection!
+                  (fn [_index _selection-id _snapshot-id] selection)
+                  semidx.runtime.retrieval/build-impact-hints
+                  (fn [_index _selected]
+                    {:callers ["caller"]
+                     :dependents []
+                     :related_tests []
+                     :risky_neighbors []})
+                  semidx.runtime.state-invariants/assemble
+                  (fn [& _] nil)]
+      (let [result (impact-analysis {} query {})]
+        (is (= ["caller"] (:callers result)))
+        (is (nil? (:result_status result)))
+        (is (nil? (:degradations result)))))))
 
 (deftest oversized-unit-returns-partial-snippet-instead-of-empty-test
   (let [selection (sample-selection "big.py" 300)

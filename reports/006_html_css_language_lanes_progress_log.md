@@ -1,13 +1,17 @@
 ---
 title: "HTML and CSS Language Lanes Progress Log"
 doc_type: "progress_log"
-lifecycle: "active"
-status: "implemented"
-agent_action: "reference_for_context"
-updated: "2026-07-13"
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 ---
 
 # Progress Log: HTML and CSS Language Lanes
+
+This implementation log is closed. Preliminary unresolved review items were
+moved to `reports/019_legacy_workspace_and_html_css_followups.md` for explicit
+triage outside the completed plan.
 
 Companion progress log for [009_html_css_language_lanes_plan.md](../plans/009_html_css_language_lanes_plan.md).
 

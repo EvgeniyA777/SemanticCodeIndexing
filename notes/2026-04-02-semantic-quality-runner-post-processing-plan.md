@@ -1,10 +1,15 @@
 ---
+title: "Semantic-Quality Runner Post-Processing Plan"
+doc_type: "implementation_note"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: semantic-quality-runner-post-processing-consolidation
 created_at: 2026-04-02T13:05:00-0700
 author: codex
 language: en
-status: active
+status: completed
 reason: Created because the semantic-quality advisory runner has already required multiple fixes on the bash plus inline-python boundary, and we expect to revisit this runner again. This note preserves the full architecture plan so the next pass does not have to reconstruct the rationale.
 ---
 

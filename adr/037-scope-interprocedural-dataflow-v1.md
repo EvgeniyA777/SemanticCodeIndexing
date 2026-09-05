@@ -11,8 +11,8 @@ tags:
   - semantic-core
   - dataflow
   - relations
-summary: Stage 3 starts with a narrow relation-first interprocedural/dataflow slice: a new typed-relation substrate, Clojure then Python producers, and bounded retrieval/impact projections without migrating existing calls/imports.
-agent_summary: Read this ADR before implementing plans/013 Stage 3. The decision of record is a minimal v1: create the relation schema/index boundary, emit only new dataflow facts as typed relations, ship Clojure first and Python second, expose gains through conservative retrieval/impact projections, and leave existing calls/imports plus public graph query surfaces unchanged.
+summary: "Stage 3 starts with a narrow relation-first interprocedural/dataflow slice: a new typed-relation substrate, Clojure then Python producers, and bounded retrieval/impact projections without migrating existing calls/imports."
+agent_summary: "Read this ADR before implementing plans/013 Stage 3. The decision of record is a minimal v1: create the relation schema/index boundary, emit only new dataflow facts as typed relations, ship Clojure first and Python second, expose gains through conservative retrieval/impact projections, and leave existing calls/imports plus public graph query surfaces unchanged."
 supersedes: []
 superseded_by: null
 links:

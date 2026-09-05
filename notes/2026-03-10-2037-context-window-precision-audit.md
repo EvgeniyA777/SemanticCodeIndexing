@@ -1,4 +1,10 @@
 ---
+title: "Context-Window Savings Versus Retrieval Precision Audit"
+doc_type: "audit_note"
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: context-window-precision-audit
 created_at: 2026-03-10T20:37:10-0700

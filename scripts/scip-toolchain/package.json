@@ -1,0 +1,8 @@
+{
+  "name": "semidx-scip-toolchain",
+  "private": true,
+  "description": "Repo-managed scip-typescript toolchain for plans/018. Installed into .scip-toolchain/ by scripts/setup-scip-typescript.sh via `npm ci` against the committed lockfile, so the resolved scip-typescript AND typescript versions are reproducible on a clean checkout.",
+  "dependencies": {
+    "@sourcegraph/scip-typescript": "0.4.0"
+  }
+}

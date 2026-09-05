@@ -59,6 +59,13 @@
     (write-file! root "test/main_test.lua"
                  "local main = require(\"app.main\")\n\nlocal function test_run()\n  return main.run(\"A-1\")\nend\n\nreturn { test_run = test_run }\n")
 
+    (write-file! root "src/helpers.zig"
+                 "pub fn normalize(value: []const u8) []const u8 {\n    return value;\n}\n")
+    (write-file! root "src/main.zig"
+                 "const helpers = @import(\"helpers.zig\");\n\npub fn run(value: []const u8) []const u8 {\n    return helpers.normalize(value);\n}\n\npub const Runner = struct {\n    pub fn execute(self: *Runner, value: []const u8) []const u8 {\n        _ = self;\n        return run(value);\n    }\n};\n")
+    (write-file! root "test/main_test.zig"
+                 "const main = @import(\"../src/main.zig\");\n\ntest \"run normalizes input\" {\n    _ = main.run(\"A-1\");\n}\n")
+
     (write-file! root "src/example/normalize.ts"
                  "export function normalizeOrder(orderId: string): string {\n  return (orderId || \"\").trim().toLowerCase();\n}\n")
     (write-file! root "src/example/main.ts"

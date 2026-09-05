@@ -4,7 +4,7 @@ doc_type: "progress_log"
 lifecycle: "completed"
 status: "completed"
 agent_action: "historical_reference_only"
-updated: "2026-07-19"
+updated: "2026-08-02"
 ---
 
 # Capability Self-Description Progress Log
@@ -77,11 +77,11 @@ updated: "2026-07-19"
 ## Stage 5 — Docs & Finalization
 
 - **Status:** Done
-- **Summary:** Wrote ADR-025 documenting the capabilities self-description contract. Refreshed CCC artifacts and passed `ccc check`. Cleaned up stray benchmark artifacts. Final close-out complete.
+- **Summary:** Wrote ADR-041 documenting the capabilities self-description contract. Refreshed CCC artifacts and passed `ccc check`. Cleaned up stray benchmark artifacts. Final close-out complete.
 - **Verification:**
   - Full suite passed and `ccc check` is clean.
 - **Changed Files:**
-  - `adr/025-expose-versioned-capability-self-description-contract.md`
+  - `adr/041-expose-versioned-capability-self-description-contract.md`
 
 ## Review Findings — Codex, 2026-07-13
 

@@ -1,15 +1,20 @@
 ---
 title: "Stage 0+1 Workspace Freshness Progress Log"
 doc_type: "progress_log"
-lifecycle: "active"
-status: "review_findings_partially_resolved"
-agent_action: "reference_for_context"
-updated: "2026-07-13"
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 ---
 
 # Progress Log: Stage 0+1 — Contract Baselines and Workspace Freshness
 
-Companion progress log for [008_stage_0_1_workspace_freshness.md](file:///Users/ae/workspaces/semidx/plans/008_stage_0_1_workspace_freshness.md).
+This execution log is closed. Unresolved review follow-ups were moved to
+`reports/019_legacy_workspace_and_html_css_followups.md` so this completed plan
+is not presented as an active work queue.
+
+Companion progress log for
+[008_stage_0_1_workspace_freshness.md](../plans/008_stage_0_1_workspace_freshness.md).
 
 ## Status Summary
 

@@ -1,0 +1,37 @@
+# Pinned Java SCIP toolchain (plans/018 Stage 4, ADR-046).
+#
+# Format: <groupId>:<artifactId>:<version> <sha256-of-jar>
+#
+# Every jar is fetched from Maven Central and its digest verified before use, so
+# an install either matches this pin exactly or fails closed. Bumping a version
+# means replacing its digest here in the same commit; a fixture regenerated with
+# a different toolchain would otherwise silently disagree with a committed
+# golden.
+#
+# Why these artifacts:
+#   semanticdb-javac    javac compiler plugin; emits .semanticdb next to a normal
+#                       compile. Self-contained (shaded protobuf).
+#   scip-semanticdb     converts .semanticdb -> .scip. This is the whole reason
+#                       the heavy `scip-java` Scala CLI (coursier + an embedded
+#                       Kotlin compiler) is NOT used: the conversion is a small
+#                       Java library with three dependencies.
+#   semanticdb-java     SemanticDB model classes used by scip-semanticdb.
+#   scip-java-proto     Sourcegraph's own generated SCIP protobuf classes. Note
+#                       these live in package `com.sourcegraph`, distinct from
+#                       semidx's vendored `scip.Scip`, so nothing collides.
+#   protobuf-java(-util) + gson + guava
+#                       protobuf runtime required by scip-java-proto and by
+#                       ScipWriter's JSON output path. Pinned at 3.25.1 to match
+#                       the version semidx already resolves via gRPC, even though
+#                       scip-semanticdb declares 3.15.6 — this toolchain runs as
+#                       an external process and never joins the semidx classpath,
+#                       so the two cannot conflict.
+
+com.sourcegraph:semanticdb-javac:0.12.3 7d38fec09de165c2bd18b5c9ffe212d05d44f8539055e9982dde039738b216ed
+com.sourcegraph:scip-semanticdb:0.12.3 b3227772049f98a8abbe78e1e947d6d0ac854f3b1a8a0b526083a0ffaeda20dc
+com.sourcegraph:semanticdb-java:0.12.3 9929a622274040709596ece29904209e137653eff35c4900cf7a83ac3c351bb4
+com.sourcegraph:scip-java-proto:0.12.3 d6e36abc7e8dd9c8b42db9cbdd3a52f849187300d49dd39ba974f5ff64a898ca
+com.google.protobuf:protobuf-java:3.25.1 48a8e58a1a8f82eff141a7a388d38dfe77d7a48d5e57c9066ee37f19147e20df
+com.google.protobuf:protobuf-java-util:3.25.1 faf398ad0fe8c5a7d867f76d322e2e71bb31898fe86ec3223f787a6ed6fb4622
+com.google.code.gson:gson:2.10.1 4241c14a7727c34feea6507ec801318a3d4a90f070e4525681079fb94ee4c593
+com.google.guava:guava:32.1.3-jre 6d4e2b5a118aab62e6e5e29d185a0224eed82c85c40ac3d33cf04a270c3b3744

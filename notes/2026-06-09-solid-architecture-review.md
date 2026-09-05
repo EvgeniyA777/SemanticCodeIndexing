@@ -1,10 +1,18 @@
 ---
+title: "SOLID Review Of The semidx Extension Work Plan"
+doc_type: "architecture_review"
+lifecycle: "superseded"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
+superseded_by:
+  - plans/007_semidx_extension_architecture_resolution_plan.md
+  - plans/013_open_gaps_closure_program.md
 file_type: architecture-review
 topic: solid-review-work-plan
 created_at: 2026-06-09T17:30:00-0700
 author: claude-code
 language: ru
-status: active
+status: superseded
 reviews:
   - notes/2026-06-09-1015-95e50b0e-5dfa-4033-bc2b-db6db47ffda4.md
 relevance: current — review отражает состояние плана на момент создания концептуального

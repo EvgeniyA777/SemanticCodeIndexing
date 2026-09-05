@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-032
 title: Roll Out Repo-Aware Snapshot Storage In Shadow Mode
-status: proposed
+status: accepted
 date: 2026-04-03
 deciders:
   - project owner
@@ -23,7 +23,7 @@ links:
 
 # ADR-032: Roll Out Repo-Aware Snapshot Storage In Shadow Mode
 
-**Status**: Proposed  
+**Status**: Accepted
 **Date**: 2026-04-03  
 **Deciders**: project owner
 
@@ -108,9 +108,10 @@ Option 3 loses because it collects metadata without creating a path to useful mu
 - keep runtime registry semantics unchanged for the first rollout
 - decide later whether to enable repo-aware reuse in guarded modes
 
-## Status Changes
+## Status
 
-No status change yet.
+Accepted and implemented through the shadow-mode repository-aware storage
+rollout.
 
 ## References
 

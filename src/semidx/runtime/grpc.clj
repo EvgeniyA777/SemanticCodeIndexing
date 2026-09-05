@@ -8,17 +8,17 @@
             [semidx.runtime.errors :as errors]
             [semidx.runtime.grpc-proto :as grpc-proto]
             [semidx.runtime.project-context :as project-context]
+            [semidx.runtime.rate-limit :as rate-limit]
             [semidx.runtime.retrieval-policy :as rp]
             [semidx.runtime.storage :as storage]
+            [semidx.runtime.usage-metrics :as usage]
             [semidx.core :as sci])
-  (:import [io.grpc MethodDescriptor MethodDescriptor$Marshaller MethodDescriptor$MethodType
-                     Context Contexts Metadata Metadata$Key
-                     ServerCall ServerCall$Listener ServerCallHandler ServerInterceptor ServerInterceptors
-                     ServerServiceDefinition Status]
+  (:import [io.grpc Context Contexts Metadata Metadata$Key
+            ServerCall ServerCall$Listener ServerCallHandler ServerInterceptor ServerInterceptors
+            ServerServiceDefinition Status]
            [io.grpc.stub ServerCalls ServerCalls$UnaryMethod StreamObserver]
-           [io.grpc.netty.shaded.io.grpc.netty NettyServerBuilder]))
-
-(def ^:private service-name "semidx.RuntimeService")
+           [io.grpc.netty.shaded.io.grpc.netty NettyServerBuilder]
+           [semidx.runtime.grpc.v1 RuntimeServiceGrpc]))
 
 (defn- parse-bool [s]
   (contains? #{"1" "true" "yes" "on"} (str/lower-case (str (or s "")))))
@@ -35,6 +35,10 @@
           "--authz-policy-file" (recur (assoc m :authz_policy_file (or v "")) rest)
           "--policy-registry-file" (recur (assoc m :policy_registry_file (or v "")) rest)
           "--language-policy-file" (recur (assoc m :language_policy_file (or v "")) rest)
+          "--rate-limit-requests" (recur (assoc m :rate_limit_requests v) rest)
+          "--rate-limit-window-ms" (recur (assoc m :rate_limit_window_ms v) rest)
+          "--rate-limit-max-subjects" (recur (assoc m :rate_limit_max_subjects v) rest)
+          "--rate-limit-subject-scope" (recur (assoc m :rate_limit_subject_scope v) rest)
           "--require-tenant" (recur (assoc m :require_tenant true) (cons v rest))
           (recur m rest))))))
 
@@ -42,21 +46,14 @@
   (when (seq path)
     (-> path slurp edn/read-string)))
 
-(defn- unary-method [method-name request-type response-type]
-  (-> (MethodDescriptor/newBuilder)
-      (.setType MethodDescriptor$MethodType/UNARY)
-      (.setFullMethodName (MethodDescriptor/generateFullMethodName service-name method-name))
-      (.setRequestMarshaller ^MethodDescriptor$Marshaller (grpc-proto/marshaller request-type))
-      (.setResponseMarshaller ^MethodDescriptor$Marshaller (grpc-proto/marshaller response-type))
-      (.build)))
-
-(def health-method (unary-method "Health" :health-request :health-response))
-(def create-index-method (unary-method "CreateIndex" :create-index-request :create-index-response))
-(def resolve-context-method (unary-method "ResolveContext" :resolve-context-request :resolve-context-response))
-(def expand-context-method (unary-method "ExpandContext" :expand-context-request :expand-context-response))
-(def fetch-context-detail-method (unary-method "FetchContextDetail" :fetch-context-detail-request :fetch-context-detail-response))
-(def literal-file-slice-method (unary-method "LiteralFileSlice" :literal-file-slice-request :literal-file-slice-response))
-(def snapshot-diff-method (unary-method "SnapshotDiff" :snapshot-diff-request :snapshot-diff-response))
+(def health-method (RuntimeServiceGrpc/getHealthMethod))
+(def create-index-method (RuntimeServiceGrpc/getCreateIndexMethod))
+(def resolve-context-method (RuntimeServiceGrpc/getResolveContextMethod))
+(def expand-context-method (RuntimeServiceGrpc/getExpandContextMethod))
+(def fetch-context-detail-method (RuntimeServiceGrpc/getFetchContextDetailMethod))
+(def literal-file-slice-method (RuntimeServiceGrpc/getLiteralFileSliceMethod))
+(def snapshot-diff-method (RuntimeServiceGrpc/getSnapshotDiffMethod))
+(def traverse-relations-method (RuntimeServiceGrpc/getTraverseRelationsMethod))
 
 (def ^:private api-key-header
   (Metadata$Key/of "x-api-key" Metadata/ASCII_STRING_MARSHALLER))
@@ -202,19 +199,34 @@
        :type code
        :message (or message "request denied by authz policy")})))
 
+(defn- rate-limit-violation [auth-config operation]
+  (when operation
+    (let [correlation (current-request-correlation)
+          decision (rate-limit/check! (:rate_limiter auth-config) correlation)]
+      (when (:enabled? decision)
+        (usage/safe-record-event!
+         (:usage_metrics auth-config)
+         (rate-limit/decision-event "grpc" operation correlation decision)))
+      (when-not (:allowed? decision)
+        (rate-limit/rejection-exception decision)))))
+
 (defn- unary-handler [request->payload response->message f auth-config operation]
   (ServerCalls/asyncUnaryCall
    (reify ServerCalls$UnaryMethod
      (invoke [_ request response-observer]
        (try
          (if-let [{:keys [status message]} (auth-violation auth-config)]
-           (fail! response-observer {:type (if (= status Status/UNAUTHENTICATED) :unauthorized :invalid_request)
+           (fail! response-observer {:type (if (= status Status/UNAUTHENTICATED)
+                                             :unauthorized
+                                             :invalid_request)
                                      :message message})
-           (let [payload (-> request request->payload normalize-numeric-shapes)]
-             (if-let [{:keys [type message]} (authz-violation auth-config operation payload)]
-               (fail! response-observer {:type (or type :forbidden)
-                                         :message message})
-               (reply! response-observer (response->message (f payload))))))
+           (if-let [rate-limit-error (rate-limit-violation auth-config operation)]
+             (fail! response-observer rate-limit-error)
+             (let [payload (-> request request->payload normalize-numeric-shapes)]
+               (if-let [{:keys [type message]} (authz-violation auth-config operation payload)]
+                 (fail! response-observer {:type (or type :forbidden)
+                                           :message message})
+                 (reply! response-observer (response->message (f payload)))))))
          (catch clojure.lang.ExceptionInfo e
            (fail! response-observer e))
          (catch Exception e
@@ -397,15 +409,52 @@
     (assoc (sci/snapshot-diff index diff-opts)
            :project_context (project-context-summary entry))))
 
-(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry usage_metrics selection_cache
-                            project_registry language_policy storage]}]
+(defn- handle-traverse-relations [policy-registry usage-metrics selection-cache project-registry server-language-policy storage-adapter payload]
+  (let [direction (:direction payload)
+        start-nodes (:start_nodes payload)]
+    (when-not (contains? #{"downstream" "upstream"} direction)
+      (throw (ex-info "direction must be \"downstream\" or \"upstream\""
+                      {:type :invalid_request
+                       :message "direction must be \"downstream\" or \"upstream\""})))
+    (when-not (and (sequential? start-nodes) (seq start-nodes))
+      (throw (ex-info "start_nodes must be a non-empty array"
+                      {:type :invalid_request
+                       :message "start_nodes must be a non-empty array"})))
+    (let [scope (project-context/project-scope (or (:root_path payload) ".")
+                                               (current-tenant-id))
+          entry (project-context/ensure-project-index! project-registry
+                                                       scope
+                                                       {:paths (:paths payload)}
+                                                       #(build-project-index policy-registry
+                                                                             usage-metrics
+                                                                             selection-cache
+                                                                             server-language-policy
+                                                                             storage-adapter
+                                                                             payload
+                                                                             (merge {:surface "grpc"} (current-request-correlation))
+                                                                             (:root_path scope)
+                                                                             true))
+          index (:index entry)
+          ;; drop nil-valued keys so an unset resolved_only keeps the kernel
+          ;; default (true) instead of being coerced to false.
+          request (into {} (filter (comp some? val)
+                                   (select-keys payload [:direction :start_nodes :relation_types
+                                                         :resolved_only :budgets :snapshot_id])))]
+      (assoc (sci/relation-traversal index request)
+             :project_context (project-context-summary entry)))))
+
+(defn start-server [{:keys [host port api_key require_tenant authz_check policy_registry
+                            usage_metrics selection_cache project_registry language_policy storage
+                            rate_limit rate_limiter]}]
   (let [auth-config {:api_key api_key
                      :require_tenant require_tenant
-                     :authz_check authz_check}
+                     :authz_check authz_check
+                     :usage_metrics usage_metrics
+                     :rate_limiter (or rate_limiter (rate-limit/limiter rate_limit))}
         selection-cache (or selection_cache (atom {:max_entries 128}))
         project-registry (or project_registry (project-context/project-registry))
         storage-adapter (or storage (storage/in-memory-storage))
-        service (-> (ServerServiceDefinition/builder service-name)
+        service (-> (ServerServiceDefinition/builder (RuntimeServiceGrpc/getServiceDescriptor))
                     (.addMethod health-method (unary-handler (constantly {})
                                                              grpc-proto/health-response
                                                              handle-health
@@ -441,9 +490,18 @@
                                                                     (partial handle-snapshot-diff policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
                                                                     auth-config
                                                                     :snapshot_diff))
+                    (.addMethod traverse-relations-method (unary-handler grpc-proto/traverse-relations-request->map
+                                                                         grpc-proto/traverse-relations-response
+                                                                         (partial handle-traverse-relations policy_registry usage_metrics selection-cache project-registry language_policy storage-adapter)
+                                                                         auth-config
+                                                                         :traverse_relations))
                     (.build))
-        intercepted-service (ServerInterceptors/intercept service (into-array ServerInterceptor [(metadata-context-interceptor)]))
-        server (-> (NettyServerBuilder/forAddress (java.net.InetSocketAddress. ^String host (int port)))
+        intercepted-service (ServerInterceptors/intercept
+                             service
+                             (into-array ServerInterceptor
+                                         [(metadata-context-interceptor)]))
+        server (-> (NettyServerBuilder/forAddress
+                    (java.net.InetSocketAddress. ^String host (int port)))
                    (.addService intercepted-service)
                    (.build)
                    (.start))]
@@ -452,12 +510,22 @@
      :host host}))
 
 (defn -main [& args]
-  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file language_policy_file]} (parse-args args)
+  (let [{:keys [host port api_key require_tenant authz_policy_file policy_registry_file
+                language_policy_file rate_limit_requests rate_limit_window_ms
+                rate_limit_max_subjects rate_limit_subject_scope]} (parse-args args)
         api-key* (or (not-empty api_key) (System/getenv "SEMIDX_RUNTIME_API_KEY"))
         require-tenant* (or require_tenant (parse-bool (System/getenv "SEMIDX_RUNTIME_REQUIRE_TENANT")))
         authz-policy-file* (or (not-empty authz_policy_file) (System/getenv "SEMIDX_RUNTIME_AUTHZ_POLICY_FILE"))
         policy-registry-file* (or (not-empty policy_registry_file) (System/getenv "SEMIDX_RUNTIME_POLICY_REGISTRY_FILE"))
         language-policy-file* (or (not-empty language_policy_file) (System/getenv "SEMIDX_RUNTIME_LANGUAGE_POLICY_FILE"))
+        rate-limit* {:requests_per_window (or rate_limit_requests
+                                              (System/getenv "SEMIDX_RUNTIME_RATE_LIMIT_REQUESTS"))
+                     :window_ms (or rate_limit_window_ms
+                                    (System/getenv "SEMIDX_RUNTIME_RATE_LIMIT_WINDOW_MS"))
+                     :max_subjects (or rate_limit_max_subjects
+                                       (System/getenv "SEMIDX_RUNTIME_RATE_LIMIT_MAX_SUBJECTS"))
+                     :subject_scope (or rate_limit_subject_scope
+                                        (System/getenv "SEMIDX_RUNTIME_RATE_LIMIT_SUBJECT_SCOPE"))}
         usage-metrics* (when-let [jdbc-url (System/getenv "SEMIDX_USAGE_METRICS_JDBC_URL")]
                          (sci/postgres-usage-metrics {:jdbc-url jdbc-url
                                                       :user (System/getenv "SEMIDX_USAGE_METRICS_DB_USER")
@@ -474,7 +542,8 @@
                                              :authz_check authz-check*
                                              :policy_registry policy-registry*
                                              :language_policy language-policy*
-                                             :usage_metrics usage-metrics*})]
+                                             :usage_metrics usage-metrics*
+                                             :rate_limit rate-limit*})]
     (println (str "runtime_grpc_server_started host=" host " port=" port))
     (flush)
     (.awaitTermination server)))

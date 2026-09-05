@@ -30,6 +30,10 @@
     :extensions [".lua"]
     :provider {:provider_id "lua-native" :provider_version "1" :classification "source"}
     :strength "low"}
+   {:language "zig"
+    :extensions [".zig"]
+    :provider {:provider_id "zig-zls" :provider_version "2" :classification "source"}
+    :strength "low"}
    {:language "html"
     :extensions [".html" ".htm"]
     :provider {:provider_id "html-native" :provider_version "1" :classification "source"}

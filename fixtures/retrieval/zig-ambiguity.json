@@ -1,0 +1,49 @@
+{
+  "fixture_id": "retrieval_zig_ambiguity_001",
+  "category": "zig_ambiguity",
+  "purpose": "Zig broad path targeting should stay ambiguity-aware across functions, container methods, and tests.",
+  "adr_refs": ["ADR-005", "ADR-008", "ADR-014", "ADR-022", "ADR-048"],
+  "snapshot_ref": "seed-zig-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "bug_investigation",
+        "details": "Investigate ambiguous behavior around Zig run and Runner.execute changes across source and tests."
+      },
+      "targets": {
+        "paths": ["src/main.zig", "test/main_test.zig"],
+        "diff_summary": "Changed the Zig run flow, a nearby container method, and the closest test block."
+      },
+      "constraints": {
+        "token_budget": 1400,
+        "language_allowlist": ["zig"],
+        "allowed_path_prefixes": ["src/", "test/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["src/main.zig", "test/main_test.zig"],
+        "preferred_modules": ["src.main", "test.main_test"],
+        "prefer_definitions_over_callers": false,
+        "prefer_breadth_over_depth": true
+      },
+      "options": {
+        "include_tests": true,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "68686868-6868-4686-8686-686868686868",
+        "request_id": "fixture-zig-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "must_include_paths": ["src/main.zig", "test/main_test.zig"],
+    "must_include_warning_codes": ["capability_ceiling"],
+    "confidence_level": "low",
+    "autonomy_posture": "autonomy_blocked"
+  }
+}

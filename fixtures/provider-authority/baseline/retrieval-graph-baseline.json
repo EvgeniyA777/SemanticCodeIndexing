@@ -1,0 +1,59 @@
+{
+  "fixture_id": "provider_authority_retrieval_graph_baseline_001",
+  "category": "retrieval_and_graph_baseline",
+  "purpose": "Deterministic pre-migration baseline for retrieval selection, callers/callees, impact, confidence, and snapshot identity over the protected corpus. Reusable by plans/020 without duplicating fixtures.",
+  "plan_refs": ["plans/018", "plans/020"],
+  "status": "ground_truth",
+  "corpus_index": {
+    "root": "fixtures/provider-authority/corpus",
+    "file_count": 5,
+    "unit_count": 11,
+    "detected_languages": ["java", "typescript"],
+    "note": "snapshot_id is per-build and not asserted; the file_count/unit_count and unit identities are the stable signals."
+  },
+  "retrieval_selection": {
+    "query": {
+      "purpose": "review_support",
+      "targets": {"paths": ["src/example/OrderService.java"], "symbols": ["example.OrderService#handle"]},
+      "language_allowlist": ["java"]
+    },
+    "expected_top_authority": [
+      "example.OrderService#handle$arity1$sig5e75e42b",
+      "example.OrderService#handle$arity2$sig5902c043"
+    ],
+    "expected_callee_neighbor": ["example.Validator#validate$arity1$sig5e75e42b"],
+    "confidence_level": "medium",
+    "assert": "both overloads resolve as distinct top_authority units; validate is pulled as graph_callee_neighbor"
+  },
+  "callers_callees": {
+    "target": "example.Validator#validate",
+    "callers": [
+      "example.OrderService#handle",
+      "example.OrderService#handle"
+    ],
+    "dependents": ["example"],
+    "assert": "both handle overloads independently resolve as callers of validate"
+  },
+  "impact": {
+    "changed_target": "example.Validator#validate",
+    "risky_neighbors_include": [
+      "example.OrderService#OrderService",
+      "example.OrderService#handle",
+      "example.OrderService#handleAll"
+    ]
+  },
+  "snapshot_diff": {
+    "expectation": "rebuilding the unchanged corpus yields reuse / no semantic diff; editing OrderService#handle body must classify a changed unit, not a stale cache hit",
+    "note": "captured as an expectation; a two-snapshot diff run is deferred to the stage that first exercises snapshot_diff against this corpus"
+  },
+  "observational_only": {
+    "latency": "not asserted; environment-sensitive. Reproduce via resolve_context/impact_analysis timing on the corpus index.",
+    "snapshot_size": "not asserted; captured only as unit_count=11 over 5 files. Fact-level evidence (Stage 3/4) is expected to grow this; measure then.",
+    "rationale": "plans/018 Risk [Medium] fact-level evidence expands snapshots. Latency and size are tracked as trends, not deterministic gates."
+  },
+  "reproduction": [
+    "semidx create_index root=fixtures/provider-authority/corpus",
+    "semidx resolve_context (query above)",
+    "semidx impact_analysis target=example.Validator#validate"
+  ]
+}

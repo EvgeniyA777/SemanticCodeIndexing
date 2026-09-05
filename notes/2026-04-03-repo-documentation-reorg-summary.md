@@ -1,10 +1,15 @@
 ---
+title: "Repository Documentation Reorganization Summary"
+doc_type: "implementation_note"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: repo-documentation-reorg-summary
 created_at: 2026-04-03T00:00:00-0700
 author: codex
 language: ru
-status: active
+status: completed
 ---
 
 # Working Note: Repo Documentation Reorg Summary

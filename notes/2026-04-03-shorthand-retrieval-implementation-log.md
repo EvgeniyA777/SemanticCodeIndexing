@@ -1,10 +1,15 @@
 ---
+title: "Shorthand Retrieval Implementation Log"
+doc_type: "implementation_note"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: shorthand-retrieval-implementation-log
 created_at: 2026-04-03T00:41:23-0700
 author: codex
 language: en
-status: active
+status: completed
 reason: Created after completing the staged implementation of shorthand retrieval anchoring, ranking hygiene, and benchmark coverage on the dev branch.
 ---
 

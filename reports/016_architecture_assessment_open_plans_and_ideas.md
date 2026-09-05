@@ -1,20 +1,20 @@
 ---
 title: "Architecture Assessment: Open Plans And Idea Tracks"
 doc_type: "architecture_assessment"
-lifecycle: "active"
-status: "current"
-agent_action: "reference_for_context"
-updated: "2026-08-01"
+lifecycle: "completed"
+status: "snapshot_complete"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 ---
 
 # Architecture Assessment: Open Plans And Idea Tracks
 
-Baseline snapshot of what is genuinely open in this repository, produced by a
+Historical baseline snapshot of what was open in this repository, produced by a
 full read of all plan and idea documents cross-checked against the actual code,
 progress logs, and live MCP responses on 2026-07-19, then refreshed for the
 relation-first architecture review on 2026-08-01. Use this document as the
-starting point for the next planning pass; update or supersede it when the
-program state changes materially.
+record of that planning pass. It was closed after Stage 3 became code-complete;
+use `MEMORY.md`, `plans/013`, and `reports/014` for current execution state.
 
 Inputs read in full: `plans/005`-`plans/009`, `plans/013`, `plans/014`,
 `ideas/002`-`ideas/005`, `ideas/008`-`ideas/012`, `reports/010`,

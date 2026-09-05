@@ -1,13 +1,16 @@
 ---
 title: "State Invariant Context Plan"
 doc_type: "architecture_plan"
-lifecycle: "active"
-status: "planned"
-agent_action: "reference_for_context"
-updated: "2026-07-20"
+lifecycle: "completed"
+status: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 ---
 
 # Architecture Plan: State Invariant Context
+
+Companion progress log:
+`reports/018_state_invariant_context_progress_log.md`.
 
 ## Context
 
@@ -224,30 +227,52 @@ change and is a separate, later step in this plan.
 ## Implementation Sequence
 
 ### Stage 1 - Intent classifier + fixtures (thin, provable)
+Status: completed in commit `5f65c1a`.
+
 Pure `state-intent?` in `query_anchors.clj` + mirrored test. A fixture repo
 (Java entity + service + service-test-with-tail + fixture helper) that
 reproduces the observed case. Verify the classifier fires on lifecycle intent
 and stays quiet otherwise. `clojure -M:test`.
 
 ### Stage 2 - Assembler from existing facts
-Add the assembler helpers to `retrieval.clj`, reusing blast-radius machinery.
+Status: completed on 2026-08-02; see
+`reports/018_state_invariant_context_progress_log.md`.
+
+The assembler is isolated in `runtime/state_invariants.clj` and wired from
+`retrieval.clj`, reusing blast-radius results and indexes without adding policy
+to transports.
 Wire an additive `:state_invariants` section into the `impact-analysis` return,
 gated by the classifier. Guardrail always present when entity candidates exist.
 Verify against the Stage 1 fixture: entity file surfaced, test tail + fixture
 helper included, guardrail present. `clojure -M:test`.
 
 ### Stage 3 - Contract + MCP surface
-Author the packet contract: `malli` mirror in `contracts/schemas.clj`, JSON
-Schema (new `state-invariants` `$def` or an additive block referenced from the
-impact-analysis response contract), and a `contracts/examples/` sample. Pass the
-section through `tool-impact-analysis` in `mcp/core.clj` (keep the usage-metric
-counters additive). `./scripts/validate-contracts.sh`, `clojure -M:test`, MCP
-smoke.
+Status: completed on 2026-08-02; see
+`reports/018_state_invariant_context_progress_log.md`.
+
+The packet contract now has a `malli` mirror (`state-invariants` +
+`state-invariant-unit-ref` in `src/semidx/contracts/schemas.clj`), a standalone
+`contracts/schemas/state-invariants.schema.json` JSON Schema, and a validated
+`contracts/examples/state-invariants/impact-analysis-packet.json` sample wired
+into the example catalog and path-based validator mapping. The MCP
+`tool-impact-analysis` handler already returns the whole hint map, so the
+additive `:state_invariants` section passes through inside `:impact_hints`
+unchanged; usage-metric counters stay additive (unchanged). `triggered_by` is now
+bounded to the take-12 discipline so the `codeArray` contract stays honest.
+Verified with `./scripts/validate-contracts.sh`, `clojure -M:test`,
+`./scripts/run-mvp-gates.sh`, and a REPL MCP smoke over the Java state fixture.
 
 ### Stage 4 - Parity + optional expand_context
-Mirror on HTTP/gRPC. Optionally add the section to `expand_context` (requires the
-context-packet schema + malli change) only if the staged-retrieval ergonomics
-justify it. Cross-surface parity test.
+Status: completed on 2026-08-02; see
+`reports/018_state_invariant_context_progress_log.md`.
+
+The staged-retrieval ergonomics justify exposing the packet after selection:
+agents otherwise need a separate `impact_analysis` call to receive the
+whole-file guardrail. `expand_context` and the detail-stage context packet now
+conditionally carry the same budget-accounted `state_invariants` sibling.
+The Malli expansion/context mirrors and the JSON context-packet schema accept
+the additive section. HTTP and gRPC continue to delegate to the library result
+without transport-owned policy; cross-surface tests prove unchanged passthrough.
 
 ### Deferred (separate plan, gated by ADR-034 / plans/013 Stage 3)
 Setter-to-field write relations, entity-field listing with nullability/annotation

@@ -51,6 +51,7 @@ LANG_NS="$(echo "$LANG_ID" | tr '_' '-')"
 
 ADAPTERS_FILE="src/semidx/runtime/adapters.clj"
 REGISTRY_FILE="src/semidx/runtime/language_registry.clj"
+LANGUAGE_MODULE="src/semidx/runtime/languages/${LANG_ID}.clj"
 TEST_FILE="test/semidx/integration/${LANG_ID}_onboarding_test.clj"
 DOC_FILE="docs/language-onboarding/${LANG_ID}.md"
 FIXTURE_HAPPY="fixtures/retrieval/${LANG_ID}-happy-path.json"
@@ -88,8 +89,23 @@ check_contains() {
   fi
 }
 
+check_contains_any() {
+  local path="$1"
+  local label="$2"
+  shift 2
+  local pattern
+  for pattern in "$@"; do
+    if rg -q "$pattern" "$path"; then
+      ok "$label"
+      return 0
+    fi
+  done
+  fail "$label (none of the accepted patterns were found in $path)"
+}
+
 check_file "$ADAPTERS_FILE"
 check_file "$REGISTRY_FILE"
+check_file "$LANGUAGE_MODULE"
 check_file "$TEST_FILE"
 check_file "$DOC_FILE"
 check_file "$FIXTURE_HAPPY"
@@ -97,8 +113,12 @@ check_file "$FIXTURE_AMBIG"
 check_file "$CORPUS_FILE"
 
 check_contains "\"${LANG_ID}\"" "$REGISTRY_FILE" "language lane registered in registry"
-check_contains "\\(defn- parse-${LANG_ID} " "$ADAPTERS_FILE" "parse function scaffold exists"
-check_contains "\"${LANG_ID}\" \\(parse-${LANG_ID} " "$ADAPTERS_FILE" "parse-file branch wired"
+check_contains "ns semidx\\.runtime\\.languages\\.${LANG_NS}" "$LANGUAGE_MODULE" "language module uses the canonical namespace"
+check_contains "\\(defn parse-file " "$LANGUAGE_MODULE" "language module exposes parse-file"
+check_contains "semidx\\.runtime\\.languages\\.${LANG_NS} :as [A-Za-z0-9_-]+-language" "$ADAPTERS_FILE" "language module is required by adapter facade"
+check_contains_any "$ADAPTERS_FILE" "parse-file branch wired" \
+  "\"${LANG_ID}\" \\([A-Za-z0-9_-]+-language/parse-file root-path file-path lines parser-opts\\)" \
+  "\"${LANG_ID}\" \\(parse-${LANG_ID} root-path file-path lines parser-opts\\)"
 
 check_contains "ns semidx\\.integration\\.${LANG_NS}-onboarding-test" "$TEST_FILE" "onboarding test uses mirrored integration namespace (auto-discovered)"
 

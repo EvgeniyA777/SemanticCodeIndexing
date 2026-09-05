@@ -17,17 +17,25 @@ DEFAULT_COMMAND = [str(REPO_ROOT / "scripts" / "start-mcp-server.sh")]
 
 
 class MCPReader:
-    def __init__(self, stream: Any) -> None:
+    def __init__(self, stream: Any, transport_format: str) -> None:
         self.stream = stream
+        self.transport_format = transport_format
         self.buffer = bytearray()
 
     def read_message(self, deadline: float) -> dict[str, Any]:
         while True:
-            header_end = self.buffer.find(b"\r\n\r\n")
-            if header_end != -1:
-                message = self._try_decode_message(header_end)
-                if message is not None:
-                    return message
+            if self.transport_format == "line":
+                message = self._try_decode_line_message()
+            else:
+                header_end = self.buffer.find(b"\r\n\r\n")
+                message = (
+                    self._try_decode_header_message(header_end)
+                    if header_end != -1
+                    else None
+                )
+
+            if message is not None:
+                return message
 
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -42,7 +50,17 @@ class MCPReader:
                 raise EOFError("MCP process closed stdout before sending a complete message")
             self.buffer.extend(chunk)
 
-    def _try_decode_message(self, header_end: int) -> dict[str, Any] | None:
+    def _try_decode_line_message(self) -> dict[str, Any] | None:
+        line_end = self.buffer.find(b"\n")
+        if line_end == -1:
+            return None
+        payload = bytes(self.buffer[:line_end]).strip()
+        del self.buffer[: line_end + 1]
+        if not payload:
+            return self._try_decode_line_message()
+        return json.loads(payload.decode("utf-8"))
+
+    def _try_decode_header_message(self, header_end: int) -> dict[str, Any] | None:
         headers = self._parse_headers(bytes(self.buffer[:header_end]))
         if b"content-length" not in headers:
             raise ValueError("Missing Content-Length header in MCP response")
@@ -70,9 +88,17 @@ class MCPReader:
         return headers
 
 
-def send_message(proc: subprocess.Popen[bytes], message: dict[str, Any]) -> None:
-    payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    envelope = f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii") + payload
+def send_message(
+    proc: subprocess.Popen[bytes], message: dict[str, Any], transport_format: str
+) -> None:
+    payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+    envelope = (
+        payload + b"\n"
+        if transport_format == "line"
+        else f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii") + payload
+    )
     assert proc.stdin is not None
     proc.stdin.write(envelope)
     proc.stdin.flush()
@@ -105,7 +131,12 @@ def read_stderr(proc: subprocess.Popen[bytes]) -> str:
     return data.decode("utf-8", errors="replace").strip()
 
 
-def run_healthcheck(command: list[str], timeout_sec: float, protocol_version: str) -> tuple[bool, str]:
+def run_healthcheck(
+    command: list[str],
+    timeout_sec: float,
+    protocol_version: str,
+    transport_format: str,
+) -> tuple[bool, str]:
     started_at = time.monotonic()
     env = os.environ.copy()
     proc = subprocess.Popen(
@@ -120,7 +151,7 @@ def run_healthcheck(command: list[str], timeout_sec: float, protocol_version: st
 
     try:
         deadline = started_at + timeout_sec
-        reader = MCPReader(proc.stdout)
+        reader = MCPReader(proc.stdout, transport_format)
 
         send_message(
             proc,
@@ -134,18 +165,22 @@ def run_healthcheck(command: list[str], timeout_sec: float, protocol_version: st
                     "clientInfo": {"name": "semidx-healthcheck", "version": "1.0"},
                 },
             },
+            transport_format,
         )
         init_reply = wait_for_response(reader, deadline, expected_id=1)
+        initialize_elapsed = time.monotonic() - started_at
         if "error" in init_reply:
             return False, f"initialize failed: {init_reply['error']}"
 
         send_message(
             proc,
             {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            transport_format,
         )
         send_message(
             proc,
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            transport_format,
         )
         tools_reply = wait_for_response(reader, deadline, expected_id=2)
         if "error" in tools_reply:
@@ -153,7 +188,10 @@ def run_healthcheck(command: list[str], timeout_sec: float, protocol_version: st
 
         tools = tools_reply.get("result", {}).get("tools", [])
         elapsed = time.monotonic() - started_at
-        return True, f"OK: handshake in {elapsed:.2f}s, tools={len(tools)}"
+        return True, (
+            f"OK: initialize in {initialize_elapsed:.2f}s, "
+            f"handshake in {elapsed:.2f}s, tools={len(tools)}"
+        )
     except Exception as exc:  # noqa: BLE001
         stderr_text = read_stderr(proc)
         suffix = f"\n--- stderr ---\n{stderr_text}" if stderr_text else ""
@@ -183,15 +221,29 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_COMMAND,
         help="Command used to launch the MCP server.",
     )
+    parser.add_argument(
+        "--command-json",
+        help="Command as a JSON string array; useful when arguments begin with '-'.",
+    )
+    parser.add_argument(
+        "--transport-format",
+        choices=("headers", "line"),
+        default="headers",
+        help="STDIO framing used for requests and responses.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    command = json.loads(args.command_json) if args.command_json else args.command
+    if not isinstance(command, list) or not all(isinstance(arg, str) for arg in command):
+        raise ValueError("command must be a JSON array of strings")
     ok, message = run_healthcheck(
-        command=args.command,
+        command=command,
         timeout_sec=args.timeout_sec,
         protocol_version=args.protocol_version,
+        transport_format=args.transport_format,
     )
     stream = sys.stdout if ok else sys.stderr
     print(message, file=stream)

@@ -41,7 +41,12 @@
           path*)
         (str/replace #"/index$" ""))))
 
-(defn- ts-module-name [path]
+(defn ts-module-name
+  "Conceptual module (owner) name for a TypeScript/JavaScript source path:
+  extension stripped, a trailing `/index` collapsed, `/` mapped to `.`. This is
+  the naming primitive the SCIP provider adapter reuses so a SCIP moniker
+  normalizes onto the same CanonicalFactKey the regex/tree-sitter tier produces."
+  [path]
   (-> path
       str
       (str/replace "\\" "/")

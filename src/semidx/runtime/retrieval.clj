@@ -6,7 +6,9 @@
             [semidx.contracts.schemas :as contracts]
             [semidx.runtime.index :as idx]
             [semidx.runtime.projections :as projections]
-            [semidx.runtime.retrieval-policy :as rp]))
+            [semidx.runtime.relations :as relations]
+            [semidx.runtime.retrieval-policy :as rp]
+            [semidx.runtime.state-invariants :as state-invariants]))
 
 (defn- now-iso []
   (-> (java.time.ZonedDateTime/now java.time.ZoneOffset/UTC)
@@ -486,6 +488,14 @@
          (#(int (Math/ceil (/ (double %) 4.0)))))
     0))
 
+(defn- estimate-state-invariants-tokens [packet]
+  (if (map? packet)
+    (-> (count (pr-str packet))
+        (/ 4.0)
+        Math/ceil
+        int)
+    0))
+
 (defn- estimate-raw-context-tokens [raw-context]
   (->> raw-context
        (map (fn [{:keys [content]}]
@@ -552,6 +562,71 @@
        distinct
        vec))
 
+(def ^:private relation-projection-bounds
+  "Conservative sub-ceiling for relation-backed impact projections. Kept well
+  under the traversal-kernel ceiling (`relations/default-traversal-bounds`) so
+  relation support stays a low-weight, bounded signal that never dominates the
+  legacy caller/callee hints."
+  {:max_depth 2 :max_nodes 24 :max_discovery_paths 12})
+
+(def ^:private relation-support-limit 12)
+
+(defn- relation-traversal-units
+  "Run the bounded, resolved-only traversal kernel from `start-ids` in
+  `direction` over the relation indexes carried by `index`. Returns
+  {:units [display-string ...] :truncated? bool}, where each unit is a distinct
+  `path::symbol` reachable through resolved dataflow relations, excluding the
+  start units themselves. Ambiguous and unresolved relations are never followed,
+  so the projection stays conservative."
+  [index start-ids direction]
+  (if (empty? start-ids)
+    {:units [] :truncated? false}
+    (let [result (relations/traverse-relations
+                  index
+                  (assoc relation-projection-bounds
+                         :direction direction
+                         :start_nodes start-ids
+                         :resolved_only true))
+          start-set (set start-ids)
+          reached (->> (:nodes result)
+                       (map :unit_id)
+                       (remove start-set)
+                       distinct
+                       (keep #(idx/unit-by-id index %))
+                       (map #(str (:path %) "::" (:symbol %)))
+                       distinct
+                       vec)
+          units (vec (take relation-support-limit reached))]
+      {:units units
+       :truncated? (boolean (or (some true? (vals (:truncated result)))
+                                (> (count reached) relation-support-limit)))})))
+
+(defn- relation-support-hints
+  "Reason-coded, low-weight relation-backed impact support for `selected-ids`.
+  Downstream units consume a selected unit's value through resolved dataflow
+  relations; upstream units feed a selected unit. Returns nil when no resolved
+  relation-backed unit is found, so callers keep the legacy
+  caller/callee/dependent/test outputs byte-identical when there is no
+  interprocedural dataflow signal."
+  [index selected-ids]
+  (let [downstream (relation-traversal-units index selected-ids :downstream)
+        upstream (relation-traversal-units index selected-ids :upstream)
+        down (:units downstream)
+        up (:units upstream)]
+    (when (or (seq down) (seq up))
+      {:downstream down
+       :upstream up
+       :reasons (cond-> []
+                  (seq down)
+                  (conj (coded "relation_downstream_dataflow"
+                               "Units reached downstream from selected units through resolved dataflow relations."))
+                  (seq up)
+                  (conj (coded "relation_upstream_dataflow"
+                               "Units reaching selected units through resolved dataflow relations."))
+                  (or (:truncated? downstream) (:truncated? upstream))
+                  (conj (coded "relation_traversal_truncated"
+                               "Relation traversal hit a conservative budget bound; relation support is partial.")))})))
+
 (defn- build-impact-hints [index selected]
   (let [selected-ids (set (map :unit_id selected))
         caller-units (->> selected
@@ -607,17 +682,79 @@
                              (map #(str (:path %) "::" (:symbol %)))
                              distinct
                              (take 12)
-                             vec)]
-    {:callers callers
-     :dependents dependents
-     :related_tests related-tests
-     :risky_neighbors risky-neighbors}))
+                             vec)
+        relation-support (relation-support-hints index (sort selected-ids))]
+    (cond-> {:callers callers
+             :dependents dependents
+             :related_tests related-tests
+             :risky_neighbors risky-neighbors}
+      relation-support (assoc :relation_support relation-support))))
 
 (defn- empty-impact-hints []
   {:callers []
    :dependents []
    :related_tests []
    :risky_neighbors []})
+
+(declare build-guardrails)
+
+(defn- evidence-codes [confidence section]
+  (set (map :code (get confidence section))))
+
+(defn- impact-seed-degradations [selection]
+  (let [selected (or (:focus selection) [])
+        query (:query selection)
+        confidence (:confidence selection)
+        capabilities (:capabilities selection)
+        warning-codes (evidence-codes confidence :warnings)
+        missing-codes (evidence-codes confidence :missing_evidence)
+        level (:level confidence "low")
+        capability-ceiling (:confidence_ceiling capabilities "low")
+        requested-symbols (concat (get-in query [:targets :symbols] [])
+                                  (get-in query [:hints :suspected_symbols] []))
+        exact-target-missing? (contains? missing-codes "exact_target_resolution_missing")
+        ambiguous? (contains? warning-codes "target_ambiguous")
+        low-confidence? (= "low" level)
+        capability-limited? (not= "high" capability-ceiling)
+        stale-index? (true? (:index_stale capabilities))]
+    (cond-> []
+      (empty? selected)
+      (conj (coded "impact_seed_missing"
+                   "Impact analysis did not resolve a seed unit."))
+
+      low-confidence?
+      (conj (coded "impact_seed_confidence_low"
+                   "Impact analysis requires a trustworthy seed; retrieval confidence is low."))
+
+      ambiguous?
+      (conj (coded "impact_seed_ambiguous"
+                   "Impact analysis seed selection is ambiguous."))
+
+      (and exact-target-missing? (or low-confidence? (seq requested-symbols)))
+      (conj (coded "impact_seed_exact_target_missing"
+                   "Impact analysis did not resolve the requested symbol to an exact seed."))
+
+      (and low-confidence? capability-limited?)
+      (conj (coded "impact_seed_capability_limited"
+                   "Selected language support does not justify semantic blast-radius confidence."))
+
+      stale-index?
+      (conj (coded "impact_seed_stale_index"
+                   "Impact analysis seed comes from a stale index snapshot.")))))
+
+(defn- degraded-impact-hints [selection degradations]
+  (let [empty-impact (empty-impact-hints)
+        confidence (:confidence selection)
+        query (:query selection)
+        policy (:policy selection)
+        capabilities (:capabilities selection)]
+    (assoc empty-impact
+           :result_status "degraded"
+           :degradation_reason "impact_seed_not_trustworthy"
+           :degradations (vec degradations)
+           :selected_unit_ids (mapv :unit_id (or (:focus selection) []))
+           :confidence confidence
+           :guardrails (build-guardrails confidence empty-impact query policy capabilities))))
 
 (defn- build-confidence [selected query policy]
   (let [top (first selected)
@@ -1344,7 +1481,18 @@
         include-impact? (and (seq selected)
                              (<= impact-tokens raw-budget))
         impact (if include-impact? impact-full (empty-impact-hints))
-        raw-budget* (max 0 (- raw-budget (if include-impact? impact-tokens 0)))
+        remaining-after-impact (max 0 (- raw-budget (if include-impact? impact-tokens 0)))
+        state-invariants-full (state-invariants/assemble
+                               index
+                               query
+                               selected
+                               (:related_tests impact-full))
+        state-invariants-tokens (estimate-state-invariants-tokens state-invariants-full)
+        include-state-invariants? (and state-invariants-full
+                                       (<= state-invariants-tokens remaining-after-impact))
+        state-invariants (when include-state-invariants? state-invariants-full)
+        raw-budget* (max 0 (- remaining-after-impact
+                              (if include-state-invariants? state-invariants-tokens 0)))
         structure-estimated (estimate-tokens selected-source)
         capabilities (rp/capability-summary index (capability-units selected))
         base-confidence (build-confidence selected query* policy)
@@ -1359,13 +1507,14 @@
         truncation (cond-> []
                      (:truncated? selected-fit) (conj "selected_units_truncated")
                      (and (seq selected) (not include-impact?)) (conj "impact_hints_omitted")
+                     (and state-invariants-full (not include-state-invariants?)) (conj "state_invariants_omitted")
                      (zero? detail-budget) (conj "detail_budget_exhausted")
                      raw-truncated? (conj "raw_snippets_truncated")
                      raw-level-degraded? (conj "raw_fetch_level_degraded"))
         suggested-budget (when (or raw-shortfall? (:truncated? selected-fit))
                            (suggested-token-budget structure-estimated
                                                    (boolean (:truncated? selected-fit))
-                                                   impact-tokens
+                                                   (+ impact-tokens state-invariants-tokens)
                                                    required-raw-tokens))
         suggested-budget* (when (and suggested-budget (> suggested-budget requested))
                             suggested-budget)
@@ -1373,9 +1522,11 @@
                         :reserved_tokens detail-budget
                         :estimated_tokens (+ structure-estimated
                                              (if include-impact? impact-tokens 0)
+                                             (if include-state-invariants? state-invariants-tokens 0)
                                              raw-fetch-tokens)
                         :returned_tokens (+ selected-structure-tokens
                                             (if include-impact? impact-tokens 0)
+                                            (if include-state-invariants? state-invariants-tokens 0)
                                             raw-fetch-tokens)
                         :truncation_flags (cond-> truncation
                                             (and (pos? (count selected))
@@ -1409,25 +1560,26 @@
         guardrails (build-guardrails confidence impact query* policy capabilities)
         focus-paths (->> selected (map :path) distinct (take 20) vec)
         focus-modules (->> selected (map :module) (remove nil?) distinct (take 20) vec)
-        context-packet {:schema_version "1.0"
-                        :retrieval_policy (rp/policy-summary policy)
-                        :capabilities capabilities
-                        :query summary
-                        :repo_map {:focus_paths focus-paths
-                                   :focus_modules focus-modules
-                                   :summary (str "Selected " (count selected) " units from " (count focus-paths) " files.")}
-                        :relevant_units (mapv compact-unit selected)
-                        :skeletons (mapv compact-skeleton selected)
-                        :impact_hints impact
-                        :evidence {:selection_reasons (top-reasons selected)
-                                   :hint_effects (cond-> []
-                                                   (seq (:hints_summary summary))
-                                                   (conj (coded "hints_applied" "Soft hints were applied during candidate ranking."))
-                                                   (and (not= "none" (:level raw-fetch))
-                                                        (pos? (:snippets raw-fetch)))
-                                                   (conj (coded "raw_code_escalated" "Late raw-code fetch was executed for ranked units.")))}
-                        :budget budget
-                        :confidence confidence}
+        context-packet (cond-> {:schema_version "1.0"
+                                :retrieval_policy (rp/policy-summary policy)
+                                :capabilities capabilities
+                                :query summary
+                                :repo_map {:focus_paths focus-paths
+                                           :focus_modules focus-modules
+                                           :summary (str "Selected " (count selected) " units from " (count focus-paths) " files.")}
+                                :relevant_units (mapv compact-unit selected)
+                                :skeletons (mapv compact-skeleton selected)
+                                :impact_hints impact
+                                :evidence {:selection_reasons (top-reasons selected)
+                                           :hint_effects (cond-> []
+                                                           (seq (:hints_summary summary))
+                                                           (conj (coded "hints_applied" "Soft hints were applied during candidate ranking."))
+                                                           (and (not= "none" (:level raw-fetch))
+                                                                (pos? (:snippets raw-fetch)))
+                                                           (conj (coded "raw_code_escalated" "Late raw-code fetch was executed for ranked units.")))}
+                                :budget budget
+                                :confidence confidence}
+                         state-invariants (assoc :state_invariants state-invariants))
         packet-status (if (or (= "low" (:level confidence))
                               (= "degraded" (:status raw-fetch))
                               (seq truncation))
@@ -1438,7 +1590,8 @@
                        (= "degraded" (:status raw-fetch)) (conj (coded "raw_fetch_degraded" "Raw-code fetch was executed in degraded mode."))
                        (:truncated? selected-fit) (conj (coded "detail_budget_limited" "Detail packet selected units were truncated to fit the reserved stage budget."))
                        raw-truncated? (conj (coded "raw_snippets_truncated" "Raw snippets were truncated to fit the reserved raw-fetch budget."))
-                       (and (seq selected) (not include-impact?)) (conj (coded "impact_hints_omitted" "Impact hints were omitted to keep detail payload within the reserved stage budget.")))
+                       (and (seq selected) (not include-impact?)) (conj (coded "impact_hints_omitted" "Impact hints were omitted to keep detail payload within the reserved stage budget."))
+                       (and state-invariants-full (not include-state-invariants?)) (conj (coded "state_invariants_omitted" "State-invariant context was omitted to keep the detail payload within the reserved stage budget.")))
         stage-packet (build-stage "context_packet_assembly"
                                   packet-status
                                   "Assembled bounded context packet."
@@ -1446,7 +1599,8 @@
                                    :selected_files (count focus-paths)
                                    :reserved_tokens detail-budget
                                    :returned_tokens (+ selected-structure-tokens
-                                                       (if include-impact? impact-tokens 0))}
+                                                       (if include-impact? impact-tokens 0)
+                                                       (if include-state-invariants? state-invariants-tokens 0))}
                                   packet-warns
                                   []
                                   5)
@@ -1584,32 +1738,47 @@
          expansion-budget (get-in selection [:budget :reserved_budget :expansion_tokens] 0)
          skeleton-fit (fit-items-to-budget selected-source estimate-skeleton-tokens expansion-budget)
          selected (vec (:items skeleton-fit))
-         impact-full (when impact? (build-impact-hints bound-index selected))
-         impact-tokens (estimate-impact-hints-tokens impact-full)
-         remaining-budget (max 0 (- expansion-budget (:used_tokens skeleton-fit)))
-         include-impact? (and impact? (<= impact-tokens remaining-budget))
+         impact-full (build-impact-hints bound-index selected)
+         impact-tokens (if impact? (estimate-impact-hints-tokens impact-full) 0)
+         remaining-after-skeletons (max 0 (- expansion-budget (:used_tokens skeleton-fit)))
+         include-impact? (and impact? (<= impact-tokens remaining-after-skeletons))
          impact (when include-impact? impact-full)
+         remaining-after-impact (max 0 (- remaining-after-skeletons
+                                          (if include-impact? impact-tokens 0)))
+         state-invariants-full (state-invariants/assemble
+                                bound-index
+                                (:query selection)
+                                selected
+                                (:related_tests impact-full))
+         state-invariants-tokens (estimate-state-invariants-tokens state-invariants-full)
+         include-state-invariants? (and state-invariants-full
+                                        (<= state-invariants-tokens remaining-after-impact))
+         state-invariants (when include-state-invariants? state-invariants-full)
          truncation-flags (cond-> []
                             (:truncated? skeleton-fit) (conj "skeletons_truncated")
                             (and impact? (seq impact-full) (not include-impact?)) (conj "impact_hints_omitted")
+                            (and state-invariants-full (not include-state-invariants?)) (conj "state_invariants_omitted")
                             (and (seq selected-source) (zero? expansion-budget)) (conj "expansion_budget_exhausted"))
          estimated (+ (reduce + 0 (map estimate-skeleton-tokens selected-source))
-                      (if impact? impact-tokens 0))
+                      impact-tokens
+                      state-invariants-tokens)
          returned (+ (:used_tokens skeleton-fit)
-                     (if include-impact? impact-tokens 0))
+                     (if include-impact? impact-tokens 0)
+                     (if include-state-invariants? state-invariants-tokens 0))
          result-status (stage-result-status selected-source selected truncation-flags)]
      (projections/with-projection
-       {:api_version default-api-version
-        :selection_id selection_id
-        :snapshot_id snapshot_id
-        :result_status result-status
-        :budget_summary {:reserved_tokens expansion-budget
-                         :estimated_tokens estimated
-                         :returned_tokens returned
-                         :within_budget (<= estimated expansion-budget)
-                         :truncation_flags truncation-flags}
-        :skeletons (mapv compact-skeleton selected)
-        :impact_hints impact}
+       (cond-> {:api_version default-api-version
+                :selection_id selection_id
+                :snapshot_id snapshot_id
+                :result_status result-status
+                :budget_summary {:reserved_tokens expansion-budget
+                                 :estimated_tokens estimated
+                                 :returned_tokens returned
+                                 :within_budget (<= estimated expansion-budget)
+                                 :truncation_flags truncation-flags}
+                :skeletons (mapv compact-skeleton selected)
+                :impact_hints impact}
+         state-invariants (assoc :state_invariants state-invariants))
        :api-shape
        :detail))))
 
@@ -1634,9 +1803,121 @@
    (let [selection-result (resolve-context index query opts)
          selection (ensure-selection! index
                                       (:selection_id selection-result)
-                                      (:snapshot_id selection-result))]
-     (build-impact-hints (:bound_index selection)
-                         (or (:focus selection) [])))))
+                                      (:snapshot_id selection-result))
+         bound-index (:bound_index selection)
+         selected (or (:focus selection) [])
+         seed-degradations (impact-seed-degradations selection)]
+     (if (seq seed-degradations)
+       (degraded-impact-hints selection seed-degradations)
+       (let [impact-hints (build-impact-hints bound-index selected)
+             state-invariants (state-invariants/assemble
+                               bound-index
+                               (:query selection)
+                               selected
+                               (:related_tests impact-hints))]
+         (cond-> impact-hints
+           state-invariants (assoc :state_invariants state-invariants)))))))
+
+(def ^:private relation-traversal-directions
+  {"downstream" :downstream
+   "upstream" :upstream})
+
+(def ^:private default-relation-traversal-budget 1800)
+
+(defn- store-traversal-selection!
+  "Build and store a selection artifact over the traversal's discovered units so
+  the existing staged-retrieval flow (`expand-context` / `fetch-context-detail`)
+  can deliver their code, and return its selection_id. Returns nil when no
+  discovered unit resolves to a real unit in the index."
+  [index unit-ids requested-budget]
+  (let [selected (->> unit-ids
+                      (keep #(idx/unit-by-id index %))
+                      (map #(assoc % :rank_band "useful_support" :score 0.0
+                                   :tier_scores {} :selection_reasons []))
+                      vec)]
+    (when (seq selected)
+      (let [reserved (stage-budgets requested-budget)
+            policy (rp/resolve-policy nil nil)
+            query {:constraints {:token_budget requested-budget}}
+            capabilities (rp/capability-summary index (capability-units selected))
+            confidence (-> (build-confidence selected query policy)
+                           (apply-capability-ceiling capabilities policy))
+            {:keys [focus estimated_tokens]} (fit-focus selected (:selection_tokens reserved))
+            selection-id (str (java.util.UUID/randomUUID))
+            selection {:api_version default-api-version
+                       :selection_id selection-id
+                       :snapshot_id (:snapshot_id index)
+                       :query query
+                       :policy policy
+                       :created_at_ms (now-ms)
+                       :bound_index (snapshot-bound-index index)
+                       :file_snapshots (snapshot-file-lines
+                                        index (->> selected (map :path) distinct vec))
+                       :selected selected
+                       :focus focus
+                       :confidence confidence
+                       :capabilities capabilities
+                       :budget {:requested_tokens requested-budget
+                                :estimated_tokens estimated_tokens
+                                :within_budget (<= estimated_tokens (:selection_tokens reserved))
+                                :remaining_tokens (max 0 (- requested-budget estimated_tokens))
+                                :reserved_budget reserved}
+                       :result_status "completed"}]
+        (put-selection! index selection)
+        selection-id))))
+
+(defn relation-traversal
+  "Bounded public traversal over typed semantic relations for a loaded snapshot
+  `index`. `request` is the relation-traversal contract shape
+  (`:start_nodes`, `:direction`, optional `:relation_types`, `:resolved_only`,
+  `:budgets`, `:snapshot_id`, `:trace`). Runs the pure Stage 3 kernel and returns
+  the compact contract result plus a `:selection_id` (a stored selection over the
+  discovered units) so `expand-context` / `fetch-context-detail` deliver code
+  through the existing staged-retrieval flow. See ADR-040."
+  ([index request] (relation-traversal index request {}))
+  ([index request _opts]
+   (let [direction-kw (get relation-traversal-directions (some-> (:direction request) name))
+         start-nodes (->> (:start_nodes request)
+                          (keep (fn [s] (let [t (some-> s str clojure.string/trim)]
+                                          (when-not (clojure.string/blank? t) t))))
+                          distinct
+                          vec)]
+     (when-not direction-kw
+       (throw (ex-info "Unknown traversal direction"
+                       {:type :invalid_traversal_request
+                        :error_code :invalid_traversal_request
+                        :message "direction must be \"downstream\" or \"upstream\""
+                        :details {:direction (:direction request)}})))
+     (when (empty? start-nodes)
+       (throw (ex-info "start_nodes must be non-empty"
+                       {:type :invalid_traversal_request
+                        :error_code :invalid_traversal_request
+                        :message "start_nodes must contain at least one non-blank unit id"
+                        :details {:start_nodes (:start_nodes request)}})))
+     (let [budgets (:budgets request)
+           kernel-req (cond-> {:direction direction-kw
+                               :start_nodes start-nodes
+                               :relation_types (:relation_types request)}
+                        (contains? request :resolved_only)
+                        (assoc :resolved_only (:resolved_only request))
+                        (number? (:max_depth budgets)) (assoc :max_depth (:max_depth budgets))
+                        (number? (:max_nodes budgets)) (assoc :max_nodes (:max_nodes budgets))
+                        (number? (:max_discovery_paths budgets)) (assoc :max_discovery_paths (:max_discovery_paths budgets)))
+           result (relations/traverse-relations index kernel-req)
+           discovered (mapv :unit_id (:nodes result))
+           selection-id (store-traversal-selection! index discovered
+                                                    default-relation-traversal-budget)]
+       (cond-> {:schema_version "1.0"
+                :snapshot_id (:snapshot_id index)
+                :direction (name (:direction result))
+                :start_nodes (:start_nodes result)
+                :relation_types (:relation_types result)
+                :budgets (:budgets result)
+                :nodes (:nodes result)
+                :edges (:edges result)
+                :discovery_paths (:discovery_paths result)
+                :truncated (:truncated result)}
+         selection-id (assoc :selection_id selection-id))))))
 
 (defn skeletons [index {:keys [unit_ids paths]}]
   (let [units (cond

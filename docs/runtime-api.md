@@ -2,6 +2,12 @@
 
 This document describes the current MVP in-memory library API.
 
+> Architecture policy: ADR-046 is accepted. Fresh SCIP/LSP evidence is the
+> target semantic-authority tier, tree-sitter is structural gap filling, and
+> regex is degraded fallback. The legacy parser-engine behavior documented below
+> remains current implementation only until plans/018 completes; it is not the
+> target policy. ADR-047 retains the repo-managed tree-sitter toolchain.
+
 ## Namespace
 
 - `semidx.core`
@@ -9,12 +15,15 @@ This document describes the current MVP in-memory library API.
 ## Language Coverage (MVP)
 
 - Clojure (`.clj/.cljc/.cljs`) via `clj-kondo` primary path and regex fallback
-- Java (`.java`) via lightweight regex parser
+- Java (`.java`) via legacy lightweight regex parser pending provider migration
 - Elixir (`.ex/.exs`) via lightweight regex parser with optional tree-sitter path
 - Python (`.py`) via lightweight regex parser
-- TypeScript (`.ts/.tsx`) via lightweight regex parser
+- TypeScript (`.ts/.tsx`) via legacy lightweight regex parser pending provider migration
+- JavaScript (`.js/.jsx/.mjs/.cjs`) through the shared ECMAScript parser core
 - Lua (`.lua`) via lightweight regex parser
-- Java/Elixir/Python/TypeScript/Lua call tokens are normalized for module/class-aware call graph linking
+- Zig (`.zig`) via ZLS document symbols for definitions/ownership, with bounded regex fallback and supplemental import/call extraction
+- HTML (`.html/.htm`) and CSS (`.css`) via bounded static-document parsers
+- Java/Elixir/Python/TypeScript/Lua/Zig call tokens are normalized for module/class-aware call graph linking
 
 ## Public Functions
 
@@ -71,7 +80,7 @@ Example with parser options:
                 :tree_sitter_enabled false}})
 ```
 
-Tree-sitter extraction path (optional):
+Legacy tree-sitter extraction path (current implementation):
 
 ```clojure
  (sci/create-index
@@ -88,8 +97,11 @@ Tree-sitter extraction path (optional):
                                        :typescript ".tree-sitter-grammars/tree-sitter-typescript/typescript"}}})
 ```
 
-Regex parsers remain the default and guaranteed path. Tree-sitter is optional:
-when enabled, the runtime resolves the CLI from `:tree_sitter_cli_path`,
+The current legacy parser options default Java and TypeScript to regex while the
+migration is in progress. This is not current architecture policy: ADR-046 /
+plans/018 require provider planning with fresh SCIP/LSP authority, tree-sitter
+structural gap filling, and regex degraded fallback. Tree-sitter execution
+resolves the CLI from `:tree_sitter_cli_path`,
 `SEMIDX_TREE_SITTER_CLI_PATH`, `.tree-sitter-grammars/bin/tree-sitter`, then
 ambient `PATH` as a developer fallback.
 
@@ -670,6 +682,29 @@ Returns `impact_hints` only for the same query semantics.
 (sci/impact-analysis index query)
 ```
 
+If the selected impact seed is missing, ambiguous, low-confidence, or stale, the
+returned impact map keeps the legacy list keys empty and adds
+`:result_status "degraded"`, `:degradations`, `:confidence`, and `:guardrails`.
+Callers must treat that as "do not trust this blast radius without narrower
+retrieval or exact source verification."
+
+### `relation-traversal`
+
+Bounded traversal over typed semantic relations (dataflow) reusing the Stage 3
+kernel (ADR-040). `direction` is `"downstream"` (source -> target) or
+`"upstream"` (target -> source); `resolved_only` defaults to true;
+`budgets` (`max_depth`/`max_nodes`/`max_discovery_paths`) are clamped to the kernel
+ceiling. Returns the compact result (`nodes`, `edges`, `discovery_paths`, `budgets`,
+`truncated`) plus a `selection_id` reusable by `expand-context` /
+`fetch-context-detail`. Exposed on library, MCP (`traverse_relations`), HTTP
+(`POST /v1/retrieval/traverse-relations`), and gRPC (`TraverseRelations`).
+
+```clojure
+(sci/relation-traversal index {:direction "downstream"
+                               :start_nodes ["src/my/app/order.clj::my.app.order/process-order"]
+                               :budgets {:max_depth 2}})
+```
+
 ### `query-units`
 
 Query persisted graph units from a storage adapter.
@@ -799,6 +834,9 @@ Current SLO-facing metrics include:
 - `cache_hit_ratio`
 - `degraded_rate`
 - `fallback_rate`
+- `totals.rate_limit_decisions`
+- `totals.rate_limit_rejections`
+- `rate_limit_rejection_rate`
 - `policy_version_distribution`
 
 Optional filters:
@@ -940,6 +978,110 @@ Current conversion behavior:
 - `expected.required_paths` comes from review feedback ground truth plus query target paths
 - `expected.min_confidence_level` uses the strongest feedback confidence level when present, otherwise defaults to `"medium"`
 - `source_review` is retained on each query entry for auditability
+
+### Retrieval value benchmark report
+
+Aggregates recorded four-arm benchmark attempts (`plans/020`) into a per-arm
+success-per-cost report and applies the Stage 0 stop rule.
+
+Library API:
+
+```clojure
+(require '[semidx.runtime.benchmark-report :as benchmark-report])
+
+(benchmark-report/benchmark-report metrics)
+(benchmark-report/benchmark-report metrics {:benchmark_run_ids ["run-1"]
+                                            :external_repo_keys ["aegis-zig"]
+                                            :threshold {:locked true
+                                                        :threshold_id "pilot_locked_v1"}})
+```
+
+CLI (PostgreSQL is optional; exported records replay through the in-memory sink):
+
+```bash
+clojure -M:eval benchmark-report \
+  --benchmark-records "${TMPDIR:-.tmp}/benchmark-records.json" \
+  --out "${TMPDIR:-.tmp}/sci-benchmark-report.json"
+
+clojure -M:eval benchmark-report \
+  --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index \
+  --benchmark-run-id run-1 \
+  --out "${TMPDIR:-.tmp}/sci-benchmark-report.json"
+```
+
+Aggregation behavior:
+
+- attempts are aggregated on `task_attempt_id` first, then rolled up by
+  `(benchmark_run_id, task_id, arm)`, so repeated runs never collapse
+- cost is re-derived from the stored response/usage matrix; a disagreement with
+  the harness-recorded totals is reported in `inputs.usage_totals_mismatches`
+- attempts with `pricing_status` `unresolved` or `historical_only` are excluded
+  from the cost verdict instead of being priced at zero
+- `not_applicable` attempts (the only representation of an unavailable Arm C
+  capability) leave the success denominator and are reported separately
+- the primary A-vs-B comparison is paired per task over cost-eligible attempts;
+  C and D are reported as controls and never replace comparator B
+- cost and success are weighted the same way: `success_rate` and
+  `success_delta_pp` average the per-task rates so a task run with more seeds
+  cannot outweigh one run with fewer, while `attempt_success_rate` keeps the
+  unweighted attempt view and carries the confidence interval
+- `diagnostics.semidx_internal_tokens` sums selection `estimated_tokens` and
+  expand/detail `returned_tokens` per arm, preserving the Stage 1 semantics
+- `stop_rule.verdict` stays `pending_threshold_lock` until a locked threshold is
+  supplied and the pooling identities agree
+
+### Live benchmark arm runner
+
+The evaluated-model agent that executes one benchmark attempt under one arm
+policy (`plans/020`). The harness keeps identity, policy audit, scoring, and
+cost accounting; this runner only produces the answer.
+
+Library API:
+
+```clojure
+(require '[semidx.runtime.benchmark-agent :as benchmark-agent]
+         '[semidx.runtime.benchmark-harness :as harness])
+
+(harness/run-suite!
+ {:runner (benchmark-agent/live-arm-runner {:usage_metrics metrics})
+  :sink metrics
+  :evaluated {:evaluated_provider "google"
+              :evaluated_api_surface "generate-content"
+              :evaluated_model "gemini-2.5-flash"
+              :evaluated_model_revision "gemini-2.5-flash"
+              :evaluated_service_tier "on-demand"}
+  :agent {:agent_id benchmark-agent/agent-id
+          :agent_build_id benchmark-agent/agent-build-id}
+  :isolate_workspace true})
+```
+
+Out of process, matching the harness `process-arm-runner` contract (attempt
+context as JSON on stdin, attempt result as JSON on stdout):
+
+```bash
+clojure -M:benchmark-agent < attempt-context.json
+```
+
+Environment:
+
+- `GEMINI_API_KEY` — evaluated provider key; the runner refuses to invent one.
+- `SEMIDX_BENCH_LSP_COMMAND` — language server for Arm C; without it Arm C
+  reports the preregistered `not_applicable` outcome before spending tokens.
+- `SEMIDX_USAGE_METRICS_JDBC_URL` — optional, out-of-process only, so Arm A's
+  semidx calls stay tagged to the attempt.
+
+Behavior that protects the measurement:
+
+- the model is offered exactly the tool declarations its arm allows; a call
+  outside the allowlist is refused and still reported, so the harness audit
+  fails the attempt instead of the runner absorbing the breach;
+- an arm that cannot be run competently is refused before any provider call: a
+  lexical arm without `rg`, an Arm C without a language server, or an attempt
+  with no `evaluated_model_revision` to price;
+- `snapshot_id` and `context_tokens` in the answer are what the runner observed,
+  never what the model reports about itself;
+- raw provider `usageMetadata` is recorded per turn for the price schedule, and
+  the execution budget stops the loop rather than overrunning it.
 
 ### Batch policy review pipeline
 
@@ -1193,6 +1335,85 @@ Smoke helper:
 ./scripts/run-mvp-smoke.sh . contracts/examples/queries/symbol-target.json "${TMPDIR:-.tmp}/sci-smoke.json"
 ```
 
+Process model: `clojure -M:runtime` is intentionally one-shot. It starts a JVM,
+handles the request, writes the result, and exits. Repeated short-lived
+invocations therefore pay repeated JVM startup and a repeated index build. Use
+the runtime launcher below when the same root is queried more than once.
+
+## Runtime Launcher (Local Process Reuse)
+
+The launcher is a thin local command path that reuses a long-lived runtime
+instead of paying cold JVM startup per request. It does not define a retrieval
+protocol of its own: `request` forwards to the existing runtime HTTP endpoints
+and returns the unchanged runtime response body.
+
+```bash
+clojure -M:launcher status  --root . [--profile runtime-http|mcp-http] [--host 127.0.0.1] [--port 8787]
+clojure -M:launcher start   --root . [--profile runtime-http|mcp-http] [--port 8787] [--start-timeout-ms 90000]
+clojure -M:launcher stop    --root . [--profile runtime-http|mcp-http]
+clojure -M:launcher request --root . --query contracts/examples/queries/symbol-target.json \
+  --out "${TMPDIR:-.tmp}/sci.json"
+```
+
+Two profiles share this command path:
+
+| Profile | Default port | What the launcher owns | `request` |
+| --- | --- | --- | --- |
+| `runtime-http` (default) | 8787 | process lifetime and the forwarded retrieval request | supported |
+| `mcp-http` | 8791 | process lifetime only; the MCP client owns the protocol | refused with `request_unsupported_for_profile` |
+
+MCP HTTP client configuration is documented in
+[docs/mcp-api.md](mcp-api.md#launcher-managed-mcp-http-reuse).
+
+`request` output is the same detail payload the one-shot CLI writes, plus the
+additive `project_context` metadata that every runtime HTTP response carries.
+
+Behavior:
+
+- `status` never starts a process. `running` reports whether a healthy runtime
+  is reusable for this root and profile.
+- `start` and `request` reuse a healthy runtime, and otherwise start one while
+  holding an exclusive per-slot lock. Health is re-checked after the lock is
+  acquired so two concurrent clients cannot start two runtimes.
+- A runtime already listening on the requested endpoint is *adopted*, not
+  duplicated. Adopted runtimes are recorded with `owned false`, and `stop`
+  refuses to kill them.
+- Stale metadata (dead PID, closed port, failed health, profile or endpoint
+  change) is cleaned before a replacement is started.
+- Health is matched against the profile: both servers answer `GET /health` with
+  `status: "ok"`, so the reported `service` decides whether the endpoint is the
+  one asked for. Finding the other profile's server on the requested port is
+  reported as `health_service_mismatch` instead of being adopted.
+
+Every command reports `timings`. `status` and `stop` carry `total_ms`; `start`
+also separates `spawn_ms` from `health_wait_ms` so a slow start is attributable;
+`request` adds `request_ms` for the forwarded call, printed to stderr so stdout
+stays exactly the runtime payload.
+
+Measure the reuse win with `./scripts/run-launcher-benchmark.sh [--root .]
+[--runs 3] [--port 8799] [--out report.json]`. It times three paths for one
+query — the one-shot CLI, a launcher `request` (a JVM client against a warm
+runtime), and a direct HTTP call (no JVM in the client) — and reports the first
+request after a start separately, because that one pays the runtime's index
+build.
+
+State layout: one slot per workspace and profile, keyed by workspace identity,
+under `~/.cache/semidx/runtime/<workspace_key>-<profile>/`. It holds
+`state.edn`, `start.lock`, and `runtime.log`. State never lives inside the
+repository. Override the location with `SEMIDX_RUNTIME_LAUNCHER_HOME`.
+
+Auth: `--api-key` is sent as `x-api-key` on forwarded requests and passed to a
+launcher-started runtime through `SEMIDX_RUNTIME_API_KEY`. Key values are never
+written to launcher state, reports, or logs.
+
+Reuse is project-safe because every forwarded request carries `root_path`
+explicitly, and the runtime HTTP edge keys its project registry by canonical
+root. Design and staging are in
+[plans/021_persistent_jvm_runtime_reuse_plan.md](../plans/021_persistent_jvm_runtime_reuse_plan.md).
+MCP stdio reuse stays out of scope for both profiles: a stdio server's lifetime
+belongs to the MCP host that spawned it, so there is no process for the launcher
+to reuse.
+
 ## Minimal HTTP Edge
 
 Run a minimal production-boundary HTTP wrapper over the same library runtime:
@@ -1200,6 +1421,9 @@ Run a minimal production-boundary HTTP wrapper over the same library runtime:
 ```bash
 clojure -M:runtime-http --host 127.0.0.1 --port 8787
 ```
+
+This process is long-lived once started and is the preferred first reuse target
+for CLI-style repeated local requests.
 
 Optional auth boundary:
 
@@ -1226,6 +1450,23 @@ SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index \
 clojure -M:runtime-http --host 127.0.0.1 --port 8787
 ```
 
+Optional defense-in-depth rate limiting (default off):
+
+```bash
+clojure -M:runtime-http \
+  --rate-limit-requests 120 \
+  --rate-limit-window-ms 60000 \
+  --rate-limit-max-subjects 10000 \
+  --rate-limit-subject-scope tenant_actor
+```
+
+The same settings are available through
+`SEMIDX_RUNTIME_RATE_LIMIT_REQUESTS`, `SEMIDX_RUNTIME_RATE_LIMIT_WINDOW_MS`,
+`SEMIDX_RUNTIME_RATE_LIMIT_MAX_SUBJECTS`, and
+`SEMIDX_RUNTIME_RATE_LIMIT_SUBJECT_SCOPE`. Scope may be `tenant_actor`
+(default) or `tenant`. Health and capabilities stay exempt. Rejections return
+HTTP `429 rate_limited` with `Retry-After`.
+
 Endpoints:
 
 - `GET /health`
@@ -1244,6 +1485,10 @@ Run a minimal gRPC wrapper over the same library runtime semantics:
 ```bash
 clojure -M:runtime-grpc --host 127.0.0.1 --port 8789
 ```
+
+This process is long-lived once started. It remains the gRPC runtime surface;
+the planned launcher should reuse it only when gRPC is selected as the local
+runtime profile.
 
 Optional auth boundary:
 
@@ -1270,15 +1515,39 @@ SCI_USAGE_METRICS_JDBC_URL=jdbc:postgresql://localhost:5432/semantic_index \
 clojure -M:runtime-grpc --host 127.0.0.1 --port 8789
 ```
 
-Service: `semidx.RuntimeService`
+The HTTP rate-limit flags and environment variables above are also accepted by
+the gRPC launcher. gRPC Health stays exempt; protected unary RPCs reject excess
+requests with `RESOURCE_EXHAUSTED`, `x-sci-error-code: rate_limited`, and
+`x-sci-retry-after-seconds` trailers.
+
+Service: `semidx.runtime.grpc.v1.RuntimeService`
 
 Unary methods:
 
 - `Health` (`HealthRequest` -> `HealthResponse`)
 - `CreateIndex` (`CreateIndexRequest` -> `CreateIndexResponse`)
 - `ResolveContext` (`ResolveContextRequest` -> `ResolveContextResponse`)
+- `ExpandContext` (`ExpandContextRequest` -> `ExpandContextResponse`)
+- `FetchContextDetail` (`FetchContextDetailRequest` -> `FetchContextDetailResponse`)
+- `LiteralFileSlice` (`LiteralFileSliceRequest` -> `LiteralFileSliceResponse`)
+- `SnapshotDiff` (`SnapshotDiffRequest` -> `SnapshotDiffResponse`)
+- `TraverseRelations` (`TraverseRelationsRequest` -> `TraverseRelationsResponse`)
 
 Proto schema source: `proto/semidx/runtime/grpc/v1/runtime.proto`
+
+The `.proto` is the only editable wire-schema source. Generated Java messages
+and `RuntimeServiceGrpc` are committed under `src-generated/java` and verified
+against the pinned build toolchain:
+
+```bash
+clojure -T:build grpc-generate
+clojure -T:build grpc-verify-generated
+clojure -T:build compile-java
+```
+
+Ordinary `clojure -M:test` and `clojure -M:runtime-grpc` runs never invoke
+`protoc` or require network access. They compile the committed Java sources with
+the local JDK only when `target/classes` is missing or stale.
 
 `HealthResponse` carries `capabilities_json`, a JSON-encoded copy of the same versioned capability payload returned by `semidx.core/capabilities`, MCP `capabilities`, and HTTP `GET /capabilities`. gRPC clients should call `Health` as capability preflight before selecting `language_policy_json` for indexing.
 
@@ -1286,7 +1555,8 @@ Current gRPC transport uses dedicated runtime protobuf envelope messages while p
 
 - request scalar fields stay typed (`root_path`, `paths`, counters)
 - complex nested runtime payloads are carried in explicit `*_json` string fields during this migration step, including optional `language_policy_json`
-- the server currently materializes these messages from protobuf descriptors at runtime rather than generated Java classes
+- the server uses generated Java message classes and the generated
+  `RuntimeServiceGrpc` service/method descriptors
 
 When auth boundary is enabled:
 
@@ -1320,6 +1590,7 @@ Current stable codes include:
 - `language_refresh_required`
 - `language_activation_in_progress`
 - `language_policy_blocked`
+- `rate_limited`
 - `protocol_error`
 - `internal_contract_error`
 - `invalid_storage_config`
@@ -1355,13 +1626,17 @@ Optional host-integrated authz policy:
 ```clojure
 {:tenants
  {"tenant-001" {:allowed_roots ["<repo-a-root>"]
-                :allowed_path_prefixes ["src/my/app" "test/my/app"]}}}
+                :allowed_path_prefixes ["src/my/app" "test/my/app"]
+                :allowed_operations [:policy_read
+                                     :policy_promote
+                                     :policy_retire]}}}
 ```
 
 Policy semantics:
 
 - `allowed_roots`: required per tenant; request `root_path` must be inside one of these roots.
 - `allowed_path_prefixes`: optional per tenant.
+- `allowed_operations`: required for policy control-plane operations. `policy_read`, `policy_promote`, and `policy_retire` are denied by default when omitted. Repository retrieval operations retain their existing root/path authorization behavior.
 - if `allowed_path_prefixes` is configured, request `paths` must be provided and every path must match an allowed prefix.
 - path checks require relative paths and reject traversal (`..`) segments.
 
@@ -1377,6 +1652,27 @@ Transport mapping for authz denials:
 
 - HTTP: `403` (`:forbidden`), `400` (`:invalid_request`), `500` (`:internal_error`)
 - gRPC: `PERMISSION_DENIED`, `INVALID_ARGUMENT`, `INTERNAL`
+
+### Online policy control plane
+
+The HTTP runtime exposes:
+
+- `GET /v1/policies/registry`
+- `POST /v1/policies/promote`
+- `POST /v1/policies/retire`
+
+Offline `shadow-review` produces a promotion decision containing candidate and
+baseline digests, registry and dataset revisions, the gate version, outcome,
+approval tier, and review timestamp. The promote endpoint requires that
+decision id and rejects stale candidate, baseline, registry, or gate metadata.
+Restricted candidates additionally require an approval record created with
+`semidx.runtime.retrieval-policy/record-policy-approval`; the record is bound to
+the current decision id and a `policy_approver` actor.
+
+Lifecycle writes are serialized inside one runtime process. When a registry
+file is configured, the runtime atomically replaces that file before publishing
+the new in-memory state. Multiple runtime processes must not share one writable
+registry file without an external coordinator.
 
 ## Validation and Gates
 
@@ -1404,8 +1700,13 @@ The semantic-quality report lane is advisory in v1:
 - TypeScript semantic-core now emits object-literal methods, class field arrow methods, default-export alias indirection, and direct re-export alias units through the dedicated TypeScript language module, with regex/tree-sitter parity for those advanced surfaces while still treating the overall language lane as conservative `low`-ceiling coverage.
 - Parsed files and units now also carry additive `semantic_pipeline` metadata, which is the internal anchor for the new semantic stabilization tranche; this does not change the public retrieval schema roots.
 - Language-specific parser entrypoints now live under `semidx.runtime.languages.*`, while `semidx.runtime.adapters/parse-file` remains the canonical facade used by index creation.
-- Java and Python parsers are lightweight regex-based in MVP; Elixir and TypeScript are regex-first with optional tree-sitter paths.
-- `tree-sitter` extraction is implemented for Clojure, Elixir, Java, and TypeScript when corresponding grammar paths are configured.
+- The current Java/TypeScript parser-engine defaults are legacy compatibility
+  behavior pending plans/018, not the authority policy. Fresh SCIP/LSP evidence
+  is primary under ADR-046; tree-sitter fills structural gaps and regex is
+  explicitly degraded fallback.
+- Tree-sitter execution is implemented for Clojure, Elixir, Java, and TypeScript
+  when corresponding grammar paths are configured, using the ADR-047
+  repo-managed toolchain boundary.
 - If tree-sitter is requested but unavailable/misconfigured, runtime falls back with diagnostics (`tree_sitter_*` codes).
 - Raw-code escalation stage is late and opt-in via query options (`allow_raw_code_escalation`) and bounded by `constraints.max_raw_code_level`.
 - Ranking is structural-first and tiered, with hard ceilings when Tier1 evidence is missing.
@@ -1416,6 +1717,6 @@ The semantic-quality report lane is advisory in v1:
 Set env var and run tests:
 
 ```bash
-SCI_TEST_POSTGRES_URL='jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass' \
+SEMIDX_TEST_POSTGRES_URL='jdbc:postgresql://localhost:5432/semantic_index_test?user=semantic_user&password=semantic_pass' \
 clojure -M:test
 ```

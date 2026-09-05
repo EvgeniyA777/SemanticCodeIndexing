@@ -1,10 +1,15 @@
 ---
+title: "semidx MCP Smoke Report"
+doc_type: "smoke_report"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: semidx-mcp-smoke-report
 created_at: 2026-04-02T23:24:24-0700
 author: codex
 language: en
-status: active
+status: completed
 reason: Created after an interactive smoke test of the new semidx MCP flow on the semidx repository itself to preserve concrete observations about protocol strictness, retrieval quality, and runtime validation.
 ---
 

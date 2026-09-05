@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-030
 title: Move Semantic-Quality Runner Post-Processing Into Clojure
-status: proposed
+status: accepted
 date: 2026-04-02
 deciders:
   - project owner
@@ -22,7 +22,7 @@ links:
 
 # ADR-030: Move Semantic-Quality Runner Post-Processing Into Clojure
 
-**Status**: Proposed  
+**Status**: Accepted
 **Date**: 2026-04-02  
 **Deciders**: project owner
 
@@ -124,11 +124,10 @@ Option 3 loses because it would push more semantic responsibility into shell, wh
 - ensure artifact writes are atomic and stdout emits final paths only
 - add regression coverage for advisory success, execution failure, invalid reports, and stale-output replacement
 
-## Status Changes
+## Status
 
-No status change yet.
-
-If accepted, this ADR becomes the decision of record for the semantic-quality runner architecture.
+Accepted and implemented. This ADR is the decision of record for the
+semantic-quality runner architecture.
 
 ## References
 

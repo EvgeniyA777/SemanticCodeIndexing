@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-029
 title: "Standardize Projection Profiles and Add Advisory Semantic-Quality Gates"
-status: proposed
+status: accepted
 date: 2026-04-02
 deciders:
   - project owner
@@ -16,7 +16,7 @@ links: []
 ---
 # ADR-029: Standardize Projection Profiles and Add Advisory Semantic-Quality Gates
 
-**Status**: Proposed  
+**Status**: Accepted
 **Date**: 2026-04-02  
 **Deciders**: project owner
 

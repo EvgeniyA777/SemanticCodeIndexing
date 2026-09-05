@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-036
 title: Use A Repo-Managed Tree-Sitter Toolchain
-status: accepted
+status: superseded
 date: 2026-07-20
 deciders:
   - project owner
@@ -10,21 +10,34 @@ tags:
   - architecture
   - parser-boundary
   - tree-sitter
-summary: Tree-sitter remains an optional accelerated parser path, but runtime code must resolve it through an explicit repo-managed toolchain boundary instead of depending on an externally installed tree-sitter CLI.
-agent_summary: Read this ADR before implementing plans/013 Stage 2. The decision of record is to remove the hard runtime dependency on PATH-installed tree-sitter by adding explicit repo-managed toolchain resolution, keeping regex parsers as the guaranteed default, and surfacing diagnostics when the accelerated path is requested but unavailable.
+summary: Historical mixed decision that coupled a repo-managed tree-sitter toolchain with a regex-default parser policy; its authority policy is superseded by ADR-046 and its toolchain boundary is restated by ADR-047.
+agent_summary: Historical reference only. Do not use this ADR for current parser authority: ADR-046 makes fresh semantic providers primary and regex degraded fallback. Use ADR-047 for the retained repo-managed tree-sitter toolchain boundary.
 supersedes: []
-superseded_by: null
+superseded_by:
+  - ADR-046
+  - ADR-047
 links:
   - plans/013_open_gaps_closure_program.md
   - reports/014_open_gaps_closure_program_progress_log.md
   - adr/035-split-language-lanes-out-of-adapter-facade.md
+  - adr/046-prefer-semantic-evidence-providers-over-structural-and-lexical-fallbacks.md
+  - adr/047-retain-repo-managed-tree-sitter-toolchain-for-structural-providers.md
 ---
 
 # ADR-036: Use A Repo-Managed Tree-Sitter Toolchain
 
-**Status**: Accepted  
-**Date**: 2026-07-20  
+**Status**: Superseded
+**Date**: 2026-07-20
 **Deciders**: project owner
+
+---
+
+## Supersession Note
+
+This ADR is historical. Its regex-default parser-authority policy is superseded
+by ADR-046. Its repository-managed tree-sitter executable and grammar-resolution
+boundary is retained and restated by ADR-047. The original text below records
+the 2026-07-20 decision and must not be read as current parser policy.
 
 ---
 

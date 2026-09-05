@@ -1,0 +1,61 @@
+{
+  "packet_version": "1.2",
+  "triggered_by": ["disconnect", "status", "timestamp", "state", "connection"],
+  "entity_candidates": [
+    {
+      "unit_id": "src/com/acme/model/ConnectionEntity.java::com.acme.model.ConnectionEntity#setStatus$arity1",
+      "path": "src/com/acme/model/ConnectionEntity.java",
+      "symbol": "com.acme.model.ConnectionEntity#setStatus"
+    }
+  ],
+  "entity_fields": [
+    {
+      "entity": "com.acme.model.ConnectionEntity",
+      "path": "src/com/acme/model/ConnectionEntity.java",
+      "fields": [
+        {
+          "name": "connectedAt",
+          "nullable": false,
+          "annotations": ["@Column(nullable = false)"],
+          "state_bearing": true
+        },
+        {
+          "name": "lastValidatedAt",
+          "state_bearing": true
+        },
+        {
+          "name": "status",
+          "state_bearing": true
+        }
+      ]
+    }
+  ],
+  "state_writers": [
+    {
+      "unit_id": "src/com/acme/service/ConnectionService.java::com.acme.service.ConnectionService#disconnect$arity1",
+      "path": "src/com/acme/service/ConnectionService.java",
+      "symbol": "com.acme.service.ConnectionService#disconnect"
+    }
+  ],
+  "field_writes": [
+    {
+      "unit_id": "src/com/acme/service/ConnectionService.java::com.acme.service.ConnectionService#disconnect$arity1",
+      "symbol": "com.acme.service.ConnectionService#disconnect",
+      "writes": ["status"]
+    }
+  ],
+  "assertion_tests": [
+    "test/com/acme/service/ConnectionServiceTest.java"
+  ],
+  "fixture_helpers": [
+    {
+      "unit_id": "test/com/acme/service/ConnectionServiceTest.java::com.acme.service.ConnectionServiceTest#buildConnectionEntity$arity0",
+      "path": "test/com/acme/service/ConnectionServiceTest.java",
+      "symbol": "com.acme.service.ConnectionServiceTest#buildConnectionEntity"
+    }
+  ],
+  "guardrail": {
+    "code": "state_invariants_verify_field_preservation",
+    "recommendation": "Selected writers touch fields [status]. The entity declares state-bearing fields [connectedAt, lastValidatedAt, status]. Verify that state-bearing fields not written by the change are intentionally preserved, and still read the entity and its tests before editing."
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semidx.example/contracts/schemas/policy-registry-response.schema.json",
+  "title": "Policy Registry Response",
+  "description": "Normalized retrieval-policy registry returned by the online control plane.",
+  "type": "object",
+  "required": ["schema_version", "policies"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "policies": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["policy_id", "version", "state", "policy", "governance"],
+        "properties": {
+          "policy_id": {"$ref": "common.schema.json#/$defs/boundedString"},
+          "version": {"$ref": "common.schema.json#/$defs/boundedString"},
+          "state": {
+            "type": "string",
+            "enum": ["draft", "shadow", "active", "retired"]
+          },
+          "policy": {"type": "object"},
+          "governance": {"type": "object"},
+          "shadow_review": {"type": "object"},
+          "approvals": {
+            "type": "array",
+            "items": {"type": "object"}
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

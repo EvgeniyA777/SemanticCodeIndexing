@@ -1,5 +1,7 @@
 (ns semidx.test-runner-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :as t :refer [deftest is testing]]
+            [semidx.runtime.grpc-prep :as grpc-prep]
             [semidx.test-runner :as test-runner]))
 
 (defn- thrown-ex-data [f]
@@ -53,3 +55,32 @@
            (thrown-ex-data
             #(test-runner/selected-test-namespaces
               ["-n" "--namespace" "semidx.runtime.http-test"]))))))
+
+(deftest run-prepares-generated-grpc-classes-before-loading-tests-test
+  (let [prep-calls (atom 0)]
+    (with-redefs [grpc-prep/ensure-grpc-classes! #(swap! prep-calls inc)
+                  t/run-tests (fn [& _]
+                                {:test 0 :pass 0 :fail 0 :error 0})]
+      (is (= {:test 0 :pass 0 :fail 0 :error 0}
+             (test-runner/run [])))
+      (is (= 1 @prep-calls)))))
+
+(deftest committed-generated-grpc-classes-are-current-test
+  (is (= :current (:status (grpc-prep/ensure-grpc-classes!))))
+  (is (true? (grpc-prep/grpc-classes-current?))))
+
+(deftest stale-generated-grpc-output-is-rebuilt-test
+  (let [marker (io/file "target/classes/.semidx-grpc-compiled")
+        stale-class (io/file "target/classes/semidx/runtime/grpc/v1/StaleGenerated.class")]
+    (try
+      (io/make-parents stale-class)
+      (spit stale-class "stale")
+      (spit marker "stale-manifest")
+      (is (= :compiled (:status (grpc-prep/ensure-grpc-classes!))))
+      (is (false? (.exists stale-class)))
+      (is (true? (grpc-prep/grpc-classes-current?)))
+      (finally
+        (when (.exists stale-class)
+          (io/delete-file stale-class true))
+        (when-not (grpc-prep/grpc-classes-current?)
+          (grpc-prep/ensure-grpc-classes!))))))

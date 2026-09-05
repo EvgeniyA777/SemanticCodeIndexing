@@ -137,10 +137,16 @@
          {:keys [exit out err]}
          (try
            (sh/sh cli-path "parse" "--cst" "--config-path" config-path "--grammar-path" grammar-path abs-path
-                  :env (cond-> {"XDG_CACHE_HOME" (or (System/getenv "XDG_CACHE_HOME")
-                                                     tmpdir)
-                                "TMPDIR" tmpdir}
-                         (System/getenv "HOME") (assoc "HOME" (System/getenv "HOME"))))
+                  ;; `:env` REPLACES the child environment rather than adding to
+                  ;; it, so the overrides have to be merged onto the inherited
+                  ;; one. Passing only the three keys dropped PATH, which a
+                  ;; native tree-sitter binary survives but the npm-installed
+                  ;; CLI does not: its `#!/usr/bin/env node` shebang then fails
+                  ;; with "node: No such file or directory". That is why this
+                  ;; only ever broke on CI.
+                  :env (assoc (into {} (System/getenv))
+                              "XDG_CACHE_HOME" (or (System/getenv "XDG_CACHE_HOME") tmpdir)
+                              "TMPDIR" tmpdir))
            (catch Exception e
              {:exit 127 :out "" :err (.getMessage e)}))]
      (if (zero? (int exit))

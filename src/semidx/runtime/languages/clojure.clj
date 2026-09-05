@@ -1138,7 +1138,15 @@
 (defn- parse-clojure-kondo [root-path path lines]
   (let [abs (-> (io/file root-path path) .getCanonicalPath)
         config "{:linters {:namespace-name-mismatch {:level :off}} :output {:format :edn :analysis true :canonical-paths true}}"
-        {:keys [exit out err]} (sh/sh "clj-kondo" "--lint" abs "--cache" "false" "--config" config "--fail-level" "error")
+        ;; An absent clj-kondo makes `sh` throw IOException rather than return a
+        ;; non-zero exit, and an uncaught throw here aborts the whole index build
+        ;; instead of degrading. Every other unavailable-toolchain path in this
+        ;; runtime reports and falls back, so this one must too.
+        {:keys [exit out err unavailable]}
+        (try
+          (sh/sh "clj-kondo" "--lint" abs "--cache" "false" "--config" config "--fail-level" "error")
+          (catch Exception e
+            {:exit -1 :out "" :err (.getMessage e) :unavailable true}))
         parsed (try (edn/read-string out) (catch Exception _ nil))
         analysis (:analysis parsed)
         fallback (parse-clojure-regex path lines)
@@ -1216,6 +1224,21 @@
                      {:code (str "kondo_" (name (:type f)))
                       :summary (:message f)})))]
     (cond
+      ;; Checked before `(seq units)`: when clj-kondo produces nothing, the
+      ;; regex fallback's units are still folded in as `supplemental-units` and
+      ;; stamped "full", so an unavailable-toolchain run would otherwise report
+      ;; lexical output under the full parser mode. ADR-046 forbids exactly that.
+      unavailable
+      (-> fallback
+          (update :diagnostics into
+                  [{:code "kondo_unavailable"
+                    :summary (str "clj-kondo is not available; using the fallback "
+                                  "Clojure parser. Install clj-kondo to restore "
+                                  "full Clojure extraction.")}
+                   {:code "kondo_stderr"
+                    :summary (subs (str err) 0 (min 220 (count (str err))))}])
+          (assoc :parser_mode "fallback"))
+
       (seq units)
       {:language "clojure"
        :module (some-> units first :module)

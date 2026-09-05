@@ -1,10 +1,15 @@
 ---
+title: "semidx Rename Execution Plan"
+doc_type: "implementation_note"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: semidx-rename-execution-plan
 created_at: 2026-03-27T02:30:00-0700
 author: claude
 language: en
-status: executed
+status: completed
 ---
 
 # Rename Plan: semantic-code-indexing → semidx

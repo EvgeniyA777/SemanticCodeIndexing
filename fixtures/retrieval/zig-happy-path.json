@@ -1,0 +1,50 @@
+{
+  "fixture_id": "retrieval_zig_happy_path_001",
+  "category": "zig_onboarding",
+  "purpose": "Zig exact symbol targeting should keep the authority function in top_authority.",
+  "adr_refs": ["ADR-005", "ADR-008", "ADR-014", "ADR-022", "ADR-048"],
+  "snapshot_ref": "seed-zig-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the Zig authority implementation for src.main/run and keep the nearest implementation context."
+      },
+      "targets": {
+        "symbols": ["src.main/run"],
+        "paths": ["src/main.zig"]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": ["zig"],
+        "allowed_path_prefixes": ["src/", "test/"],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "preferred_paths": ["src/main.zig"],
+        "preferred_modules": ["src.main"],
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "58585858-5858-4585-8585-585858585858",
+        "request_id": "fixture-zig-happy-path-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": ["src/main.zig::src.main/run"],
+    "must_include_paths": ["src/main.zig"],
+    "must_include_selection_reason_codes": ["exact_target_resolved"],
+    "must_include_warning_codes": ["capability_ceiling"],
+    "confidence_level": "low",
+    "autonomy_posture": "autonomy_blocked"
+  }
+}

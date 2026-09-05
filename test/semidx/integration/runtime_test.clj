@@ -13,6 +13,9 @@
             [semidx.runtime.languages.python :as py-language]
             [semidx.runtime.languages.shared :as shared-language]
             [semidx.runtime.languages.typescript :as ts-language]
+            [semidx.runtime.languages.zig :as zig-language]
+            [semidx.runtime.index :as idx]
+            [semidx.runtime.retrieval :as retrieval]
             [semidx.runtime.retrieval-policy :as rp]
             [semidx.runtime.storage :as storage]))
 
@@ -553,8 +556,17 @@
         diag-codes (set (map :code (:diagnostics order-file)))]
     (is (= "elixir" (:language order-file)))
     (is (= "full" (:parser_mode order-file)))
-    (is (or (contains? diag-codes "tree_sitter_missing_grammar")
-            (contains? diag-codes "tree_sitter_unavailable")))
+    ;; The diagnostic this test is named for exists only when the grammar really
+    ;; is missing. CI installs the Elixir grammar, so asserting it there tested
+    ;; the runner's toolchain rather than the fallback behaviour. Assert the
+    ;; named condition when it holds, and its converse otherwise; either way the
+    ;; extraction below must still succeed.
+    (if (str/blank? (str (System/getenv "SEMIDX_TREE_SITTER_ELIXIR_GRAMMAR_PATH")))
+      (is (or (contains? diag-codes "tree_sitter_missing_grammar")
+              (contains? diag-codes "tree_sitter_unavailable"))
+          "a missing grammar must be reported, never silently ignored")
+      (is (not (contains? diag-codes "tree_sitter_missing_grammar"))
+          "with the grammar installed there is nothing missing to report"))
     (is validate-unit-id)
     (is (some #(= "MyApp.Order/process_order" (:symbol %)) callers))))
 
@@ -2000,6 +2012,300 @@
                 (get by-type "dataflow/passes-argument")))
       (is (contains? (get (:relation_forward_index index) wrapper-id) (:relation_id (first relations)))))))
 
+(def ^:private build-impact-hints #'retrieval/build-impact-hints)
+
+(defn- write-state-invariant-fixture! [tmp-root]
+  (write-file! tmp-root
+               "src/com/acme/model/ConnectionEntity.java"
+               (str "package com.acme.model;\n\n"
+                    "import java.time.Instant;\n\n"
+                    "@Entity\n"
+                    "public class ConnectionEntity {\n"
+                    "  @Id\n"
+                    "  private Long id;\n\n"
+                    "  @Column(nullable = false)\n"
+                    "  private Instant connectedAt;\n\n"
+                    "  private Instant lastValidatedAt;\n\n"
+                    "  private String spreadsheetId;\n\n"
+                    "  private String status;\n\n"
+                    "  public void setStatus(String status) {\n"
+                    "    this.status = status;\n"
+                    "  }\n\n"
+                    "  public void updateValidatedAt(Instant timestamp) {\n"
+                    "    this.lastValidatedAt = timestamp;\n"
+                    "  }\n"
+                    "}\n"))
+  (write-file! tmp-root
+               "src/com/acme/service/ConnectionService.java"
+               "package com.acme.service;\n\nimport com.acme.model.ConnectionEntity;\n\npublic class ConnectionService {\n  public void disconnect(ConnectionEntity entity) {\n    entity.setStatus(\"OFF\");\n  }\n\n  public String formatSummary(ConnectionEntity entity) {\n    return \"ok\";\n  }\n}\n")
+  (write-file! tmp-root
+               "src/com/acme/Formatter.java"
+               "package com.acme;\n\npublic class Formatter {\n  public String formatSummary(String value) {\n    return value;\n  }\n}\n")
+  (write-file! tmp-root
+               "test/com/acme/service/ConnectionServiceTest.java"
+               "package com.acme.service;\n\nimport com.acme.model.ConnectionEntity;\nimport com.acme.service.ConnectionService;\n\npublic class ConnectionServiceTest {\n  public void disconnectPreservesTimestamp() {\n    ConnectionEntity entity = buildConnectionEntity();\n    new ConnectionService().disconnect(entity);\n  }\n\n  public ConnectionEntity buildConnectionEntity() {\n    return new ConnectionEntity();\n  }\n}\n"))
+
+(defn- state-invariant-query [details symbol path]
+  {:api_version "1.0"
+   :schema_version "1.0"
+   :intent {:purpose "change_impact"
+            :details details}
+   :targets {:symbols [symbol]
+             :paths [path]}
+   :constraints {:token_budget 2400
+                 :max_raw_code_level "enclosing_unit"
+                 :freshness "current_snapshot"}
+   :hints {:prefer_definitions_over_callers true}
+   :options {:include_tests true
+             :include_impact_hints true
+             :allow_raw_code_escalation false}
+   :trace {:trace_id "11111111-1111-4111-8111-111111111111"
+           :request_id "state-invariant-stage2"}})
+
+(defn- write-flow-fixture! [tmp-root]
+  (write-file! tmp-root "src/my/app/flow.clj"
+               "(ns my.app.flow)\n\n(defn make-client [config]\n  config)\n\n(defn normalize [order]\n  order)\n\n(defn save! [order client]\n  order)\n\n(defn wrapper [order config]\n  (let [client (make-client config)]\n    (save! order client)\n    (normalize order)))\n"))
+
+(deftest impact-analysis-surfaces-state-invariant-context-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-state-invariant-context"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-state-invariant-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root
+                                   :parser_opts {:java_engine :regex}})
+          result (sci/impact-analysis
+                  index
+                  (state-invariant-query
+                   "Change disconnect status while preserving timestamp state"
+                   "com.acme.service.ConnectionService#disconnect"
+                   "src/com/acme/service/ConnectionService.java"))
+          packet (:state_invariants result)]
+      (testing "the stateful query gets a bounded, field-aware packet"
+        (is (= "1.2" (:packet_version packet)))
+        (is (= #{"disconnect" "status" "timestamp" "state" "connection"}
+               (set (:triggered_by packet))))
+        (is (every? #(<= (count %) 12)
+                    [(:entity_candidates packet)
+                     (:entity_fields packet)
+                     (:state_writers packet)
+                     (:field_writes packet)
+                     (:assertion_tests packet)
+                     (:fixture_helpers packet)]))
+        (is (= "state_invariants_verify_field_preservation"
+               (get-in packet [:guardrail :code]))))
+      (testing "the entity, writer, assertion test, and fixture helper are surfaced"
+        (is (= ["src/com/acme/model/ConnectionEntity.java"]
+               (mapv :path (:entity_candidates packet))))
+        (is (some #(str/ends-with? (:symbol %) "#disconnect")
+                  (:state_writers packet)))
+        (is (= ["test/com/acme/service/ConnectionServiceTest.java"]
+               (:assertion_tests packet)))
+        (is (= ["com.acme.service.ConnectionServiceTest#buildConnectionEntity"]
+               (mapv :symbol (:fixture_helpers packet)))))
+      (testing "declared entity fields and their state-bearing hints are surfaced"
+        (let [entry (first (:entity_fields packet))
+              fields (into {} (map (juxt :name identity) (:fields entry)))]
+          (is (= "com.acme.model.ConnectionEntity" (:entity entry)))
+          (is (= "src/com/acme/model/ConnectionEntity.java" (:path entry)))
+          (is (contains? fields "connectedAt"))
+          (is (false? (get-in fields ["connectedAt" :nullable])))
+          (is (true? (get-in fields ["connectedAt" :state_bearing])))
+          (is (some #(str/includes? % "@Column")
+                    (get-in fields ["connectedAt" :annotations])))
+          (is (true? (get-in fields ["status" :state_bearing])))))
+      (testing "field writes attribute the changed field to the disconnect writer"
+        (is (some #(and (str/ends-with? (:symbol %) "#disconnect")
+                        (= ["status"] (:writes %)))
+                  (:field_writes packet))))
+      (testing "the assembled packet conforms to the state-invariants contract"
+        (is (nil? (m/explain (:example/state-invariants contracts/contracts) packet)))))))
+
+(deftest staged-retrieval-surfaces-state-invariant-context-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-staged-state-invariant-context"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-state-invariant-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root
+                                   :parser_opts {:java_engine :regex}})
+          query (assoc-in
+                 (state-invariant-query
+                  "Change disconnect status while preserving timestamp state"
+                  "com.acme.service.ConnectionService#disconnect"
+                  "src/com/acme/service/ConnectionService.java")
+                 [:constraints :token_budget]
+                 12000)
+          selection (sci/resolve-context index query)
+          selector {:selection_id (:selection_id selection)
+                    :snapshot_id (:snapshot_id selection)}
+          expansion (sci/expand-context index selector)
+          detail (sci/fetch-context-detail index selector)
+          expansion-packet (:state_invariants expansion)
+          detail-packet (get-in detail [:context_packet :state_invariants])]
+      (testing "expand_context adds the bounded packet within its reserved budget"
+        (is (= "1.2" (:packet_version expansion-packet)))
+        (is (= ["src/com/acme/model/ConnectionEntity.java"]
+               (mapv :path (:entity_candidates expansion-packet))))
+        (is (= "state_invariants_verify_field_preservation"
+               (get-in expansion-packet [:guardrail :code])))
+        (is (<= (get-in expansion [:budget_summary :returned_tokens])
+                (get-in expansion [:budget_summary :reserved_tokens])))
+        (is (nil? (m/explain (:example/expansion-result contracts/contracts)
+                             (dissoc expansion
+                                     :projection_profile
+                                     :recommended_projection_profile)))))
+      (testing "detail context packet retains the same invariant evidence"
+        (is (= (:entity_candidates expansion-packet)
+               (:entity_candidates detail-packet)))
+        (is (= (:assertion_tests expansion-packet)
+               (:assertion_tests detail-packet)))
+        (is (nil? (m/explain (:example/context-packet contracts/contracts)
+                             (:context_packet detail)))))
+      (testing "non-stateful staged retrieval remains quiet"
+        (let [quiet-selection (sci/resolve-context
+                               index
+                               (assoc-in
+                                (state-invariant-query
+                                 "Locate the formatting implementation"
+                                 "com.acme.Formatter#formatSummary"
+                                 "src/com/acme/Formatter.java")
+                                [:constraints :token_budget]
+                                6000))
+              quiet-expansion (sci/expand-context
+                               index
+                               {:selection_id (:selection_id quiet-selection)
+                                :snapshot_id (:snapshot_id quiet-selection)})]
+          (is (not (contains? quiet-expansion :state_invariants))))))))
+
+(deftest impact-analysis-omits-state-invariants-for-unrelated-intent-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-state-invariant-quiet"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-state-invariant-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root
+                                   :parser_opts {:java_engine :regex}})
+          result (sci/impact-analysis
+                  index
+                  (state-invariant-query
+                   "Locate the formatting implementation"
+                   "com.acme.Formatter#formatSummary"
+                   "src/com/acme/Formatter.java"))]
+      (is (not (contains? result :state_invariants)))
+      (is (= #{:callers :dependents :related_tests :risky_neighbors}
+             (set (keys result)))))))
+
+(deftest impact-relation-support-surfaces-resolved-dataflow-neighbors-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-impact-relation-support" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-flow-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          make-client-id "src/my/app/flow.clj::my.app.flow/make-client"
+          wrapper-id "src/my/app/flow.clj::my.app.flow/wrapper"
+          upstream-hints (build-impact-hints index [(idx/unit-by-id index make-client-id)])
+          downstream-hints (build-impact-hints index [(idx/unit-by-id index wrapper-id)])]
+      (testing "selecting a callee surfaces the resolved upstream dataflow dependent"
+        (is (= [wrapper-id] (get-in upstream-hints [:relation_support :upstream])))
+        (is (empty? (get-in upstream-hints [:relation_support :downstream])))
+        (is (some #(= "relation_upstream_dataflow" (:code %))
+                  (get-in upstream-hints [:relation_support :reasons]))))
+      (testing "selecting a wrapper surfaces its resolved downstream dataflow dependencies"
+        (is (= #{"src/my/app/flow.clj::my.app.flow/make-client"
+                 "src/my/app/flow.clj::my.app.flow/normalize"
+                 "src/my/app/flow.clj::my.app.flow/save!"}
+               (set (get-in downstream-hints [:relation_support :downstream]))))
+        (is (some #(= "relation_downstream_dataflow" (:code %))
+                  (get-in downstream-hints [:relation_support :reasons]))))
+      (testing "legacy caller/dependent/test/neighbor keys are always present and additive"
+        (is (every? #(contains? upstream-hints %)
+                    [:callers :dependents :related_tests :risky_neighbors]))))))
+
+(deftest impact-relation-support-omitted-without-resolved-dataflow-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-impact-relation-omitted" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-file! tmp-root "src/p/a.clj" "(ns p.a)\n(defn foo [x] x)\n(defn bar [y] y)\n")
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          foo-hints (build-impact-hints index [(idx/unit-by-id index "src/p/a.clj::p.a/foo")])]
+      (testing "no dataflow relations means the projection is omitted and legacy output is unchanged"
+        (is (not (contains? foo-hints :relation_support)))
+        (is (= #{:callers :dependents :related_tests :risky_neighbors}
+               (set (keys foo-hints)))))))
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-impact-relation-fullgraph" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-flow-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          all-ids ["src/my/app/flow.clj::my.app.flow/make-client"
+                   "src/my/app/flow.clj::my.app.flow/normalize"
+                   "src/my/app/flow.clj::my.app.flow/save!"
+                   "src/my/app/flow.clj::my.app.flow/wrapper"]
+          all-hints (build-impact-hints index (mapv #(idx/unit-by-id index %) all-ids))]
+      (testing "when every relation-reachable node is already selected, nothing extra is surfaced"
+        (is (not (contains? all-hints :relation_support)))))))
+
+(deftest impact-relation-support-skips-ambiguous-targets-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-impact-relation-ambiguous" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-file! tmp-root "src/my/app/a.clj" "(ns my.app.a)\n(defn helper [x] x)\n")
+    (write-file! tmp-root "src/my/app/b.clj" "(ns my.app.b)\n(defn helper [x] x)\n")
+    (write-file! tmp-root "src/my/app/w.clj"
+                 "(ns my.app.w\n  (:require [my.app.a :refer [helper]]\n            [my.app.b :refer [helper]]))\n\n(defn wrap [order]\n  (let [r (helper order)]\n    r))\n")
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          wrap-id "src/my/app/w.clj::my.app.w/wrap"
+          relations (->> (:relations index) vals (filter #(= wrap-id (:source_unit_id %))) vec)
+          wrap-hints (build-impact-hints index [(idx/unit-by-id index wrap-id)])]
+      (testing "the fixture actually produces ambiguous dataflow relations"
+        (is (seq relations))
+        (is (every? #(= "ambiguous" (:resolution_status %)) relations)))
+      (testing "ambiguous relation targets are never surfaced as relation support"
+        (is (not (contains? wrap-hints :relation_support)))))))
+
+(deftest impact-relation-support-flags-and-bounds-truncation-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-impact-relation-truncate" (make-array java.nio.file.attribute.FileAttribute 0)))
+        callees (str/join "\n" (for [i (range 1 16)] (str "(defn f" i " [x] x)")))
+        binds (str/join "\n    " (for [i (range 1 16)] (str "a" i " (f" i " x)")))
+        body (str "(ns hub.core)\n" callees "\n\n(defn hub [x]\n  (let [" binds "]\n    ["
+                  (str/join " " (for [i (range 1 16)] (str "a" i))) "]))\n")]
+    (write-file! tmp-root "src/hub/core.clj" body)
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          hints (build-impact-hints index [(idx/unit-by-id index "src/hub/core.clj::hub.core/hub")])
+          downstream (get-in hints [:relation_support :downstream])]
+      (testing "the projection caps its display list and flags the drop"
+        (is (= 12 (count downstream)))
+        (is (some #(= "relation_traversal_truncated" (:code %))
+                  (get-in hints [:relation_support :reasons])))))))
+
+(deftest relation-traversal-public-surface-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-relation-traversal-surface" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (write-flow-fixture! tmp-root)
+    (let [index (sci/create-index {:root_path tmp-root :parser_opts {:clojure_engine :regex}})
+          wrapper-id "src/my/app/flow.clj::my.app.flow/wrapper"
+          make-client-id "src/my/app/flow.clj::my.app.flow/make-client"
+          down (sci/relation-traversal index {:direction "downstream" :start_nodes [wrapper-id]})
+          up (sci/relation-traversal index {:direction "upstream" :start_nodes [make-client-id]})]
+      (testing "the result matches the relation-traversal contract"
+        (is (nil? (m/explain contracts/relation-traversal-result down)))
+        (is (= "downstream" (:direction down)))
+        (is (= (:snapshot_id index) (:snapshot_id down))))
+      (testing "downstream traversal surfaces resolved dataflow dependencies"
+        (is (contains? (set (map :unit_id (:nodes down)))
+                       "src/my/app/flow.clj::my.app.flow/make-client"))
+        (is (contains? (set (map :unit_id (:nodes down)))
+                       "src/my/app/flow.clj::my.app.flow/save!"))
+        (is (contains? (set (map :unit_id (:nodes down)))
+                       "src/my/app/flow.clj::my.app.flow/normalize"))
+        (is (seq (:edges down))))
+      (testing "upstream traversal walks target -> source"
+        (is (contains? (set (map :unit_id (:nodes up))) wrapper-id)))
+      (testing "a selection_id is produced and reusable by staged expand/detail"
+        (let [sid (:selection_id down)]
+          (is (string? sid))
+          (let [exp (sci/expand-context index {:selection_id sid :snapshot_id (:snapshot_id down)})
+                det (sci/fetch-context-detail index {:selection_id sid
+                                                     :snapshot_id (:snapshot_id down)
+                                                     :detail_level "target_span"})]
+            (is (seq (:skeletons exp)))
+            (is (seq (:raw_context det))))))
+      (testing "an unknown direction is rejected"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (sci/relation-traversal index {:direction "sideways" :start_nodes [wrapper-id]}))))
+      (testing "empty start_nodes are rejected"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (sci/relation-traversal index {:direction "downstream" :start_nodes []})))))))
+
 (deftest python-dataflow-relations-resolve-target-units-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-python-dataflow-relations" (make-array java.nio.file.attribute.FileAttribute 0)))
         rel-path "app/flow.py"]
@@ -2032,6 +2338,68 @@
                 (get by-type "dataflow/passes-argument")))
       (is (contains? (get (:relation_forward_index index) wrapper-id) (:relation_id (first relations)))))))
 
+(deftest java-declares-field-relations-extract-entity-fields-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-java-declares-field" (make-array java.nio.file.attribute.FileAttribute 0)))
+        entity-rel "src/com/acme/model/ConnectionEntity.java"
+        service-rel "src/com/acme/service/CheckoutService.java"
+        class-node (str entity-rel "::com.acme.model.ConnectionEntity")]
+    (write-file! tmp-root entity-rel
+                 (str "package com.acme.model;\n\n"
+                      "import java.time.Instant;\n\n"
+                      "@Entity\n"
+                      "public class ConnectionEntity {\n"
+                      "  @Id\n"
+                      "  private Long id;\n\n"
+                      "  @Column(nullable = false)\n"
+                      "  private Instant connectedAt;\n\n"
+                      "  private Instant lastValidatedAt;\n"
+                      "  private String status;\n\n"
+                      "  public void setStatus(String status) {\n"
+                      "    this.status = status;\n"
+                      "    final int local = 3;\n"
+                      "  }\n"
+                      "}\n"))
+    (write-file! tmp-root service-rel
+                 (str "package com.acme.service;\n\n"
+                      "public class CheckoutService {\n"
+                      "  private int total;\n\n"
+                      "  public void run() {\n"
+                      "    final int x = 1;\n"
+                      "  }\n"
+                      "}\n"))
+    (let [index (sci/create-index {:root_path tmp-root})
+          declares (->> (:relations index)
+                        vals
+                        (filter #(= "structure/declares-field" (:relation_type %)))
+                        vec)
+          by-field (into {} (map (juxt :target_key identity) declares))]
+      (testing "entity class-body fields are extracted as declares-field relations"
+        (is (= #{"com.acme.model.ConnectionEntity#id"
+                 "com.acme.model.ConnectionEntity#connectedAt"
+                 "com.acme.model.ConnectionEntity#lastValidatedAt"
+                 "com.acme.model.ConnectionEntity#status"}
+               (set (keys by-field)))))
+      (testing "method-body locals are excluded (not fields)"
+        (is (not (contains? by-field "com.acme.model.ConnectionEntity#local")))
+        (is (not (contains? by-field "com.acme.model.ConnectionEntity#x"))))
+      (testing "non-entity classes emit no field relations"
+        (is (empty? (filter #(str/includes? (str (:source_unit_id %)) "CheckoutService")
+                            declares))))
+      (testing "fields carry annotation/nullability evidence and stay unresolved"
+        (let [connected (get by-field "com.acme.model.ConnectionEntity#connectedAt")]
+          (is (= "unresolved" (:resolution_status connected)))
+          (is (false? (:nullable (:evidence_location connected))))
+          (is (some #(str/includes? % "@Column")
+                    (:annotations (:evidence_location connected))))))
+      (testing "every declares-field relation is unresolved, so resolved-only projections ignore it"
+        (is (every? #(= "unresolved" (:resolution_status %)) declares)))
+      (testing "declares-field relations validate without diagnostics"
+        (is (empty? (filter #(= "structure/declares-field" (:relation_type %))
+                            (:relation_diagnostics index)))))
+      (testing "the synthetic class node keys the forward index for its fields"
+        (is (= (set (map :relation_id declares))
+               (get (:relation_forward_index index) class-node)))))))
+
 (deftest tree-sitter-cli-resolution-prefers-explicit-and-managed-toolchain-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-tree-sitter-cli-resolution" (make-array java.nio.file.attribute.FileAttribute 0)))
         explicit-rel "tools/tree-sitter"
@@ -2047,8 +2415,17 @@
            (shared-language/tree-sitter-cli-path {:tree_sitter_cli_path (.getPath explicit-file)})))
     (is (true? (shared-language/tree-sitter-available? {:tree_sitter_cli_path (.getPath explicit-file)})))
     (is (false? (shared-language/tree-sitter-available? {:tree_sitter_cli_path (.getPath missing-file)})))
-    (is (= (.getPath managed-file)
-           (shared-language/tree-sitter-cli-path {:tree_sitter_grammars_dir (str (io/file tmp-root ".tree-sitter-grammars"))})))))
+    ;; ADR-047 precedence is: explicit option > environment > repo-managed >
+    ;; PATH. An ambient SEMIDX_TREE_SITTER_CLI_PATH therefore outranks
+    ;; :tree_sitter_grammars_dir by design, and CI exports one, so this asserted
+    ;; a branch that only exists on a bare machine. Assert whichever branch the
+    ;; environment actually exercises instead of assuming the bare one.
+    (let [managed-opts {:tree_sitter_grammars_dir (str (io/file tmp-root ".tree-sitter-grammars"))}]
+      (if-let [env-cli (not-empty (str (System/getenv "SEMIDX_TREE_SITTER_CLI_PATH")))]
+        (is (= env-cli (shared-language/tree-sitter-cli-path managed-opts))
+            "an explicit environment CLI outranks a repo-managed grammars dir")
+        (is (= (.getPath managed-file) (shared-language/tree-sitter-cli-path managed-opts))
+            "the repo-managed toolchain wins when nothing more explicit is set")))))
 
 (deftest tree-sitter-parser-path-test
   (let [clj-grammar (System/getenv "SEMIDX_TREE_SITTER_CLOJURE_GRAMMAR_PATH")
@@ -2221,12 +2598,19 @@
                                            ""
                                            "def normalize(value):"
                                            "    return value"]
-                                          {})]
+                                          {})
+        zig-parsed (zig-language/parse-file "." "src/example.zig"
+                                            ["const helpers = @import(\"helpers.zig\");"
+                                             "pub fn run(value: []const u8) []const u8 {"
+                                             "  return helpers.normalize(value);"
+                                             "}"]
+                                            {})]
     (is (= "clojure" (:language clj-parsed)))
     (is (= "java" (:language java-parsed)))
     (is (= "elixir" (:language ex-parsed)))
     (is (= "lua" (:language lua-parsed)))
-    (is (= "python" (:language py-parsed)))))
+    (is (= "python" (:language py-parsed)))
+    (is (= "zig" (:language zig-parsed)))))
 
 (deftest lua-parser-module-table-and-method-linking-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-lua-parser-test" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -2297,7 +2681,7 @@
     (is ex)
     (is (= :no_supported_languages_found (:type (ex-data ex))))
     (is (= "awaiting_language_selection" (get-in (ex-data ex) [:details :activation_state])))
-    (is (= ["clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "html" "css"]
+    (is (= ["clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "zig" "html" "css"]
            (get-in (ex-data ex) [:details :supported_languages])))
     (is (string? (get-in (ex-data ex) [:details :selection_hint])))))
 

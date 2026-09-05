@@ -2,7 +2,7 @@
 file_type: adr
 decision_id: ADR-031
 title: Distinguish Logical Repository From Workspace Checkout
-status: proposed
+status: accepted
 date: 2026-04-03
 deciders:
   - project owner
@@ -23,7 +23,7 @@ links:
 
 # ADR-031: Distinguish Logical Repository From Workspace Checkout
 
-**Status**: Proposed  
+**Status**: Accepted
 **Date**: 2026-04-03  
 **Deciders**: project owner
 
@@ -102,9 +102,9 @@ Option 3 loses because branch names are unstable and are not reliable repository
 - persist additive identity metadata in storage
 - keep public APIs backward-compatible during the first rollout
 
-## Status Changes
+## Status
 
-No status change yet.
+Accepted and implemented through the multi-clone repository identity rollout.
 
 ## References
 

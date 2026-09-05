@@ -129,8 +129,26 @@
         },
         "risky_neighbors": {
           "$ref": "common.schema.json#/$defs/stringArray"
+        },
+        "relation_support": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "downstream": {
+              "$ref": "common.schema.json#/$defs/stringArray"
+            },
+            "upstream": {
+              "$ref": "common.schema.json#/$defs/stringArray"
+            },
+            "reasons": {
+              "$ref": "common.schema.json#/$defs/codedItemArray"
+            }
+          }
         }
       }
+    },
+    "state_invariants": {
+      "$ref": "state-invariants.schema.json"
     },
     "evidence": {
       "type": "object",

@@ -2,9 +2,9 @@
 title: "Capability Self-Description Plan"
 doc_type: "implementation_plan"
 lifecycle: "completed"
-status: "delivered"
+status: "completed"
 agent_action: "historical_reference_only"
-updated: "2026-07-19"
+updated: "2026-08-02"
 ---
 
 # Implementation Plan: Capability Self-Description
@@ -148,7 +148,7 @@ agent/model from the implementer**:
   stage diff, scaled by risk (see effort scaling below).
 - Escalation for public-contract stages (2, 3, 4): also run the stage-gated
   external reviewer loop captured in
-  `notes/2026-07-13_stage-gated-external-reviewer-loop.md`, or a deep multi-agent
+  `notes/2026-07-13-stage-gated-external-reviewer-loop.md`, or a deep multi-agent
   review, because these stages change the external contract / tool schemas / edge
   parity.
 

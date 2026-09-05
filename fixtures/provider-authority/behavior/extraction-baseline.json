@@ -1,0 +1,78 @@
+{
+  "fixture_id": "provider_authority_extraction_baseline_001",
+  "category": "protected_extraction_baseline",
+  "purpose": "Freeze the CURRENT (pre-migration) Java and TypeScript extractor output for the protected corpus so later stages can prove additive, non-regressing behavior for definitions, references, calls, overloads, and re-exports.",
+  "plan_refs": ["plans/018"],
+  "adr_refs": ["ADR-046"],
+  "captured_from": "semidx.runtime.languages.{java,typescript}/parse-file, default parser opts (regex engine), git dev @ pre-Stage-0-commit",
+  "status": "ground_truth",
+  "invariants_for_migration": [
+    "Unit symbols and unit_ids below must remain stable, or any change must be an approved semantic improvement recorded in the Stage progress log.",
+    "All units currently report parser_mode=full. Under ADR-046/Stage 6, regex-only units must project parser_mode=fallback + heuristic authority. That is an INTENTIONAL future difference, named here so it is not mistaken for a regression."
+  ],
+  "java": {
+    "path": "src/example/OrderService.java",
+    "module": "example",
+    "imports": ["java.util.List", "example.Validator"],
+    "definitions": [
+      {
+        "symbol": "example.OrderService#OrderService",
+        "kind": "constructor",
+        "method_arity": 1,
+        "method_signature_key": "Validatorvalidator",
+        "unit_id_suffix": "$arity1$sigdf80797c",
+        "calls": []
+      },
+      {
+        "symbol": "example.OrderService#handle",
+        "kind": "method",
+        "method_arity": 1,
+        "method_signature_key": "Stringorder",
+        "unit_id_suffix": "$arity1$sig5e75e42b",
+        "calls": ["validator.validate"]
+      },
+      {
+        "symbol": "example.OrderService#handle",
+        "kind": "method",
+        "method_arity": 2,
+        "method_signature_key": "Stringorder,intretries",
+        "unit_id_suffix": "$arity2$sig5902c043",
+        "calls": ["validator.validate"]
+      },
+      {
+        "symbol": "example.OrderService#handleAll",
+        "kind": "method",
+        "method_arity": 1,
+        "method_signature_key": "List<String>orders",
+        "unit_id_suffix": "$arity1$sigdc13f0cf",
+        "calls": []
+      }
+    ],
+    "overload_distinctness": {
+      "example.OrderService#handle": ["$arity1$sig5e75e42b", "$arity2$sig5902c043"],
+      "assert": "two distinct unit_ids for the same symbol"
+    },
+    "references": {
+      "example.Validator#validate": {
+        "referenced_by_calls": ["validator.validate"],
+        "callers": ["example.OrderService#handle (arity1)", "example.OrderService#handle (arity2)"]
+      }
+    }
+  },
+  "typescript": {
+    "origin_module_path": "src/orders.ts",
+    "definitions": [
+      {"symbol_suffix": "/createOrder", "kind": "function", "calls_include": ["normalize"]},
+      {"symbol_suffix": "/normalize", "kind": "function"},
+      {"symbol_suffix": ".OrderService#handle", "kind": "method", "calls_include": ["createOrder"]}
+    ],
+    "re_exports": {
+      "path": "src/index.ts",
+      "entries": [
+        {"exported_symbol_suffix": "/createOrder", "resolves_to_origin_suffix": ".orders/createOrder"},
+        {"exported_symbol_suffix": "/canonicalize", "resolves_to_origin_suffix": ".orders/normalize"}
+      ],
+      "assert": "each re-export unit carries a synthetic call to its origin symbol; alias rename keeps a distinct exported symbol"
+    }
+  }
+}

@@ -13,7 +13,7 @@
 - This repository is `semidx`: Semantic Code Indexing, a Clojure-first code retrieval and context-packaging system for AI development tools.
 - The primary implementation language is Clojure. The project uses `deps.edn` for project aliases and dependencies.
 - The public surfaces include library APIs, CLI entrypoints, MCP stdio/HTTP tools, minimal HTTP/gRPC runtime edges, JSON Schema contracts, and Clojure `malli` runtime validation mirrors.
-- The runtime supports semantic indexing and retrieval across language lanes such as Clojure, Java, Elixir, Python, TypeScript, and Lua where implemented or onboarded.
+- The runtime supports semantic indexing and retrieval across language lanes such as Clojure, Java, Elixir, Python, TypeScript, Lua, and Zig where implemented or onboarded.
 - PostgreSQL is optional infrastructure for persistence and usage metrics. In-memory storage remains a first-class local/runtime path.
 - Do not copy project-specific rules, paths, stack assumptions, task names, or application-domain guidance from unrelated repositories.
 
@@ -25,6 +25,10 @@
 - `src/semidx/contracts/` contains the Clojure validation layer for external contracts.
 - `contracts/schemas/` and `contracts/examples/` are external contract artifacts.
 - `fixtures/` contains retrieval and semantic-quality fixtures.
+- `docs/agent-policy/` contains active cross-cutting engineering policies that
+  are too detailed for this always-loaded rule file.
+- `.agents/skills/` contains repository-local task procedures that load only
+  when relevant.
 - `test/semidx/` contains the Clojure test suite run by `clojure -M:test`. Test namespaces mirror the code they cover: a unit test for `semidx.runtime.X` lives at `test/semidx/runtime/X_test.clj` (namespace `semidx.runtime.X-test`), MCP tests under `test/semidx/mcp/`, and cross-cutting/integration suites (language onboarding, end-to-end create-index/retrieval flows) under `test/semidx/integration/`.
 - `docs/code-context.md` and `.ccc/state.edn` are committed Code Context Compressor artifacts used for agent bootstrap.
 
@@ -50,6 +54,34 @@
 - The versioned pre-push hook runs `scripts/check-memory-freshness.sh` and blocks pushes that change high-signal project files without a `MEMORY.md` update.
 - If a high-signal change is intentionally memory-neutral, bypass the hook only after checking the update rule: `SCI_SKIP_MEMORY_FRESHNESS=1 git push`.
 - Install versioned hooks with `./scripts/install-git-hooks.sh`; the tracked hook source lives under `scripts/git-hooks/`.
+
+## Agent Policy Documents
+
+- `docs/agent-policy/documentation.md` owns cross-cutting documentation policy,
+  canonical document ownership, lifecycle rules, and the Plan Readiness Gate.
+- `docs/agent-policy/testing.md` owns risk-based test and verification policy.
+- Before executing a staged implementation plan, apply the Plan Readiness Gate
+  from `docs/agent-policy/documentation.md`.
+- A hard fail in that gate blocks execution until the plan is corrected.
+- If only cosmetic wording or small defensive clarifications remain, stop
+  reviewing and execute the plan.
+- Give every rule or decision exactly one canonical owner and link to it instead
+  of copying normative text across documents, skills, and reports.
+
+## Repository Skills
+
+Use repository-local skills from `.agents/skills/` when their descriptions match
+the task:
+
+| Task | Skill |
+| --- | --- |
+| Execute or prepare a staged implementation plan | `semidx-plan-delivery` |
+| Maintain a staged-plan progress log or handoff | `semidx-progress-log` |
+| Locate code, callers, tests, or blast radius | `semidx-code-exploration` |
+| Design risk-based verification coverage | `semidx-test-design` |
+| Review a diff, plan output, or verification coverage | `semidx-code-review` |
+| Commit, branch, push, or recover git state | `semidx-git-delivery` |
+| Add or reorganize standing agent rules | `semidx-rules-maintenance` |
 
 ## MCP-First Workflow
 
@@ -88,17 +120,80 @@
 
 - Use semidx MCP for high-level project mapping, code retrieval, dependency context, impact analysis, and staged context expansion.
 - Once relevant Clojure context is resolved, prefer form-aware Clojure editing or REPL tools when available for structural edits and evaluation.
-- Use semidx for retrieval only; do not use it as a replacement for a REPL or formatter.
+- Use semidx for retrieval only; do not use it as a replacement for a REPL, a formatter, or a file reader.
+
+## Code Reading Rules
+
+Choose the reading tool by the question being answered, not by file type.
+semidx and `read_file` answer different questions and do not compete: semidx
+finds which code matters, `read_file` shows a file that has already been
+identified.
+
+| Question | Tool |
+| --- | --- |
+| Which code is relevant? Who calls this? What is the blast radius? | semidx (`resolve_context`, `impact_analysis`) — always first |
+| What is the shape of one already-identified file? | clojure-mcp `read_file` (collapsed view) |
+| Which exact lines am I about to patch? | `Read` with `offset`/`limit` |
+| What is the body of one symbol from an existing selection? | semidx `fetch_context_detail` with `selection_id` |
+
+- **`read_file` never substitutes for the first semidx call.** If it is not yet
+  known which file is needed, that is semidx's job. Opening files one after
+  another to get oriented is prohibited, however cheap each individual read
+  looks. This is the failure mode semidx exists to prevent.
+- Do not route narrow reads through semidx. `fetch_context_detail` wraps the
+  code in a full retrieval envelope (stage events, capabilities, guardrails,
+  diagnostics), so it is the wrong tool for "show me the lines I am about to
+  edit". Use `Read` with `offset`/`limit` there.
+- Prefer `read_file` over a full `Read` when orienting inside a single large
+  known file: the collapsed, structure-aware view costs less than dumping the
+  whole file and is more reliable than guessing line ranges.
+- `clojure-mcp` tools are path-contained by their `:allowed-directories`
+  setting, which defaults to the project the server was started in and can be
+  widened in `~/.clojure-mcp/config.edn`. When a target lies outside the
+  configured set, `read_file` and the structural editors are unavailable and
+  `Read` plus a compile probe is the only option.
+- No hook enforces any of this. The `semidx-first` guard matches only `Grep`,
+  `Glob`, and `Bash`, and has no visibility into MCP tool calls. These rules
+  hold by discipline alone.
 
 ## Clojure Editing Rules
 
-- For `.clj`, `.cljc`, `.cljs`, and `.edn` structural edits, you MUST use `clojure-mcp` tools (e.g., `clojure_edit`, `clojure_edit_replace_sexp`) if the server is connected. 
-- **CRITICAL**: Do NOT use raw text tools like `replace_file_content` or `multi_replace_file_content` for Clojure code unless structural tools explicitly fail or are unavailable.
-- Use `clojure_eval` via `clojure-mcp` to test changes interactively in the REPL before resorting to running the full `clojure -M:test` suite.
-- Avoid large raw `apply_patch` rewrites of deeply nested forms when a narrower edit will work.
-- Keep Clojure patches scoped to one top-level form where possible.
-- After any manual `apply_patch` that changes Clojure forms, run an immediate syntax or compile probe before continuing with more edits.
-- If Clojure reports `Unmatched delimiter`, `EOF while reading`, or `defn` spec errors after an edit, inspect the just-edited form tail first and repair delimiters (or use `paren_repair`) before making additional changes.
+Choose the editing tool by the risk of the edit, not by file extension. Every
+row below carries a required safety step. The safety step is not optional.
+
+| Situation | Tool | Required follow-up |
+| --- | --- | --- |
+| New file written in full | `Write` or heredoc | Compile probe |
+| Replacing or inserting a whole top-level form | `clojure_edit` | Confirm the returned diff |
+| Narrow edit inside a large existing form | `Edit` | Compile probe |
+| `.edn` data files such as `deps.edn` | `clojure_edit_replace_sexp`, or `Edit` | Compile probe or read check |
+| Markdown, scripts, and other non-Clojure files | `Edit` | Normal review |
+
+- **The compile probe is mandatory, not advisory.** After any `Write` or `Edit`
+  that changes Clojure forms, run an immediate syntax or compile probe such as
+  `clojure -M -e "(require 'the.changed.ns) (println :ok)"` before making
+  further edits. This rule permits raw text edits on Clojure files precisely
+  because the probe replaces the delimiter safety that structural tools provide.
+  Skipping the probe removes the only remaining guard, and an unbalanced form
+  then goes unnoticed until the full suite runs.
+- Prefer `clojure_edit` whenever the unit of change is an entire top-level form.
+  It repairs missing trailing delimiters in the submitted content, so a
+  whole-form rewrite cannot land unbalanced.
+- `clojure_edit` returns no output when an edit produces no change. Treat an
+  empty response as "nothing was written", not as success, and re-read the
+  target before continuing.
+- `clojure_edit` addresses top-level `def`, `defn`, `defmethod`, `deftest`, and
+  `ns` forms by identifier. Plain data files such as `deps.edn` expose no such
+  form; use `clojure_edit_replace_sexp` there.
+- `clojure-mcp` tools are restricted to the repository root. Use ordinary file
+  tools for scratch or temporary paths outside it.
+- Keep Clojure patches scoped to one top-level form where possible, and avoid
+  large rewrites of deeply nested forms when a narrower edit will work.
+- Use `clojure_eval` via `clojure-mcp` to test changes interactively in the REPL
+  before resorting to running the full `clojure -M:test` suite.
+- If Clojure reports `Unmatched delimiter`, `EOF while reading`, or `defn` spec
+  errors after an edit, inspect the just-edited form tail first and repair
+  delimiters (or use `paren_repair`) before making additional changes.
 
 ## Clojure MCP nREPL Bootstrap
 
@@ -121,6 +216,9 @@
 ## Testing And Verification
 
 - Verify changes with the narrowest meaningful command first.
+- For non-trivial staged plans, use the risk-based matrix in
+  `docs/agent-policy/testing.md` to map requirements and invariants to the
+  lowest sufficient verification level.
 - Tests are auto-discovered: `clojure -M:test` runs every `*-test` namespace found under `test/`, so a new test needs no manual registration. Keep tests order-independent — they must not rely on namespace run order or shared mutable state between namespaces.
 - Common local checks:
   - `clojure -M:test`
@@ -129,7 +227,7 @@
   - `./scripts/run-semantic-quality-report.sh`
   - `clojure -M:ccc check --root .`
 - For language-lane work, use `./scripts/validate-language-onboarding.sh <language>` and include `--skip-gates` only when a fast structural check is sufficient.
-- For benchmarks, use `./scripts/run-benchmarks.sh`.
+- For benchmarks, use `./scripts/run-benchmarks.sh`, and `./scripts/run-launcher-benchmark.sh` for local runtime-reuse latency.
 - For clojure-mcp REPL smoke, use `clojure -M:nrepl`, then `list_nrepl_ports`, then a small `clojure_eval` such as `(+ 1 2)` on the discovered port.
 - For MCP runtime smoke, use `clojure -M:mcp` or `clojure -M:mcp-http --host 127.0.0.1 --port 8791` as appropriate.
 - For HTTP/gRPC runtime edges, use `clojure -M:runtime-http` or `clojure -M:runtime-grpc` as appropriate.
@@ -149,8 +247,8 @@
 - Use parallel tool execution only for independent reads or checks, never for state-changing commands that depend on each other.
 - Use versioned git hook sources under `scripts/git-hooks/`; install them into `.git/hooks` with `./scripts/install-git-hooks.sh`.
 - If uncommitted files remain in the repo from previous agent runs, explicitly surface them and offer to commit and push them separately.
-- Commit or push only when the user requests or approves it.
-- Do not auto-commit after every file edit. When committing, group related changes into coherent commits.
+- Commit changes every time code or documentation is touched (for example, automatically after completing each implementation stage of a project).
+- Group related changes into coherent commits during an implementation stage, but always ensure the stage ends with a commit.
 - Before risky or multi-file changes, surface the dirty working tree and ask whether to checkpoint it first.
 - Do not revert existing user changes unless explicitly requested.
 
@@ -159,6 +257,8 @@
 - Keep repository documentation, project rule files, and agent instruction files in English.
 - Agents may answer the user in Russian by default when the user writes in Russian, but committed documentation remains English.
 - Keep root entrypoint docs limited to stable project onboarding and repo-wide controls.
+- Keep detailed cross-cutting engineering policies under `docs/agent-policy/`
+  and link to them from this file.
 - New or renamed non-system working documents under `ideas/`, `plans/`, `reports/`, `adr/`, `docs/adr/`, `docs/design/`, `docs/ideas/`, and `docs/plans/` must use a chronological filename prefix scoped to that directory: `NNN_slug.md`.
 - New or renamed non-system working documents under `notes/` must use a date prefix: `YYYY-MM-DD_slug.md`.
 - Number sequences restart per numbered-document directory. Choose the next number by scanning the target directory for the highest existing numeric prefix, then incrementing it.
@@ -167,7 +267,7 @@
 - If an unnumbered or differently prefixed working document is discovered later, treat it as legacy until a dedicated documentation migration renames it.
 - Do not opportunistically rename historical or legacy documents as part of unrelated feature work.
 - A documentation migration that renames legacy documents must update all Markdown links, `superseded_by` references, README indexes, and progress-log references in the same commit.
-- Non-system working documents under `ideas/`, `notes/`, `plans/`, `reports/`, `adr/`, `docs/adr/`, `docs/design/`, `docs/ideas/`, and `docs/plans/` must use YAML frontmatter when they are newly created, renamed, or materially revised.
+- Non-system working documents under `ideas/`, `notes/`, `plans/`, `reports/`, `adr/`, `docs/adr/`, `docs/agent-policy/`, `docs/design/`, `docs/ideas/`, and `docs/plans/` must use YAML frontmatter when they are newly created, renamed, or materially revised.
 - System, index, source-intake, generated, and sample files do not require frontmatter or numbered working-document filenames. Examples include root `README.md`, directory index files such as `plans/README.md` or `docs/README.md`, `RULES.md`, `AGENTS.md`, `CLAUDE.md`, `docs/code-context.md`, `.ccc/*`, `intake/*`, and sample `README.md` files.
 - Preferred frontmatter fields are `title`, `doc_type`, `lifecycle`, `status`, `agent_action`, and `updated`.
 - Use `agent_action` to make stale or completed documents unambiguous to future agents. Executed plans and progress logs must be marked as historical, not as active work queues.
@@ -177,6 +277,17 @@
 - If current and historical documents conflict, follow the current document. If multiple current documents conflict, ask for clarification before changing project behavior.
 - Common `lifecycle` values are `active`, `concept`, `accepted`, `completed`, `superseded`, and `archived`.
 - Common `agent_action` values are `reference_for_context`, `use_as_input_for_future_plan_only`, `historical_reference_only`, `do_not_implement_again`, and `do_not_use_for_current_work`.
+- Keep `status` values consistent with document type:
+  - ADR: `proposed`, `accepted`, `rejected`, `deprecated`, `superseded`.
+  - Plan: `draft`, `planned`, `in_progress`, `blocked`, `completed`, `cancelled`.
+  - Progress log: `in_progress`, `blocked`, `completed`.
+  - Review or assessment: `draft`, `final`, `snapshot_complete`.
+  - Bug or follow-up report: `open`, `fixed`, `wont_fix`, `completed`.
+  - Handoff: `ready`, `consumed`, `superseded`.
+  - Idea or source-intake document: `draft`, `proposed`, `source_intake`, `historical`.
+- `lifecycle` describes whether a document is current; `status` describes the
+  workflow state appropriate to its document type. Do not use synonyms such as
+  `done`, `delivered`, or `implemented` in new or materially revised frontmatter.
 - When a document changes lifecycle state, update its frontmatter in the same commit.
 
 ## Plan Execution Progress Logs

@@ -9,6 +9,7 @@
             [semidx.runtime.languages.python :as py-language]
             [semidx.runtime.languages.shared :as shared-language]
             [semidx.runtime.languages.typescript :as ts-language]
+            [semidx.runtime.languages.zig :as zig-language]
             [semidx.runtime.language-registry :as language-registry]
             [semidx.runtime.semantic-ir :as semantic-ir]))
 
@@ -17,6 +18,11 @@
 
 (defn source-path? [path]
   (language-registry/source-path? path))
+
+(defn with-parser-context
+  "Run f with per-index parser resources, such as a shared Zig ZLS session."
+  [root-path paths parser-opts f]
+  (zig-language/with-parser-context root-path paths parser-opts f))
 
 (defn- slurp-lines [file]
   (shared-language/slurp-lines file))
@@ -73,6 +79,7 @@
                 "typescript" (ts-language/parse-file root-path file-path lines parser-opts)
                 "javascript" (js-language/parse-file root-path file-path lines parser-opts)
                 "lua" (lua-language/parse-file root-path file-path lines parser-opts)
+                "zig" (zig-language/parse-file root-path file-path lines parser-opts)
                 "html" (parse-html root-path file-path lines parser-opts)
                 "css" (parse-css root-path file-path lines parser-opts)
                 (fallback-unit file-path lines language "unsupported_language"))

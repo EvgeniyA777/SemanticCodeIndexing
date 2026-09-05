@@ -2,6 +2,15 @@ syntax = "proto3";
 
 package semidx.runtime.grpc.v1;
 
+// This file is the single editable source of truth for the gRPC runtime edge
+// wire contract. Generated Java stubs live under `src-generated/java` and are
+// produced by the pinned repo-managed toolchain (see ADR-042):
+//   clojure -T:build grpc-generate
+// Do not hand-edit the generated stubs; edit this file and regenerate.
+option java_multiple_files = true;
+option java_package = "semidx.runtime.grpc.v1";
+option java_outer_classname = "RuntimeProto";
+
 message HealthRequest {}
 
 message HealthResponse {
@@ -67,4 +76,66 @@ message FetchContextDetailRequest {
 
 message FetchContextDetailResponse {
   string detail_result_json = 1;
+}
+
+message LiteralFileSliceRequest {
+  string root_path = 1;
+  repeated string paths = 2;
+  string parser_opts_json = 3;
+  string selection_id = 4;
+  string snapshot_id = 5;
+  string path = 6;
+  int32 start_line = 7;
+  int32 end_line = 8;
+  string language_policy_json = 9;
+}
+
+message LiteralFileSliceResponse {
+  string literal_slice_result_json = 1;
+}
+
+message SnapshotDiffRequest {
+  string root_path = 1;
+  repeated string paths = 2;
+  string parser_opts_json = 3;
+  string baseline_snapshot_id = 4;
+  string include_unchanged = 5;
+  string language_policy_json = 6;
+}
+
+message SnapshotDiffResponse {
+  string snapshot_diff_result_json = 1;
+}
+
+message TraverseRelationsRequest {
+  string root_path = 1;
+  repeated string paths = 2;
+  string parser_opts_json = 3;
+  string direction = 4;
+  repeated string start_nodes = 5;
+  repeated string relation_types = 6;
+  string resolved_only = 7;
+  string budgets_json = 8;
+  string snapshot_id = 9;
+  string language_policy_json = 10;
+}
+
+message TraverseRelationsResponse {
+  string traverse_relations_result_json = 1;
+}
+
+// RuntimeService is the unary gRPC surface of the semidx runtime edge. RPC
+// method names remain unchanged, but adding the service under this versioned
+// proto package intentionally changes the full service name (and therefore the
+// full wire method paths) from semidx.RuntimeService to
+// semidx.runtime.grpc.v1.RuntimeService; see ADR-042.
+service RuntimeService {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);
+  rpc ResolveContext(ResolveContextRequest) returns (ResolveContextResponse);
+  rpc ExpandContext(ExpandContextRequest) returns (ExpandContextResponse);
+  rpc FetchContextDetail(FetchContextDetailRequest) returns (FetchContextDetailResponse);
+  rpc LiteralFileSlice(LiteralFileSliceRequest) returns (LiteralFileSliceResponse);
+  rpc SnapshotDiff(SnapshotDiffRequest) returns (SnapshotDiffResponse);
+  rpc TraverseRelations(TraverseRelationsRequest) returns (TraverseRelationsResponse);
 }

@@ -1,10 +1,15 @@
 ---
+title: "resolve_context Architecture Review"
+doc_type: "architecture_review"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: resolve-context-architecture-review
 created_at: 2026-04-02T23:56:33-0700
 author: codex
 language: en
-status: active
+status: completed
 reason: Created after an architecture review of resolve_context, shorthand MCP normalization, lexical fallback, graph expansion, and related retrieval-quality behavior in the semidx repository.
 ---
 

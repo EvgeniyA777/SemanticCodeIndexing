@@ -33,6 +33,7 @@
    "expand_context"
    "fetch_context_detail"
    "impact_analysis"
+   "traverse_relations"
    "skeletons"
    "cache_eviction"])
 (def usage-status [:enum "success" "error"])
@@ -126,7 +127,7 @@
    [:version bounded-string]])
 
 (def language-policy-option
-  [:enum "clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "html" "css"])
+  [:enum "clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "zig" "html" "css"])
 
 (def capabilities
   [:map {:closed true}
@@ -271,6 +272,60 @@
    [:summary bounded-string]
    [:docstring_excerpt {:optional true} bounded-long-string]])
 
+(def relation-support
+  "Bounded, reason-coded relation-backed impact support. Additive to the legacy
+  caller/callee/dependent hints: `downstream`/`upstream` are distinct unit
+  display strings reached only through resolved dataflow relations, and
+  `reasons` carries the codes explaining the projection."
+  [:map {:closed true}
+   [:downstream string-array]
+   [:upstream string-array]
+   [:reasons coded-item-array]])
+
+(def state-invariant-unit-ref
+  "Bounded unit reference inside a state-invariant packet. Carries only display
+  facts the index already has; `path` and `symbol` are optional because some
+  referenced units expose only an identifier."
+  [:map {:closed true}
+   [:unit_id bounded-string]
+   [:path {:optional true} bounded-string]
+   [:symbol {:optional true} bounded-string]])
+
+(def state-invariants
+  "Additive, versioned plans/016 Slice-1 state-invariant packet embedded in the
+  impact_analysis hint map for state/lifecycle/persistence queries. Every list is
+  bounded to the take-12 discipline; field-level write and preservation facts are
+  deliberately absent, and the guardrail directs the agent to read whole files."
+  [:map {:closed true}
+   [:packet_version [:re "^[0-9]+\\.[0-9]+$"]]
+   [:triggered_by code-array]
+   [:entity_candidates [:vector {:max 12} state-invariant-unit-ref]]
+   [:entity_fields {:optional true}
+    [:vector {:max 12}
+     [:map {:closed true}
+      [:entity bounded-string]
+      [:path {:optional true} bounded-string]
+      [:fields
+       [:vector {:max 24}
+        [:map {:closed true}
+         [:name bounded-string]
+         [:nullable {:optional true} boolean?]
+         [:annotations {:optional true} string-array]
+         [:state_bearing {:optional true} boolean?]]]]]]]
+   [:state_writers [:vector {:max 12} state-invariant-unit-ref]]
+   [:field_writes {:optional true}
+    [:vector {:max 12}
+     [:map {:closed true}
+      [:unit_id bounded-string]
+      [:symbol {:optional true} bounded-string]
+      [:writes [:vector {:max 24} bounded-string]]]]]
+   [:assertion_tests [:vector {:max 12} bounded-string]]
+   [:fixture_helpers [:vector {:max 12} state-invariant-unit-ref]]
+   [:guardrail
+    [:map {:closed true}
+     [:code code]
+     [:recommendation bounded-long-string]]]])
+
 (def expansion-result
   [:map {:closed true}
    [:api_version bounded-string]
@@ -290,7 +345,9 @@
      [:callers string-array]
      [:dependents string-array]
      [:related_tests string-array]
-     [:risky_neighbors string-array]]]])
+     [:risky_neighbors string-array]
+     [:relation_support {:optional true} relation-support]]]
+   [:state_invariants {:optional true} state-invariants]])
 
 (def context-packet
   [:map {:closed true}
@@ -315,7 +372,9 @@
      [:callers string-array]
      [:dependents string-array]
      [:related_tests string-array]
-     [:risky_neighbors string-array]]]
+     [:risky_neighbors string-array]
+     [:relation_support {:optional true} relation-support]]]
+   [:state_invariants {:optional true} state-invariants]
    [:evidence
     [:map {:closed true}
      [:selection_reasons coded-item-array]
@@ -521,6 +580,122 @@
    ;; expected is intentionally open so behavior bands can evolve
    [:expected :map]])
 
+(def relation-traversal-node
+  [:map {:closed true}
+   [:unit_id bounded-string]
+   [:depth nat-int?]])
+
+(def relation-traversal-edge
+  [:map {:closed true}
+   [:relation_id bounded-string]
+   [:from bounded-string]
+   [:to bounded-string]
+   [:relation_type bounded-string]
+   [:resolution_status [:enum "resolved" "ambiguous" "unresolved"]]
+   [:depth pos-int?]])
+
+(def relation-traversal-query
+  "Public bounded relation-traversal request (ADR-040). Reuses the Stage 3
+  traversal kernel semantics; it is not a general-purpose graph-query language."
+  [:map {:closed true}
+   [:api_version {:optional true} bounded-string]
+   [:schema_version schema-version]
+   [:start_nodes [:vector {:min 1 :max 200} bounded-string]]
+   [:direction [:enum "downstream" "upstream"]]
+   [:relation_types {:optional true} [:vector {:min 1 :max 12} bounded-string]]
+   [:resolved_only {:optional true} boolean?]
+   [:budgets {:optional true}
+    [:map {:closed true}
+     [:max_depth {:optional true} nat-int?]
+     [:max_nodes {:optional true} pos-int?]
+     [:max_discovery_paths {:optional true} nat-int?]]]
+   [:snapshot_id {:optional true} bounded-string]
+   [:trace trace-ref]])
+
+(def relation-traversal-result
+  "Compact, snapshot-bound relation-traversal result (ADR-040). Ordering is
+  deterministic and mirrors the Stage 3 traversal kernel output."
+  [:map {:closed true}
+   [:api_version {:optional true} bounded-string]
+   [:schema_version schema-version]
+   [:snapshot_id bounded-string]
+   [:direction [:enum "downstream" "upstream"]]
+   [:start_nodes [:vector {:max 200} bounded-string]]
+   [:relation_types [:vector {:max 12} bounded-string]]
+   [:budgets
+    [:map {:closed true}
+     [:max_depth nat-int?]
+     [:max_nodes pos-int?]
+     [:max_discovery_paths nat-int?]
+     [:resolved_only boolean?]]]
+   [:nodes [:vector {:max 200} relation-traversal-node]]
+   [:edges [:vector {:max 1000} relation-traversal-edge]]
+   [:discovery_paths [:vector {:max 50} [:vector {:max 4} bounded-string]]]
+   [:truncated
+    [:map {:closed true}
+     [:max_depth boolean?]
+     [:max_nodes boolean?]
+     [:max_discovery_paths boolean?]]]
+   [:selection_id {:optional true} bounded-string]])
+
+(def policy-lifecycle-request
+  [:or
+   [:map {:closed true}
+    [:api_version {:optional true} bounded-string]
+    [:schema_version schema-version]
+    [:policy_id bounded-string]
+    [:version bounded-string]
+    [:decision_id bounded-string]
+    [:approval_id {:optional true} bounded-string]
+    [:trace trace-ref]]
+   [:map {:closed true}
+    [:api_version {:optional true} bounded-string]
+    [:schema_version schema-version]
+    [:policy_id bounded-string]
+    [:version bounded-string]
+    [:trace trace-ref]]])
+
+(def policy-promote-request
+  [:map {:closed true}
+   [:api_version {:optional true} bounded-string]
+   [:schema_version schema-version]
+   [:policy_id bounded-string]
+   [:version bounded-string]
+   [:decision_id bounded-string]
+   [:approval_id {:optional true} bounded-string]
+   [:trace trace-ref]])
+
+(def policy-retire-request
+  [:map {:closed true}
+   [:api_version {:optional true} bounded-string]
+   [:schema_version schema-version]
+   [:policy_id bounded-string]
+   [:version bounded-string]
+   [:trace trace-ref]])
+
+(def policy-registry-entry
+  [:map
+   [:policy_id bounded-string]
+   [:version bounded-string]
+   [:state [:enum "draft" "shadow" "active" "retired"]]
+   [:policy map?]
+   [:governance map?]
+   [:shadow_review {:optional true} map?]
+   [:approvals {:optional true} [:vector map?]]])
+
+(def policy-registry-response
+  [:map {:closed true}
+   [:schema_version schema-version]
+   [:policies [:vector {:max 1000} policy-registry-entry]]])
+
+(def policy-lifecycle-response
+  [:or
+   [:map {:closed true}
+    [:promoted [:= true]]
+    [:decision_id bounded-string]]
+   [:map {:closed true}
+    [:retired [:= true]]]])
+
 (def contracts
   {:example/catalog example-catalog
    :example/capabilities capabilities
@@ -536,5 +711,13 @@
    :example/guardrail-assessment guardrail-assessment
    :example/override-record override-record
    :example/human-review-record human-review-record
+   :example/relation-traversal-query relation-traversal-query
+   :example/relation-traversal-result relation-traversal-result
+   :example/state-invariants state-invariants
+   :example/policy-lifecycle-request policy-lifecycle-request
+   :example/policy-promote-request policy-promote-request
+   :example/policy-retire-request policy-retire-request
+   :example/policy-registry-response policy-registry-response
+   :example/policy-lifecycle-response policy-lifecycle-response
    :fixture/corpus fixture-corpus
    :fixture/retrieval retrieval-fixture})

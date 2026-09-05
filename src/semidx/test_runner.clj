@@ -2,7 +2,8 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :as t]
-            [clojure.tools.namespace.find :as ns-find]))
+            [clojure.tools.namespace.find :as ns-find]
+            [semidx.runtime.grpc-prep :as grpc-prep]))
 
 (defn discover-test-namespaces
   "Discover every `*-test` namespace under the `test` directory so new tests need
@@ -43,6 +44,7 @@
       (discover-test-namespaces)))
 
 (defn run [namespaces]
+  (grpc-prep/ensure-grpc-classes!)
   (run! require namespaces)
   (apply t/run-tests namespaces))
 

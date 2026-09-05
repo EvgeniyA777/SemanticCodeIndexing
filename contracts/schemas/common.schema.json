@@ -97,6 +97,7 @@
         "expand_context",
         "fetch_context_detail",
         "impact_analysis",
+        "traverse_relations",
         "skeletons",
         "cache_eviction"
       ]
@@ -115,7 +116,7 @@
     },
     "languagePolicyOption": {
       "type": "string",
-      "enum": ["clojure", "java", "elixir", "python", "typescript", "javascript", "lua", "html", "css"]
+      "enum": ["clojure", "java", "elixir", "python", "typescript", "javascript", "lua", "zig", "html", "css"]
     },
     "retrievalIssueCode": {
       "type": "string",

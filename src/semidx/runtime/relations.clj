@@ -8,7 +8,9 @@
   producers emit them; unknown kinds are rejected with a structured diagnostic."
   #{"dataflow/local-binding-call-result"
     "dataflow/returns-call-result"
-    "dataflow/passes-argument"})
+    "dataflow/passes-argument"
+    "structure/declares-field"
+    "dataflow/writes-field"})
 
 (def resolution-statuses
   "Valid resolution states for a typed relation."
@@ -28,6 +30,12 @@
        distinct
        vec))
 
+;; SHA-1 here is a non-cryptographic content-addressing hash for relation
+;; identity, not a security primitive. Do not "upgrade" it casually: the digest
+;; is baked into every `relation_id`, which is also materialised in the Stage 4
+;; PostgreSQL relation projection, so changing the algorithm is a breaking
+;; identity change that requires bumping `relation-schema-version` plus a
+;; projection backfill (see ADR-039), not a drop-in edit.
 (defn- sha1 [value]
   (let [digest (.digest (java.security.MessageDigest/getInstance "SHA-1")
                         (.getBytes (str value) "UTF-8"))]
@@ -159,10 +167,12 @@
     {:relations (->> valid (sort-by :relation_id) vec)
      :diagnostics (mapv relation-diagnostic invalid)}))
 
-(defn normalize-relations [relations]
-  (:relations (normalize-relations-with-diagnostics relations)))
-
-(def empty-relation-indexes
+;; Canonical empty relation-index value. Kept as a deliberate public constant for
+;; snapshot/storage initialisation even though no caller references it yet; the
+;; ^:export tag marks it intentional public API and silences the
+;; unused-public-var lint (project .lsp/.clj-kondo configs are gitignored, so the
+;; marker has to live in source).
+(def ^:export empty-relation-indexes
   {:relations {}
    :relation_forward_index {}
    :relation_reverse_index {}
@@ -202,7 +212,7 @@
   "Initial bounded-traversal ceiling and defaults. Requested budgets may lower
   these but not exceed them, pending benchmark-backed tightening before any
   public exposure."
-  {:max_depth 4 :max_nodes 200 :max_paths 50})
+  {:max_depth 4 :max_nodes 200 :max_discovery_paths 50})
 
 (def traversal-directions
   "Supported traversal directions. :downstream follows source -> target
@@ -215,30 +225,43 @@
        (or (not resolved-only)
            (= "resolved" (:resolution_status relation)))))
 
-(defn- node-neighbors
-  "Deterministically ordered outgoing steps from `node` in `direction`. Each
-  step is {:relation_id :relation_type :resolution_status :to}. Downstream steps
-  fan out to a relation's resolved `target_unit_ids`; upstream steps move to the
-  relation's `source_unit_id`."
-  [{:keys [relations relation_forward_index relation_reverse_index]}
-   node direction relation-type-set resolved-only]
-  (let [rel-ids (case direction
-                  :downstream (get relation_forward_index node)
-                  :upstream (get relation_reverse_index node))]
-    (->> rel-ids
-         (keep #(get relations %))
-         (filter #(eligible-relation? % relation-type-set resolved-only))
-         (mapcat (fn [rel]
-                   (let [base {:relation_id (:relation_id rel)
-                               :relation_type (:relation_type rel)
-                               :resolution_status (:resolution_status rel)}]
-                     (case direction
-                       :downstream (map #(assoc base :to %) (:target_unit_ids rel))
-                       :upstream (when-let [s (:source_unit_id rel)]
-                                   [(assoc base :to s)])))))
-         (remove #(nil? (:to %)))
-         (sort-by (juxt :relation_id :to))
-         vec)))
+(defn- relations->steps
+  "Deterministically ordered outgoing steps computed from the relations attached
+  to a node in `direction`. Each step is
+  {:relation_id :relation_type :resolution_status :to}. Downstream steps fan out
+  to a relation's resolved `target_unit_ids`; upstream steps move to the
+  relation's `source_unit_id`. Eligibility filtering, fan-out, and ordering are
+  owned here (the kernel), never by an execution backend."
+  [relations direction relation-type-set resolved-only]
+  (->> relations
+       (filter #(eligible-relation? % relation-type-set resolved-only))
+       (mapcat (fn [rel]
+                 (let [base {:relation_id (:relation_id rel)
+                             :relation_type (:relation_type rel)
+                             :resolution_status (:resolution_status rel)}]
+                   (case direction
+                     :downstream (map #(assoc base :to %) (:target_unit_ids rel))
+                     :upstream (when-let [s (:source_unit_id rel)]
+                                 [(assoc base :to s)])))))
+       (remove #(nil? (:to %)))
+       (sort-by (juxt :relation_id :to))
+       vec))
+
+(defn in-memory-neighbor-provider
+  "Batched frontier neighbor provider over in-memory relation indexes. Given a
+  frontier of nodes and a direction, returns {node -> (seq relations)} carrying
+  the relations attached to each node for that direction (forward index for
+  :downstream, reverse index for :upstream). It performs no eligibility
+  filtering, fan-out, or ordering; the traversal kernel owns those semantics."
+  [{:keys [relations relation_forward_index relation_reverse_index]}]
+  (fn [nodes direction]
+    (let [index (case direction
+                  :downstream relation_forward_index
+                  :upstream relation_reverse_index)]
+      (into {}
+            (map (fn [node]
+                   [node (keep #(get relations %) (get index node))]))
+            nodes))))
 
 (defn- normalize-traversal-request [request]
   (let [clamp (fn [k]
@@ -255,7 +278,108 @@
                       true)
      :max_depth (clamp :max_depth)
      :max_nodes (clamp :max_nodes)
-     :max_paths (clamp :max_paths)}))
+     :max_discovery_paths (clamp :max_discovery_paths)}))
+
+(defn traverse-relations-with
+  "Bounded traversal driven by a batched frontier neighbor provider. `provider`
+  is (fn [frontier-nodes direction] -> {node -> (seq relations)}) and is called
+  once per depth level, so an execution backend can batch neighbor lookups and
+  avoid N+1 fetches. All traversal policy - eligibility, direction fan-out,
+  deterministic ordering, cycle handling, and budgets - stays in this kernel;
+  the provider only supplies the relations touching a frontier. Output is
+  byte-identical to the pure in-memory `traverse-relations`. See ADR-040.
+
+  `request` keys match `traverse-relations`. Returns
+  {:direction :start_nodes :relation_types :budgets :nodes :edges
+  :discovery_paths :truncated}."
+  [provider request]
+  (let [{:keys [direction start_nodes relation_types resolved_only
+                max_depth max_nodes max_discovery_paths]} (normalize-traversal-request request)]
+    (when-not (contains? traversal-directions direction)
+      (throw (ex-info "Unknown traversal direction"
+                      {:error_code :invalid_traversal_request
+                       :direction direction})))
+    (let [all-starts start_nodes
+          start-nodes (vec (take max_nodes all-starts))
+          start-truncated? (> (count all-starts) (count start-nodes))
+          finalize (fn [truncated]
+                     (-> truncated
+                         (update :max_nodes #(or % (:max_nodes_starts truncated)))
+                         (dissoc :max_nodes_starts)))
+          result (fn [visited node-order edges paths truncated]
+                   {:direction direction
+                    :start_nodes start-nodes
+                    :relation_types (vec (sort relation_types))
+                    :budgets {:max_depth max_depth :max_nodes max_nodes
+                              :max_discovery_paths max_discovery_paths :resolved_only resolved_only}
+                    :nodes (mapv (fn [n] {:unit_id n :depth (get visited n)}) node-order)
+                    :edges edges
+                    :discovery_paths paths
+                    :truncated (finalize truncated)})]
+      (loop [frontier (mapv (fn [n] {:node n :path []}) start-nodes)
+             depth 0
+             visited (into {} (map (fn [n] [n 0]) start-nodes))
+             node-order start-nodes
+             edges []
+             edge-seen #{}
+             paths []
+             truncated {:max_depth false :max_nodes false
+                        :max_discovery_paths false :max_nodes_starts start-truncated?}]
+        (cond
+          (empty? frontier)
+          (result visited node-order edges paths truncated)
+
+          (>= depth max_depth)
+          (let [node->rels (provider (mapv :node frontier) direction)
+                any-neighbors? (boolean
+                                (some (fn [{:keys [node]}]
+                                        (seq (relations->steps (get node->rels node)
+                                                               direction relation_types resolved_only)))
+                                      frontier))]
+            (result visited node-order edges paths
+                    (cond-> truncated any-neighbors? (assoc :max_depth true))))
+
+          :else
+          (let [node->rels (provider (mapv :node frontier) direction)
+                st (reduce
+                    (fn [acc {:keys [node path]}]
+                      (let [steps (relations->steps (get node->rels node)
+                                                    direction relation_types resolved_only)]
+                        (reduce
+                         (fn [{:keys [nf vis order es eseen ps tr]}
+                              {:keys [relation_id to relation_type resolution_status]}]
+                           (let [edge {:relation_id relation_id :from node :to to
+                                       :relation_type relation_type
+                                       :resolution_status resolution_status
+                                       :depth (inc depth)}
+                                 ekey [relation_id node to]
+                                 new-es (if (contains? eseen ekey) es (conj es edge))
+                                 new-eseen (conj eseen ekey)
+                                 base {:nf nf :vis vis :order order
+                                       :es new-es :eseen new-eseen :ps ps :tr tr}]
+                             (cond
+                               (contains? vis to)
+                               base
+
+                               (>= (count vis) max_nodes)
+                               (assoc base :tr (assoc tr :max_nodes true))
+
+                               :else
+                               (let [new-path (conj path relation_id)
+                                     record? (< (count ps) max_discovery_paths)]
+                                 {:nf (conj nf {:node to :path new-path})
+                                  :vis (assoc vis to (inc depth))
+                                  :order (conj order to)
+                                  :es new-es :eseen new-eseen
+                                  :ps (if record? (conj ps new-path) ps)
+                                  :tr (if record? tr (assoc tr :max_discovery_paths true))}))))
+                         acc
+                         steps)))
+                    {:nf [] :vis visited :order node-order
+                     :es edges :eseen edge-seen :ps paths :tr truncated}
+                    frontier)]
+            (recur (:nf st) (inc depth) (:vis st) (:order st)
+                   (:es st) (:eseen st) (:ps st) (:tr st))))))))
 
 (defn traverse-relations
   "Pure bounded traversal over relation indexes. `indexes` is any map carrying
@@ -266,82 +390,12 @@
   - :start_nodes      seq of source unit ids (required, non-blank)
   - :relation_types   allow-list set/seq; empty means all types
   - :resolved_only    default true (ambiguous/unresolved edges are skipped)
-  - :max_depth / :max_nodes / :max_paths  clamped to default-traversal-bounds
+  - :max_depth / :max_nodes / :max_discovery_paths  clamped to default-traversal-bounds
 
   Returns {:direction :start_nodes :relation_types :budgets :nodes :edges
-  :paths :truncated}. Traversal is breadth-first and cycle-safe (a node is
+  :discovery_paths :truncated}. Traversal is breadth-first and cycle-safe (a node is
   discovered once, at its shortest depth), and output ordering is deterministic
-  regardless of underlying set iteration order."
+  regardless of underlying set iteration order. Implemented on top of
+  `traverse-relations-with` with an in-memory batched frontier provider."
   [indexes request]
-  (let [{:keys [direction start_nodes relation_types resolved_only
-                max_depth max_nodes max_paths]} (normalize-traversal-request request)]
-    (when-not (contains? traversal-directions direction)
-      (throw (ex-info "Unknown traversal direction"
-                      {:error_code :invalid_traversal_request
-                       :direction direction})))
-    (let [all-starts start_nodes
-          start-nodes (vec (take max_nodes all-starts))
-          start-truncated? (> (count all-starts) (count start-nodes))
-          result (fn [visited node-order edges paths truncated]
-                   {:direction direction
-                    :start_nodes start-nodes
-                    :relation_types (vec (sort relation_types))
-                    :budgets {:max_depth max_depth :max_nodes max_nodes
-                              :max_paths max_paths :resolved_only resolved_only}
-                    :nodes (mapv (fn [n] {:unit_id n :depth (get visited n)}) node-order)
-                    :edges edges
-                    :paths paths
-                    :truncated truncated})]
-      (loop [queue (into clojure.lang.PersistentQueue/EMPTY
-                         (map (fn [n] {:node n :depth 0 :path []}) start-nodes))
-             visited (into {} (map (fn [n] [n 0]) start-nodes))
-             node-order start-nodes
-             edges []
-             edge-seen #{}
-             paths []
-             truncated {:max_depth false :max_nodes false
-                        :max_paths false :max_nodes_starts start-truncated?}]
-        (if (empty? queue)
-          (result visited node-order edges paths
-                  (-> truncated
-                      (update :max_nodes #(or % (:max_nodes_starts truncated)))
-                      (dissoc :max_nodes_starts)))
-          (let [{:keys [node depth path]} (peek queue)
-                queue' (pop queue)
-                neighbors (node-neighbors indexes node direction relation_types resolved_only)]
-            (if (>= depth max_depth)
-              (recur queue' visited node-order edges edge-seen paths
-                     (cond-> truncated (seq neighbors) (assoc :max_depth true)))
-              (let [st (reduce
-                        (fn [{:keys [q vis order es eseen ps tr]}
-                             {:keys [relation_id to relation_type resolution_status]}]
-                          (let [edge {:relation_id relation_id :from node :to to
-                                      :relation_type relation_type
-                                      :resolution_status resolution_status
-                                      :depth (inc depth)}
-                                ekey [relation_id node to]
-                                new-es (if (contains? eseen ekey) es (conj es edge))
-                                new-eseen (conj eseen ekey)
-                                base {:q q :vis vis :order order
-                                      :es new-es :eseen new-eseen :ps ps :tr tr}]
-                            (cond
-                              (contains? vis to)
-                              base
-
-                              (>= (count vis) max_nodes)
-                              (assoc base :tr (assoc tr :max_nodes true))
-
-                              :else
-                              (let [new-path (conj path relation_id)
-                                    record? (< (count ps) max_paths)]
-                                {:q (conj q {:node to :depth (inc depth) :path new-path})
-                                 :vis (assoc vis to (inc depth))
-                                 :order (conj order to)
-                                 :es new-es :eseen new-eseen
-                                 :ps (if record? (conj ps new-path) ps)
-                                 :tr (if record? tr (assoc tr :max_paths true))}))))
-                        {:q queue' :vis visited :order node-order
-                         :es edges :eseen edge-seen :ps paths :tr truncated}
-                        neighbors)]
-                (recur (:q st) (:vis st) (:order st) (:es st)
-                       (:eseen st) (:ps st) (:tr st))))))))))
+  (traverse-relations-with (in-memory-neighbor-provider indexes) request))

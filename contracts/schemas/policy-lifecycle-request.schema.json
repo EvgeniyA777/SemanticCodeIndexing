@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semidx.example/contracts/schemas/policy-lifecycle-request.schema.json",
+  "title": "Policy Lifecycle Request",
+  "description": "Request to promote or retire a retrieval policy in the online control plane.",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "Promote Request",
+      "required": ["schema_version", "policy_id", "version", "decision_id", "trace"],
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schemaVersion"
+        },
+        "policy_id": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "decision_id": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "approval_id": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "trace": {
+          "$ref": "common.schema.json#/$defs/traceRef"
+        }
+      }
+    },
+    {
+      "title": "Retire Request",
+      "required": ["schema_version", "policy_id", "version", "trace"],
+      "additionalProperties": false,
+      "properties": {
+        "api_version": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "schema_version": {
+          "$ref": "common.schema.json#/$defs/schemaVersion"
+        },
+        "policy_id": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "version": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "trace": {
+          "$ref": "common.schema.json#/$defs/traceRef"
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "policy_id": "heuristic_v1",
+      "version": "2026-03-10",
+      "decision_id": "decision-20260802-001",
+      "trace": {
+        "trace_id": "11111111-1111-4111-8111-111111111111",
+        "request_id": "req-policy-promote-001",
+        "actor_id": "operator"
+      }
+    },
+    {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "policy_id": "heuristic_v1",
+      "version": "2026-03-10",
+      "trace": {
+        "trace_id": "22222222-2222-4222-8222-222222222222",
+        "request_id": "req-policy-retire-001",
+        "actor_id": "operator"
+      }
+    }
+  ]
+}

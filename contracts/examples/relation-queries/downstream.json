@@ -1,0 +1,19 @@
+{
+  "api_version": "1.0",
+  "schema_version": "1.0",
+  "start_nodes": ["src/my/app/order.clj::my.app.order/process-order"],
+  "direction": "downstream",
+  "relation_types": ["dataflow/returns-call-result"],
+  "resolved_only": true,
+  "budgets": {
+    "max_depth": 2,
+    "max_nodes": 24,
+    "max_discovery_paths": 12
+  },
+  "snapshot_id": "c2e1d37b-7a1f-451e-b9a9-2ea1cbf02008",
+  "trace": {
+    "trace_id": "11111111-1111-4111-8111-111111111111",
+    "request_id": "req-relation-traversal-001",
+    "actor_id": "planner-agent"
+  }
+}

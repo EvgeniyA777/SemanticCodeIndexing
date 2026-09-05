@@ -1,0 +1,652 @@
+{
+  "metadata": {
+    "version": 0,
+    "tool_info": {
+      "name": "scip-typescript",
+      "version": "0.4.0",
+      "arguments": []
+    },
+    "text_document_encoding": 1
+  },
+  "documents": [
+    {
+      "relative_path": "src/validator.ts",
+      "language": "",
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm . . src/`validator.ts`/",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#validate().",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#validate().(order)",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        }
+      ],
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            5,
+            0,
+            10,
+            0
+          ]
+        },
+        {
+          "range": [
+            5,
+            13,
+            22
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            5,
+            0,
+            9,
+            1
+          ]
+        },
+        {
+          "range": [
+            6,
+            2,
+            10
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#validate().",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            6,
+            2,
+            8,
+            3
+          ]
+        },
+        {
+          "range": [
+            6,
+            11,
+            16
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#validate().(order)",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            7,
+            11,
+            16
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#validate().(order)",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            7,
+            17,
+            21
+          ],
+          "symbol": "scip-typescript npm typescript 5.9.3 lib/`lib.es5.d.ts`/String#trim().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        }
+      ]
+    },
+    {
+      "relative_path": "src/orders.ts",
+      "language": "",
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().(id)",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().(value)",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#validator.",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#`<constructor>`().",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#`<constructor>`().(validator)",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#handle().",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        },
+        {
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#handle().(order)",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        }
+      ],
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            0,
+            0,
+            29,
+            0
+          ]
+        },
+        {
+          "range": [
+            0,
+            9,
+            18
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            0,
+            26,
+            39
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            10,
+            16,
+            27
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            10,
+            0,
+            12,
+            1
+          ]
+        },
+        {
+          "range": [
+            10,
+            28,
+            30
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().(id)",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            11,
+            9,
+            18
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            11,
+            19,
+            21
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().(id)",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            14,
+            16,
+            25
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            14,
+            0,
+            16,
+            1
+          ]
+        },
+        {
+          "range": [
+            14,
+            26,
+            31
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().(value)",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            15,
+            9,
+            14
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().(value)",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            15,
+            15,
+            19
+          ],
+          "symbol": "scip-typescript npm typescript 5.9.3 lib/`lib.es5.d.ts`/String#trim().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            18,
+            13,
+            25
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            18,
+            0,
+            28,
+            1
+          ]
+        },
+        {
+          "range": [
+            19,
+            10,
+            19
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#validator.",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            19,
+            21,
+            30
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            21,
+            2,
+            13
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#`<constructor>`().",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            21,
+            2,
+            23,
+            3
+          ]
+        },
+        {
+          "range": [
+            21,
+            14,
+            23
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#`<constructor>`().(validator)",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            21,
+            25,
+            34
+          ],
+          "symbol": "scip-typescript npm . . src/`validator.ts`/Validator#",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            22,
+            9,
+            18
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#validator.",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            22,
+            21,
+            30
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#`<constructor>`().(validator)",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            25,
+            2,
+            8
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#handle().",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            25,
+            2,
+            27,
+            3
+          ]
+        },
+        {
+          "range": [
+            25,
+            9,
+            14
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#handle().(order)",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            26,
+            11,
+            22
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            26,
+            23,
+            28
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/OrderService#handle().(order)",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        }
+      ]
+    },
+    {
+      "relative_path": "src/index.ts",
+      "language": "",
+      "symbols": [
+        {
+          "symbol": "scip-typescript npm . . src/`index.ts`/",
+          "kind": 0,
+          "display_name": "",
+          "enclosing_symbol": "",
+          "relationships": []
+        }
+      ],
+      "occurrences": [
+        {
+          "range": [
+            0,
+            0,
+            0
+          ],
+          "symbol": "scip-typescript npm . . src/`index.ts`/",
+          "symbol_roles": 1,
+          "role_names": [
+            "Definition"
+          ],
+          "syntax_kind": 0,
+          "enclosing_range": [
+            8,
+            0,
+            10,
+            0
+          ]
+        },
+        {
+          "range": [
+            8,
+            9,
+            20
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/createOrder().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            8,
+            28,
+            38
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            9,
+            9,
+            18
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            9,
+            22,
+            34
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/normalize().",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        },
+        {
+          "range": [
+            9,
+            42,
+            52
+          ],
+          "symbol": "scip-typescript npm . . src/`orders.ts`/",
+          "symbol_roles": 0,
+          "role_names": [],
+          "syntax_kind": 0,
+          "enclosing_range": []
+        }
+      ]
+    }
+  ],
+  "external_symbols": []
+}

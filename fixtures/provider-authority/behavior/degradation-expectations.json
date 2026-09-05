@@ -1,0 +1,63 @@
+{
+  "fixture_id": "provider_authority_degradation_expectations_001",
+  "category": "degradation_and_freshness",
+  "purpose": "Specify required behavior for dirty-file content and provider unavailability so Stage 2-6 arbitration and freshness policies degrade explicitly and never fabricate exact authority.",
+  "plan_refs": ["plans/018"],
+  "adr_refs": ["ADR-046", "ADR-047"],
+  "status": "specification_for_later_stages",
+  "dirty_file_behavior": [
+    {
+      "scenario": "SCIP artifact digest does not match current workspace file content",
+      "given": "src/example/OrderService.java edited after the SCIP artifact was produced",
+      "expected": {
+        "scip_authority": "excluded_from_exact",
+        "reason_code": "source_identity_mismatch",
+        "fallback": "structural (tree-sitter) or heuristic (regex) with explicit degradation",
+        "index_result": "must still index; must not fail the file or the whole index"
+      }
+    },
+    {
+      "scenario": "LSP live overlay document version matches dirty buffer",
+      "given": "open document version / content digest matches the indexed source",
+      "expected": {
+        "lsp_authority": "exact_for_supported_operations",
+        "scope": "affected overlay/snapshot only",
+        "reproducibility": "batch snapshot with overlay disabled remains reproducible"
+      }
+    }
+  ],
+  "provider_unavailability": [
+    {
+      "scenario": "tree-sitter CLI/grammar unavailable (ADR-047 resolution fails)",
+      "expected": {
+        "structural_authority": "unavailable",
+        "reason_code": "tree_sitter_unavailable | tree_sitter_missing_grammar | tree_sitter_parse_failed",
+        "fallback": "regex heuristic with explicit diagnostic",
+        "must_not": "silently claim tree-sitter ran or elevate regex output to structural/exact"
+      },
+      "current_ground_truth": "java/typescript parse-file already emit these reason codes and fall back to regex today"
+    },
+    {
+      "scenario": "SCIP artifact absent for a file",
+      "expected": {
+        "semantic_authority": "unavailable",
+        "fallback": "tree-sitter then regex",
+        "index_result": "no index failure; degradation reported additively"
+      }
+    },
+    {
+      "scenario": "LSP server crash or timeout mid-request",
+      "expected": {
+        "isolation": "affected file/operation only",
+        "must_not": "fail unrelated files or the whole index",
+        "authority_after": "fall back to SCIP/tree-sitter/regex per plan"
+      }
+    }
+  ],
+  "authority_invariants": [
+    "Regex-produced semantic facts are always heuristic or fallback; never exact.",
+    "Lower authority may fill missing facts but must never overwrite a higher-authority value.",
+    "Equal-authority contradictions are surfaced as explicit ambiguity, not resolved by registration/completion order.",
+    "Unknown or stale source identity cannot produce exact facts."
+  ]
+}

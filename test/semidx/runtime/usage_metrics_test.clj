@@ -113,6 +113,26 @@
       (is (= ["resolved_target_correct"] (:retrieval_issue_codes (first feedback))))
       (is (= ["src/my/app/order.clj"] (:ground_truth_paths (first feedback)))))))
 
+(deftest resolve-context-does-not-fabricate-returned-tokens-test
+  (testing "selection reports an estimate and no measured return; expand reports a measured return"
+    (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-returned-tokens" (make-array java.nio.file.attribute.FileAttribute 0)))
+          _ (create-sample-repo! tmp-root)
+          sink (sci/in-memory-usage-metrics)
+          index (sci/create-index {:root_path tmp-root :usage_metrics sink})
+          result (sci/resolve-context index sample-query)
+          _expand (sci/expand-context index {:selection_id (:selection_id result)
+                                             :snapshot_id (:snapshot_id result)
+                                             :include_impact_hints true})
+          events (usage/emitted-events sink)
+          resolve-event (last (filter #(= "resolve_context" (:operation %)) events))
+          expand-event (last (filter #(= "expand_context" (:operation %)) events))]
+      (testing "selection records an honest estimate"
+        (is (pos-int? (get-in resolve-event [:payload :estimated_tokens]))))
+      (testing "selection must not present the estimate as a measured returned_tokens"
+        (is (nil? (get-in resolve-event [:payload :returned_tokens]))))
+      (testing "expand records a real measured returned figure"
+        (is (nat-int? (get-in expand-event [:payload :returned_tokens])))))))
+
 (deftest suppressed-library-metrics-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-usage-metrics-suppress" (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
@@ -378,6 +398,26 @@
       (is (pos? (get-in report [:index_latency_ms :count])))
       (is (pos? (get-in retrieval-only [:retrieval_latency_ms :count])))
       (is (pos? (get-in report [:stage_token_footprint "detail" :returned_tokens :count]))))))
+
+(deftest slo-report-includes-rate-limit-rejections-test
+  (let [sink (usage/in-memory-usage-metrics)]
+    (usage/safe-record-event! sink {:surface "http"
+                                    :operation "rate_limit_decision"
+                                    :status "success"
+                                    :result_status "allowed"})
+    (doseq [surface ["http" "grpc"]]
+      (usage/safe-record-event! sink {:surface surface
+                                      :operation "rate_limit_decision"
+                                      :status "error"
+                                      :result_status "rejected"}))
+    (let [report (usage/slo-report sink)
+          http-report (usage/slo-report sink {:surface "http"})]
+      (is (= 3 (get-in report [:totals :rate_limit_decisions])))
+      (is (= 2 (get-in report [:totals :rate_limit_rejections])))
+      (is (= 2 (get-in http-report [:totals :rate_limit_decisions])))
+      (is (= 1 (get-in http-report [:totals :rate_limit_rejections])))
+      (is (= (/ 2.0 3.0) (:rate_limit_rejection_rate report)))
+      (is (= 0.5 (:rate_limit_rejection_rate http-report))))))
 
 (deftest harvest-replay-dataset-builds-query-expected-shape-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-usage-metrics-harvest" (make-array java.nio.file.attribute.FileAttribute 0)))

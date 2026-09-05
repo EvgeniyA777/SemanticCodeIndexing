@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: c07bec56dd0694d12daf25515c71126904132557
+- fingerprint: 8859af42d6c9b5d76da0f67a21cd73868966e1ba
 
 ## Tree
 ```text
@@ -25,6 +25,7 @@ semidx
 - semidx.contracts.cli/-main
 - semidx.runtime.cli/-main
 - semidx.runtime.compression-cli/-main
+- semidx.runtime.grpc-launcher/-main
 - semidx.test-runner/-main
 
 ## Namespace Categories
@@ -52,7 +53,7 @@ semidx
 - semidx.integration.lua-onboarding-test
 - semidx.integration.policy-governance-test
 - semidx.integration.runtime-test
-- ... +19 more
+- ... +42 more
 ### other
 - semidx.contracts.cli
 - semidx.contracts.schemas
@@ -62,16 +63,20 @@ semidx
 - semidx.mcp.session-registry
 - semidx.runtime.adapters
 - semidx.runtime.authz
-- ... +44 more
+- ... +70 more
 
 ## Domain Model
+- ArmRunner [protocol]
 - IndexStorage [protocol]
 - UsageMetricsSink [protocol]
 - InMemoryStorage [record]
 - InMemoryUsageMetrics [record]
+- LiveArmRunner [record]
 - NoOpUsageMetrics [record]
 - PostgresStorage [record]
 - PostgresUsageMetrics [record]
+- ProcessArmRunner [record]
+- ScriptedArmRunner [record]
 
 ## Dependency Graph
 - semidx.contracts.cli -> semidx.contracts.validator
@@ -94,7 +99,7 @@ semidx
 - semidx.core -> semidx.runtime.usage-metrics
 - semidx.integration.css-onboarding-test -> clojure.java.io
 - semidx.integration.css-onboarding-test -> clojure.test
-- ... +326 more
+- ... +537 more
 
 ## Namespaces
 ### semidx.contracts.cli
@@ -196,17 +201,17 @@ semidx
 - close-sse! [function]
 ### semidx.runtime.adapters
 - path: src/semidx/runtime/adapters.clj
-- requires: clojure.java.io, semidx.runtime.language-registry, semidx.runtime.languages.clojure, semidx.runtime.languages.css, semidx.runtime.languages.html, semidx.runtime.languages.java, semidx.runtime.languages.javascript, semidx.runtime.languages.lua, semidx.runtime.languages.python, semidx.runtime.languages.shared, semidx.runtime.languages.typescript, semidx.runtime.semantic-ir
-- aliases: clj-language -> semidx.runtime.languages.clojure, css-language -> semidx.runtime.languages.css, html-language -> semidx.runtime.languages.html, io -> clojure.java.io, java-language -> semidx.runtime.languages.java, js-language -> semidx.runtime.languages.javascript, language-registry -> semidx.runtime.language-registry, lua-language -> semidx.runtime.languages.lua, py-language -> semidx.runtime.languages.python, semantic-ir -> semidx.runtime.semantic-ir, shared-language -> semidx.runtime.languages.shared, ts-language -> semidx.runtime.languages.typescript
+- requires: clojure.java.io, semidx.runtime.language-registry, semidx.runtime.languages.clojure, semidx.runtime.languages.css, semidx.runtime.languages.html, semidx.runtime.languages.java, semidx.runtime.languages.javascript, semidx.runtime.languages.lua, semidx.runtime.languages.python, semidx.runtime.languages.shared, semidx.runtime.languages.typescript, semidx.runtime.languages.zig, semidx.runtime.semantic-ir
+- aliases: clj-language -> semidx.runtime.languages.clojure, css-language -> semidx.runtime.languages.css, html-language -> semidx.runtime.languages.html, io -> clojure.java.io, java-language -> semidx.runtime.languages.java, js-language -> semidx.runtime.languages.javascript, language-registry -> semidx.runtime.language-registry, lua-language -> semidx.runtime.languages.lua, py-language -> semidx.runtime.languages.python, semantic-ir -> semidx.runtime.semantic-ir, shared-language -> semidx.runtime.languages.shared, ts-language -> semidx.runtime.languages.typescript, zig-language -> semidx.runtime.languages.zig
 - symbols:
 - language-by-path [function]
 - source-path? [function]
+- with-parser-context [function]
 - slurp-lines [function]
 - trim-signature [function]
 - fallback-unit [function]
 - parse-elixir-language-file [function]
 - parse-html [function]
-- parse-css [function]
 ### semidx.runtime.authz
 - path: src/semidx/runtime/authz.clj
 - requires: clojure.edn, clojure.java.io, clojure.string
@@ -220,24 +225,29 @@ semidx
 - normalize-path-prefix [function]
 - path-allowed? [function]
 - tenant-rules [function]
-### semidx.runtime.benchmarks
-- path: src/semidx/runtime/benchmarks.clj
-- requires: clojure.data.json, clojure.java.io, clojure.string, semidx.core
-- aliases: checkout -> my.app.checkout, fulfillment -> my.app.fulfillment, io -> clojure.java.io, json -> clojure.data.json, order -> my.app.order, payments -> my.app.payments, sci -> semidx.core, str -> clojure.string
+### semidx.runtime.benchmark-agent
+- path: src/semidx/runtime/benchmark_agent.clj
+- requires: clojure.data.json, clojure.java.io, clojure.java.shell, clojure.string, semidx.core, semidx.runtime.benchmark-harness
+- aliases: harness -> semidx.runtime.benchmark-harness, io -> clojure.java.io, json -> clojure.data.json, sci -> semidx.core, shell -> clojure.java.shell, str -> clojure.string
 - symbols:
-- read-json [function]
-- write-file! [function]
-- build-benchmark-repo! [function]
-- parse-engine [function]
-- parse-args [function]
-- parser-opts-for [function]
-- confidence-rank [section]
-- raw-rank [section]
-### semidx.runtime.capabilities
-- path: src/semidx/runtime/capabilities.clj
-- requires: semidx.runtime.language-registry
-- aliases: registry -> semidx.runtime.language-registry
+- agent-id [section]
+- agent-build-id [section]
+- adapter-id [section]
+- api-base [section]
+- limits [section]
+- semidx-tools [section]
+- lsp-tools [section]
+- tool-declarations [section]
+### semidx.runtime.benchmark-harness
+- path: src/semidx/runtime/benchmark_harness.clj
+- requires: clojure.data.json, clojure.java.io, clojure.java.shell, clojure.string, semidx.runtime.benchmark-suite, semidx.runtime.benchmark-usage, semidx.runtime.usage-metrics
+- aliases: bu -> semidx.runtime.benchmark-usage, io -> clojure.java.io, json -> clojure.data.json, shell -> clojure.java.shell, str -> clojure.string, suite -> semidx.runtime.benchmark-suite, usage -> semidx.runtime.usage-metrics
 - symbols:
-- current-capability-version [section]
-- confidence-ceiling [function]
-- capabilities-payload [function]
+- harness-version [section]
+- task-prompt-policy-id [section]
+- arm-policy-bundle-id [section]
+- execution-budget-policy-id [section]
+- cache-protocol-id [section]
+- feedback-surface [section]
+- feedback-operation [section]
+- task-prompt-preamble [section]

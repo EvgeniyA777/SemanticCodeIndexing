@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semidx.example/contracts/schemas/relation-traversal-query.schema.json",
+  "title": "Relation Traversal Query",
+  "description": "Canonical host request for a bounded traversal over typed semantic relations. Reuses the Stage 3 traversal kernel semantics and bounds (ADR-040); it is not a general-purpose graph-query language.",
+  "type": "object",
+  "required": ["schema_version", "start_nodes", "direction", "trace"],
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "start_nodes": {
+      "type": "array",
+      "description": "Seed unit ids for the walk.",
+      "items": {
+        "$ref": "common.schema.json#/$defs/boundedString"
+      },
+      "minItems": 1,
+      "maxItems": 200,
+      "uniqueItems": true
+    },
+    "direction": {
+      "type": "string",
+      "description": "downstream follows source -> target (flows-to); upstream follows target -> source (flows-from).",
+      "enum": ["downstream", "upstream"]
+    },
+    "relation_types": {
+      "type": "array",
+      "description": "Relation-type allow-list. Omitted or empty means all types.",
+      "items": {
+        "$ref": "common.schema.json#/$defs/boundedString"
+      },
+      "minItems": 1,
+      "maxItems": 12,
+      "uniqueItems": true
+    },
+    "resolved_only": {
+      "type": "boolean",
+      "description": "When true (default), ambiguous and unresolved edges are skipped."
+    },
+    "budgets": {
+      "type": "object",
+      "description": "Requested budgets. Each is clamped into [0, default-traversal-bounds]; omitted values use the ceiling.",
+      "additionalProperties": false,
+      "properties": {
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_nodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_discovery_paths": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "snapshot_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "trace": {
+      "$ref": "common.schema.json#/$defs/traceRef"
+    }
+  },
+  "examples": [
+    {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "start_nodes": ["src/my/app/order.clj::my.app.order/process-order"],
+      "direction": "downstream",
+      "relation_types": ["dataflow/returns-call-result"],
+      "resolved_only": true,
+      "budgets": {
+        "max_depth": 2,
+        "max_nodes": 24,
+        "max_discovery_paths": 12
+      },
+      "snapshot_id": "c2e1d37b-7a1f-451e-b9a9-2ea1cbf02008",
+      "trace": {
+        "trace_id": "11111111-1111-4111-8111-111111111111",
+        "request_id": "req-relation-traversal-001",
+        "actor_id": "planner-agent"
+      }
+    }
+  ]
+}

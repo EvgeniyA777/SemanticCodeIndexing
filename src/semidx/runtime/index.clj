@@ -80,28 +80,33 @@
                :units units*
                :diagnostics diagnostics
                :relations relations}))]
-    (->> paths
-         (reduce
-          (fn [acc path]
-            (let [parsed (adapters/parse-file root-path path parser-opts)
-                  file-rec {:path path
-                            :language (:language parsed)
-                            :module (:module parsed)
-                            :imports (:imports parsed)
-                            :use_modules (:use_modules parsed)
-                            :use_expansion_imports (:use_expansion_imports parsed)
-                            :test_target_modules (:test_target_modules parsed)
-                            :semantic_pipeline (:semantic_pipeline parsed)
-                            :parser_mode (:parser_mode parsed)
-                            :diagnostics (:diagnostics parsed)}]
-              (-> acc
-                  (update :files assoc path file-rec)
-                  (update :units into (:units parsed))
-                  (update :relations into (:relations parsed))
-                  (update :diagnostics into
-                          (map (fn [d] (assoc d :path path)) (:diagnostics parsed))))))
-          {:files {} :units [] :diagnostics [] :relations []})
-         enrich-elixir-use-imports)))
+    (adapters/with-parser-context
+     root-path
+     paths
+     parser-opts
+     (fn [context-parser-opts]
+       (->> paths
+            (reduce
+             (fn [acc path]
+               (let [parsed (adapters/parse-file root-path path context-parser-opts)
+                     file-rec {:path path
+                               :language (:language parsed)
+                               :module (:module parsed)
+                               :imports (:imports parsed)
+                               :use_modules (:use_modules parsed)
+                               :use_expansion_imports (:use_expansion_imports parsed)
+                               :test_target_modules (:test_target_modules parsed)
+                               :semantic_pipeline (:semantic_pipeline parsed)
+                               :parser_mode (:parser_mode parsed)
+                               :diagnostics (:diagnostics parsed)}]
+                 (-> acc
+                     (update :files assoc path file-rec)
+                     (update :units into (:units parsed))
+                     (update :relations into (:relations parsed))
+                     (update :diagnostics into
+                             (map (fn [d] (assoc d :path path)) (:diagnostics parsed))))))
+             {:files {} :units [] :diagnostics [] :relations []})
+            enrich-elixir-use-imports)))))
 
 (defn- snapshot-file-lines [root-path path]
   (let [f (io/file root-path path)]

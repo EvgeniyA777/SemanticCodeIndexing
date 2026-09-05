@@ -230,13 +230,13 @@
                                                          :max_nodes 2})
         path-capped (relations/traverse-relations branch {:direction :downstream
                                                           :start_nodes ["A"]
-                                                          :max_paths 1})]
+                                                          :max_discovery_paths 1})]
     (testing "node budget stops discovery and flags truncation"
       (is (= ["A" "B"] (node-ids node-capped)))
       (is (true? (get-in node-capped [:truncated :max_nodes]))))
     (testing "path budget caps recorded paths and flags truncation"
-      (is (= 1 (count (:paths path-capped))))
-      (is (true? (get-in path-capped [:truncated :max_paths]))))))
+      (is (= 1 (count (:discovery_paths path-capped))))
+      (is (true? (get-in path-capped [:truncated :max_discovery_paths]))))))
 
 (deftest traverse-relations-deterministic-and-guarded-test
   (let [idx (relations/index-relations
@@ -250,3 +250,26 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (relations/traverse-relations idx {:direction :sideways
                                                       :start_nodes ["A"]}))))))
+
+(deftest traverse-relations-with-batched-frontier-provider-parity-test
+  (let [idx (relations/index-relations
+             [(traversal-rel "A" "B" "resolved" "dataflow/returns-call-result")
+              (traversal-rel "A" "C" "resolved" "dataflow/passes-argument")
+              (traversal-rel "B" "D" "resolved" "dataflow/returns-call-result")
+              (traversal-rel "C" "E" "resolved" "dataflow/returns-call-result")
+              (traversal-rel "D" "A" "resolved" "dataflow/returns-call-result")])
+        calls (atom [])
+        base-provider (relations/in-memory-neighbor-provider idx)
+        recording-provider (fn [nodes direction]
+                             (swap! calls conj (vec nodes))
+                             (base-provider nodes direction))
+        req {:direction :downstream :start_nodes ["A"]}
+        via-provider (relations/traverse-relations-with recording-provider req)
+        pure (relations/traverse-relations idx req)]
+    (testing "the provider seam is byte-identical to the pure in-memory kernel"
+      (is (= pure via-provider)))
+    (testing "neighbors are fetched once per depth level, not once per node (no N+1)"
+      ;; levels: [A] -> [B C] -> [D E] (E has no out-edges, D closes the cycle)
+      (is (= 3 (count @calls)))
+      (is (= [#{"A"} #{"B" "C"} #{"D" "E"}] (mapv set @calls)))
+      (is (some #(> (count %) 1) @calls)))))

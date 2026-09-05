@@ -9,7 +9,8 @@
             [semidx.runtime.grpc :as runtime-grpc]
             [semidx.runtime.usage-metrics :as usage])
   (:import [io.grpc CallOptions ClientInterceptor ClientInterceptors ManagedChannelBuilder Metadata Metadata$Key Status StatusRuntimeException]
-           [io.grpc.stub ClientCalls MetadataUtils]))
+           [io.grpc.stub ClientCalls MetadataUtils]
+           [semidx.runtime.grpc.v1 HealthRequest RuntimeServiceGrpc]))
 
 (defn- write-file! [root rel-path content]
   (let [f (io/file root rel-path)]
@@ -20,7 +21,31 @@
   (write-file! root "src/my/app/order.clj"
                "(ns my.app.order)\n\n(defn process-order [ctx order]\n  (validate-order order))\n\n(defn validate-order [order]\n  (if (:id order)\n    order\n    (throw (ex-info \"invalid\" {}))))\n")
   (write-file! root "test/my/app/order_test.clj"
-               "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n"))
+               "(ns my.app.order-test\n  (:require [clojure.test :refer [deftest is]]\n            [my.app.order :as order]))\n\n(deftest process-order-test\n  (is (map? (order/validate-order {:id 1}))))\n")
+  (write-file! root "src/com/acme/model/ConnectionEntity.java"
+               "package com.acme.model;\n\npublic class ConnectionEntity {\n  public void setStatus(String status) {\n  }\n}\n")
+  (write-file! root "src/com/acme/service/ConnectionService.java"
+               "package com.acme.service;\n\nimport com.acme.model.ConnectionEntity;\n\npublic class ConnectionService {\n  public void disconnect(ConnectionEntity entity) {\n    entity.setStatus(\"OFF\");\n  }\n}\n")
+  (write-file! root "test/com/acme/service/ConnectionServiceTest.java"
+               "package com.acme.service;\n\nimport com.acme.model.ConnectionEntity;\n\npublic class ConnectionServiceTest {\n  public void disconnectPreservesState() {\n    ConnectionEntity entity = buildConnectionEntity();\n    new ConnectionService().disconnect(entity);\n  }\n\n  public ConnectionEntity buildConnectionEntity() {\n    return new ConnectionEntity();\n  }\n}\n"))
+
+(defn- state-invariant-query [request-id]
+  {:api_version "1.0"
+   :schema_version "1.0"
+   :intent {:purpose "change_impact"
+            :details "Change disconnect status while preserving connection state"}
+   :targets {:symbols ["com.acme.service.ConnectionService#disconnect"]
+             :paths ["src/com/acme/service/ConnectionService.java"]}
+   :constraints {:token_budget 6000
+                 :max_raw_code_level "enclosing_unit"
+                 :freshness "current_snapshot"}
+   :hints {:prefer_definitions_over_callers true}
+   :options {:include_tests true
+             :include_impact_hints true
+             :allow_raw_code_escalation false}
+   :trace {:trace_id "03222222-2222-4222-8222-222222222222"
+           :request_id request-id
+           :actor_id "test_runner"}})
 
 (defn- write-authz-policy! [path policy]
   (spit path (pr-str policy)))
@@ -39,9 +64,24 @@
   ([channel method request response->map]
    (unary-call channel method request response->map {}))
   ([channel method request response->map headers]
-  (let [channel* (with-headers channel headers)
-        response (ClientCalls/blockingUnaryCall channel* method CallOptions/DEFAULT request)]
-    (response->map response))))
+   (let [channel* (with-headers channel headers)
+         response (ClientCalls/blockingUnaryCall channel* method CallOptions/DEFAULT request)]
+     (response->map response))))
+
+(deftest runtime-grpc-generated-descriptor-contract-test
+  (is (instance? HealthRequest (grpc-proto/health-request)))
+  (is (= "semidx.runtime.grpc.v1.RuntimeService"
+         RuntimeServiceGrpc/SERVICE_NAME))
+  (is (identical? runtime-grpc/health-method
+                  (RuntimeServiceGrpc/getHealthMethod)))
+  (is (= "/semidx.runtime.grpc.v1.RuntimeService/Health"
+         (str "/" (.getFullMethodName runtime-grpc/health-method))))
+  (is (= #{"Health" "CreateIndex" "ResolveContext" "ExpandContext"
+           "FetchContextDetail" "LiteralFileSlice" "SnapshotDiff"
+           "TraverseRelations"}
+         (->> (.getMethods (RuntimeServiceGrpc/getServiceDescriptor))
+              (map #(.getBareMethodName %))
+              set))))
 
 (deftest runtime-grpc-edge-conformance-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-runtime-grpc-test" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -184,6 +224,36 @@
           (is (= 1 (get-in diff [:summary :total_changes])))
           (is (= "added" (get-in diff [:changes 0 :change_type])))))
 
+      (testing "traverse-relations rpc"
+        (let [resp (unary-call channel
+                               runtime-grpc/traverse-relations-method
+                               (grpc-proto/traverse-relations-request
+                                {:root_path tmp-root
+                                 :start_nodes ["src/my/app/order.clj::my.app.order/process-order"]
+                                 :direction "downstream"
+                                 :budgets {:max_depth 2}})
+                               grpc-proto/traverse-relations-response->map)]
+          (is (= "downstream" (:direction resp)))
+          (is (contains? (set (map :unit_id (:nodes resp)))
+                         "src/my/app/order.clj::my.app.order/process-order"))
+          (is (string? (:snapshot_id resp)))
+          (is (vector? (:edges resp))))
+        (try
+          (unary-call channel
+                      runtime-grpc/traverse-relations-method
+                      (grpc-proto/traverse-relations-request
+                       {:root_path tmp-root
+                        :start_nodes ["src/my/app/order.clj::my.app.order/process-order"]
+                        :direction "sideways"})
+                      grpc-proto/traverse-relations-response->map)
+          (is false "expected StatusRuntimeException for bad direction")
+          (catch StatusRuntimeException e
+            (is (= (.getCode Status/INVALID_ARGUMENT)
+                   (.getCode (.getStatus e))))
+            (is (= "invalid_request"
+                   (.get (.getTrailers e)
+                         (Metadata$Key/of "x-sci-error-code" Metadata/ASCII_STRING_MARSHALLER)))))))
+
       (testing "invalid payload returns INVALID_ARGUMENT"
         (try
           (unary-call channel
@@ -202,6 +272,139 @@
                    (.get (.getTrailers e)
                          (Metadata$Key/of "x-sci-error-category" Metadata/ASCII_STRING_MARSHALLER)))))))
 
+      (finally
+        (.shutdownNow channel)
+        (.shutdownNow server)))))
+
+(deftest runtime-grpc-state-invariant-parity-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-runtime-grpc-state-invariant"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-grpc-sample-repo! tmp-root)
+        {:keys [server port]} (runtime-grpc/start-server {:host "127.0.0.1" :port 0})
+        channel (-> (ManagedChannelBuilder/forAddress "127.0.0.1" (int port))
+                    (.usePlaintext)
+                    (.build))]
+    (try
+      (unary-call channel
+                  runtime-grpc/create-index-method
+                  (grpc-proto/create-index-request {:root_path tmp-root
+                                                    :parser_opts {:java_engine "regex"}})
+                  grpc-proto/create-index-response->map)
+      (let [selection (unary-call channel
+                                  runtime-grpc/resolve-context-method
+                                  (grpc-proto/resolve-context-request
+                                   {:root_path tmp-root
+                                    :query (state-invariant-query "runtime-grpc-state-001")})
+                                  grpc-proto/resolve-context-response->map)
+            selector {:root_path tmp-root
+                      :selection_id (:selection_id selection)
+                      :snapshot_id (:snapshot_id selection)}
+            expansion (unary-call channel
+                                  runtime-grpc/expand-context-method
+                                  (grpc-proto/expand-context-request selector)
+                                  grpc-proto/expand-context-response->map)
+            detail (unary-call channel
+                               runtime-grpc/fetch-context-detail-method
+                               (grpc-proto/fetch-context-detail-request selector)
+                               grpc-proto/fetch-context-detail-response->map)
+            expansion-packet (:state_invariants expansion)
+            detail-packet (get-in detail [:context_packet :state_invariants])]
+        (is (= ["src/com/acme/model/ConnectionEntity.java"]
+               (mapv :path (:entity_candidates expansion-packet))))
+        (is (= (:entity_candidates expansion-packet)
+               (:entity_candidates detail-packet)))
+        (is (= "state_invariants_verify_field_preservation"
+               (get-in detail-packet [:guardrail :code]))))
+      (finally
+        (.shutdownNow channel)
+        (.shutdownNow server)))))
+
+(deftest runtime-grpc-rate-limiting-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-runtime-grpc-rate-limit"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-grpc-sample-repo! tmp-root)
+        sink (sci/in-memory-usage-metrics)
+        {:keys [server port]} (runtime-grpc/start-server
+                               {:host "127.0.0.1"
+                                :port 0
+                                :usage_metrics sink
+                                :rate_limit {:requests_per_window 1
+                                             :window_ms 60000}})
+        channel (-> (ManagedChannelBuilder/forAddress "127.0.0.1" (int port))
+                    (.usePlaintext)
+                    (.build))
+        headers {"x-tenant-id" "tenant-rate"
+                 "x-actor-id" "actor-a"
+                 "x-trace-id" "08222222-2222-4222-8222-222222222222"}]
+    (try
+      (testing "health remains exempt from runtime limiting"
+        (dotimes [_ 2]
+          (is (= "ok"
+                 (:status
+                  (unary-call channel
+                              runtime-grpc/health-method
+                              (grpc-proto/health-request)
+                              grpc-proto/health-response->map
+                              headers))))))
+      (testing "the same tenant and actor exhaust one shared edge bucket"
+        (is (string?
+             (:snapshot_id
+              (unary-call channel
+                          runtime-grpc/create-index-method
+                          (grpc-proto/create-index-request {:root_path tmp-root})
+                          grpc-proto/create-index-response->map
+                          (assoc headers "x-request-id" "grpc-rate-1")))))
+        (try
+          (unary-call channel
+                      runtime-grpc/create-index-method
+                      (grpc-proto/create-index-request {:root_path tmp-root})
+                      grpc-proto/create-index-response->map
+                      (assoc headers "x-request-id" "grpc-rate-2"))
+          (is false "expected RESOURCE_EXHAUSTED")
+          (catch StatusRuntimeException e
+            (let [trailers (.getTrailers e)]
+              (is (= (.getCode Status/RESOURCE_EXHAUSTED)
+                     (.getCode (.getStatus e))))
+              (is (= "rate_limited"
+                     (.get trailers
+                           (Metadata$Key/of
+                            "x-sci-error-code"
+                            Metadata/ASCII_STRING_MARSHALLER))))
+              (is (= "capacity"
+                     (.get trailers
+                           (Metadata$Key/of
+                            "x-sci-error-category"
+                            Metadata/ASCII_STRING_MARSHALLER))))
+              (is (= "60"
+                     (.get trailers
+                           (Metadata$Key/of
+                            "x-sci-retry-after-seconds"
+                            Metadata/ASCII_STRING_MARSHALLER))))))))
+      (testing "a different actor has an independent bucket"
+        (is (string?
+             (:snapshot_id
+              (unary-call channel
+                          runtime-grpc/create-index-method
+                          (grpc-proto/create-index-request {:root_path tmp-root})
+                          grpc-proto/create-index-response->map
+                          (assoc headers
+                                 "x-actor-id" "actor-b"
+                                 "x-request-id" "grpc-rate-3"))))))
+      (testing "limiter decisions and rejections are visible in usage rollups"
+        (let [events (->> (usage/emitted-events sink)
+                          (filter #(= "rate_limit_decision" (:operation %))))
+              rejection (first (filter #(= "rejected" (:result_status %))
+                                       events))
+              report (usage/slo-report sink {:surface "grpc"})]
+          (is (= "create_index"
+                 (get-in rejection [:payload :limited_operation])))
+          (is (= "tenant-rate" (:tenant_id rejection)))
+          (is (= "actor-a" (:actor_id rejection)))
+          (is (= 3 (get-in report [:totals :rate_limit_decisions])))
+          (is (= 1 (get-in report [:totals :rate_limit_rejections])))
+          (is (= (/ 1.0 3.0) (:rate_limit_rejection_rate report)))))
       (finally
         (.shutdownNow channel)
         (.shutdownNow server)))))

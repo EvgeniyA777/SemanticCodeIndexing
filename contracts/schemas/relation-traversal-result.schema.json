@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semidx.example/contracts/schemas/relation-traversal-result.schema.json",
+  "title": "Relation Traversal Result",
+  "description": "Compact, snapshot-bound result of a bounded traversal over typed semantic relations (ADR-040). Output ordering is deterministic and mirrors the Stage 3 traversal kernel.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "direction",
+    "start_nodes",
+    "relation_types",
+    "budgets",
+    "nodes",
+    "edges",
+    "discovery_paths",
+    "truncated"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "api_version": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "schema_version": {
+      "$ref": "common.schema.json#/$defs/schemaVersion"
+    },
+    "snapshot_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["downstream", "upstream"]
+    },
+    "start_nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/boundedString"
+      },
+      "maxItems": 200
+    },
+    "relation_types": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/boundedString"
+      },
+      "maxItems": 12
+    },
+    "budgets": {
+      "type": "object",
+      "description": "The applied bounds after clamping, including the resolved-only mode.",
+      "required": ["max_depth", "max_nodes", "max_discovery_paths", "resolved_only"],
+      "additionalProperties": false,
+      "properties": {
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_nodes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_discovery_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Discovered nodes in deterministic discovery order, each with its shortest-path depth.",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": ["unit_id", "depth"],
+        "additionalProperties": false,
+        "properties": {
+          "unit_id": {
+            "$ref": "common.schema.json#/$defs/boundedString"
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "required": ["relation_id", "from", "to", "relation_type", "resolution_status", "depth"],
+        "additionalProperties": false,
+        "properties": {
+          "relation_id": {
+            "$ref": "common.schema.json#/$defs/boundedString"
+          },
+          "from": {
+            "$ref": "common.schema.json#/$defs/boundedString"
+          },
+          "to": {
+            "$ref": "common.schema.json#/$defs/boundedString"
+          },
+          "relation_type": {
+            "$ref": "common.schema.json#/$defs/boundedString"
+          },
+          "resolution_status": {
+            "type": "string",
+            "enum": ["resolved", "ambiguous", "unresolved"]
+          },
+          "depth": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "discovery_paths": {
+      "type": "array",
+      "description": "Discovered paths as sequences of relation ids.",
+      "maxItems": 50,
+      "items": {
+        "type": "array",
+        "items": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "maxItems": 4
+      }
+    },
+    "truncated": {
+      "type": "object",
+      "required": ["max_depth", "max_nodes", "max_discovery_paths"],
+      "additionalProperties": false,
+      "properties": {
+        "max_depth": {
+          "type": "boolean"
+        },
+        "max_nodes": {
+          "type": "boolean"
+        },
+        "max_discovery_paths": {
+          "type": "boolean"
+        }
+      }
+    },
+    "selection_id": {
+      "$ref": "common.schema.json#/$defs/boundedString"
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "1.0",
+      "snapshot_id": "c2e1d37b-7a1f-451e-b9a9-2ea1cbf02008",
+      "direction": "downstream",
+      "start_nodes": ["src/my/app/order.clj::my.app.order/process-order"],
+      "relation_types": ["dataflow/returns-call-result"],
+      "budgets": {
+        "max_depth": 2,
+        "max_nodes": 24,
+        "max_discovery_paths": 12,
+        "resolved_only": true
+      },
+      "nodes": [
+        {"unit_id": "src/my/app/order.clj::my.app.order/process-order", "depth": 0},
+        {"unit_id": "src/my/app/payments.clj::my.app.payments/charge", "depth": 1}
+      ],
+      "edges": [
+        {
+          "relation_id": "rel:0f5d2c1b9a8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
+          "from": "src/my/app/order.clj::my.app.order/process-order",
+          "to": "src/my/app/payments.clj::my.app.payments/charge",
+          "relation_type": "dataflow/returns-call-result",
+          "resolution_status": "resolved",
+          "depth": 1
+        }
+      ],
+      "discovery_paths": [
+        ["rel:0f5d2c1b9a8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c"]
+      ],
+      "truncated": {
+        "max_depth": false,
+        "max_nodes": false,
+        "max_discovery_paths": false
+      },
+      "selection_id": "36e755b1-7acd-4cbb-bfe6-d3499599364c"
+    }
+  ]
+}

@@ -1,10 +1,15 @@
 ---
+title: "Lua Language Lane Proposal And Implementation Sketch"
+doc_type: "implementation_note"
+lifecycle: "completed"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
 file_type: working-note
 topic: lua-language-lane
 created_at: 2026-03-18T11:30:00-0700
 author: codex
 language: ru
-status: active
+status: completed
 ---
 
 # Working Note: Lua Language Lane Proposal and Implementation Sketch

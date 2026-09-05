@@ -7,7 +7,8 @@
         io.grpc/grpc-netty-shaded {:mvn/version "1.63.0"}
         io.grpc/grpc-stub {:mvn/version "1.63.0"}
         io.grpc/grpc-protobuf {:mvn/version "1.63.0"}
-        com.google.protobuf/protobuf-java-util {:mvn/version "3.25.1"}}
+        com.google.protobuf/protobuf-java-util {:mvn/version "3.25.1"}
+        javax.annotation/javax.annotation-api {:mvn/version "1.3.2"}}
  :aliases
  {:contracts
   {:main-opts ["-m" "semidx.contracts.cli"]}
@@ -21,18 +22,29 @@
   {:main-opts ["-m" "semidx.mcp.http-server"]}
   :runtime-http
   {:main-opts ["-m" "semidx.runtime.http"]}
+  :launcher
+  {:main-opts ["-m" "semidx.runtime.launcher-cli"]}
   :runtime-grpc
-  {:main-opts ["-m" "semidx.runtime.grpc"]}
+  {:extra-paths ["target/classes"]
+   :main-opts ["-m" "semidx.runtime.grpc-launcher"]}
   :eval
   {:main-opts ["-m" "semidx.runtime.evaluation"]}
   :bench
   {:main-opts ["-m" "semidx.runtime.benchmarks"]}
+  :benchmark-agent
+  {:main-opts ["-m" "semidx.runtime.benchmark-agent"]}
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+   :ns-default build}
   :nrepl
   {:extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}}
    :main-opts ["-m" "nrepl.cmdline"
                "--bind" "127.0.0.1"
                "--port" "0"]}
+  :test-direct
+  {:extra-paths ["test" "target/classes"]
+   :extra-deps {org.clojure/tools.namespace {:mvn/version "1.5.0"}}}
   :test
-  {:extra-paths ["test"]
+  {:extra-paths ["test" "target/classes"]
    :extra-deps {org.clojure/tools.namespace {:mvn/version "1.5.0"}}
    :main-opts ["-m" "semidx.test-runner"]}}}

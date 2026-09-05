@@ -236,7 +236,10 @@
                               :estimated_tokens (get-in result [:budget_summary :estimated_tokens])
                               :requested_tokens (get-in result [:budget_summary :requested_tokens])
                               :reserved_tokens (get-in result [:budget_summary :reserved_budget :selection_tokens])
-                              :returned_tokens (get-in result [:budget_summary :estimated_tokens])
+                              ;; The selection stage has no separately measured return, so read the
+                              ;; real (absent -> nil) returned figure like expand/detail do rather
+                              ;; than duplicating the estimate. Selection-stage cost is estimated_tokens.
+                              :returned_tokens (get-in result [:budget_summary :returned_tokens])
                               :within_budget (get-in result [:budget_summary :within_budget])
                               :truncation_count (if (= "completed" (:result_status result)) 0 1)
                               :policy_id (get-in result-meta [:retrieval_policy :policy_id])
@@ -533,13 +536,17 @@
             (merge usage-context
                    (request-trace-fields query)
                    {:operation "impact_analysis"
-                    :status "success"
+                    :status (if (= "degraded" (:result_status result))
+                              "degraded"
+                              "success")
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))
                     :payload {:callers_count (count (:callers result))
                               :dependents_count (count (:dependents result))
                               :related_tests_count (count (:related_tests result))
-                              :risky_neighbors_count (count (:risky_neighbors result))}})))
+                              :risky_neighbors_count (count (:risky_neighbors result))
+                              :result_status (:result_status result)
+                              :degradation_codes (mapv :code (:degradations result))}})))
          result)
        (catch Exception e
          (when (should-record-usage? sink opts)
@@ -548,6 +555,48 @@
             (merge usage-context
                    (request-trace-fields query)
                    {:operation "impact_analysis"
+                    :status "error"
+                    :latency_ms (- (now-ms) start-ms)
+                    :root_path_hash (usage/hash-root-path (:root_path index))
+                    :payload (error-payload e)})))
+         (throw (errors/normalize-exception e)))))))
+
+(defn relation-traversal
+  "Bounded public traversal over typed semantic relations for a loaded index,
+  wrapped with usage metrics like impact-analysis. Returns the relation-traversal
+  contract result plus a selection_id for staged expand/detail. See ADR-040."
+  ([index request]
+   (relation-traversal index request {}))
+  ([index request opts]
+   (let [sink (resolve-usage-metrics index opts)
+         usage-context (resolve-usage-context index opts)
+         start-ms (now-ms)]
+     (try
+       (let [result (retrieval/relation-traversal index request opts)]
+         (when (should-record-usage? sink opts)
+           (usage/safe-record-event!
+            sink
+            (merge usage-context
+                   (request-trace-fields request)
+                   {:operation "traverse_relations"
+                    :status "success"
+                    :latency_ms (- (now-ms) start-ms)
+                    :root_path_hash (usage/hash-root-path (:root_path index))
+                    :payload (cond-> {:direction (:direction result)
+                                      :node_count (count (:nodes result))
+                                      :edge_count (count (:edges result))
+                                      :path_count (count (:paths result))
+                                      :snapshot_id (:snapshot_id result)}
+                               (:selection_id result)
+                               (assoc :selection_id (:selection_id result)))})))
+         result)
+       (catch Exception e
+         (when (should-record-usage? sink opts)
+           (usage/safe-record-event!
+            sink
+            (merge usage-context
+                   (request-trace-fields request)
+                   {:operation "traverse_relations"
                     :status "error"
                     :latency_ms (- (now-ms) start-ms)
                     :root_path_hash (usage/hash-root-path (:root_path index))

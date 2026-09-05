@@ -260,46 +260,147 @@
     (is (false? (get-in promotion [:decision :replay_eligible])))))
 
 (deftest shadow-review-reports-shadow-candidates-against-active-policy-test
-  (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-shadow-review" (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-shadow-review"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
         _ (create-sample-repo! tmp-root)
         baseline-policy (rp/default-retrieval-policy)
-        good-shadow (assoc baseline-policy :policy_id "heuristic_v1_shadow_good" :version "2026-03-14")
+        good-shadow (assoc baseline-policy
+                           :policy_id "heuristic_v1_shadow_good"
+                           :version "2026-03-14")
         bad-shadow (-> baseline-policy
                        (assoc :policy_id "heuristic_v1_shadow_bad")
                        (assoc :version "2026-03-15")
                        (assoc-in [:thresholds :top_authority_min] 99999))
-        registry {:schema_version "1.0"
-                  :policies [(rp/registry-entry baseline-policy {:state "active"})
-                             (rp/registry-entry good-shadow {:state "shadow"})
-                             (rp/registry-entry bad-shadow {:state "shadow"})]}
-        report (evaluation/shadow-review-report {:root_path tmp-root
-                                                 :dataset (protected-sample-dataset)
-                                                 :registry registry})
-        reviewed-registry (evaluation/apply-shadow-review registry report)]
+        registry
+        {:schema_version "1.0"
+         :policies [(rp/registry-entry baseline-policy {:state "active"})
+                    (rp/registry-entry good-shadow {:state "shadow"})
+                    (rp/registry-entry bad-shadow {:state "shadow"})]}
+        report (evaluation/shadow-review-report
+                {:root_path tmp-root
+                 :dataset (protected-sample-dataset)
+                 :registry registry})
+        reviewed-registry (evaluation/apply-shadow-review registry report)
+        good-entry (rp/resolve-registry-entry
+                    reviewed-registry
+                    "heuristic_v1_shadow_good"
+                    "2026-03-14")
+        bad-entry (rp/resolve-registry-entry
+                   reviewed-registry
+                   "heuristic_v1_shadow_bad"
+                   "2026-03-15")
+        good-decision (get-in good-entry
+                              [:shadow_review :promotion_decision])
+        bad-decision (get-in bad-entry
+                             [:shadow_review :promotion_decision])]
     (testing "shadow review summarizes readiness against the active policy"
-      (is (= "heuristic_v1" (get-in report [:active_policy :policy_summary :policy_id])))
+      (is (= "heuristic_v1"
+             (get-in report
+                     [:active_policy :policy_summary :policy_id])))
       (is (= 2 (get-in report [:summary :shadow_candidates])))
       (is (= 1 (get-in report [:summary :ready_for_promotion])))
       (is (= 1 (get-in report [:summary :blocked]))))
-    (testing "shadow review marks good shadow as promotable and bad shadow as blocked"
+    (testing "shadow review separates allowed and denied candidates"
       (is (boolean
            (some (fn [candidate]
-                   (and (= "heuristic_v1_shadow_good" (get-in candidate [:policy_summary :policy_id]))
+                   (and (= "heuristic_v1_shadow_good"
+                           (get-in candidate
+                                   [:policy_summary :policy_id]))
                         (:eligible_for_promotion candidate)))
                  (:shadow_candidates report))))
       (is (boolean
            (some (fn [candidate]
-                   (and (= "heuristic_v1_shadow_bad" (get-in candidate [:policy_summary :policy_id]))
+                   (and (= "heuristic_v1_shadow_bad"
+                           (get-in candidate
+                                   [:policy_summary :policy_id]))
                         (not (:eligible_for_promotion candidate))
                         (seq (:failed_checks candidate))))
                  (:shadow_candidates report)))))
-    (testing "applying shadow review persists review metadata onto registry entries"
-      (is (string? (get-in (rp/resolve-registry-entry reviewed-registry "heuristic_v1_shadow_good" "2026-03-14")
-                           [:shadow_review :reviewed_at])))
-      (is (true? (get-in (rp/resolve-registry-entry reviewed-registry "heuristic_v1_shadow_good" "2026-03-14")
+    (testing "applying a review persists verifiable decision artifacts"
+      (is (string? (get-in good-entry [:shadow_review :reviewed_at])))
+      (is (true? (get-in good-entry
                          [:shadow_review :eligible_for_promotion])))
-      (is (false? (get-in (rp/resolve-registry-entry reviewed-registry "heuristic_v1_shadow_bad" "2026-03-15")
-                          [:shadow_review :eligible_for_promotion]))))))
+      (is (false? (get-in bad-entry
+                          [:shadow_review :eligible_for_promotion])))
+      (is (uuid? (parse-uuid (:decision_id good-decision))))
+      (is (= "promotion_allowed" (:outcome good-decision)))
+      (is (= "promotion_denied" (:outcome bad-decision)))
+      (is (= rp/promotion-gate-version
+             (:gate_version good-decision)))
+      (is (= (rp/registry-revision reviewed-registry)
+             (:registry_revision good-decision)))
+      (is (= (rp/policy-entry-digest good-entry)
+             (get-in good-decision [:candidate :digest])))
+      (is (= (rp/policy-entry-digest
+              (rp/active-registry-entry reviewed-registry))
+             (get-in good-decision [:baseline :digest]))))))
+
+(deftest reviewed-policy-promotion-requires-bound-approval-test
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-reviewed-policy-approval"
+                       (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (create-sample-repo! tmp-root)
+        baseline-policy (rp/default-retrieval-policy)
+        candidate-policy (assoc baseline-policy
+                                :policy_id "heuristic_v1_restricted"
+                                :version "2026-03-20")
+        registry
+        {:schema_version "1.0"
+         :policies
+         [(rp/registry-entry baseline-policy {:state "active"})
+          (rp/registry-entry
+           candidate-policy
+           {:state "shadow"
+            :governance {:promotion_mode "manual_approval_required"
+                         :approval_tier "restricted"}})]}
+        report (evaluation/shadow-review-report
+                {:root_path tmp-root
+                 :dataset (protected-sample-dataset)
+                 :registry registry})
+        reviewed (evaluation/apply-shadow-review registry report)
+        candidate (rp/resolve-registry-entry
+                   reviewed
+                   "heuristic_v1_restricted"
+                   "2026-03-20")
+        decision-id (get-in candidate
+                            [:shadow_review
+                             :promotion_decision
+                             :decision_id])
+        forged (rp/promote-reviewed-policy
+                {:registry reviewed
+                 :policy_id "heuristic_v1_restricted"
+                 :version "2026-03-20"
+                 :decision_id decision-id
+                 :approval_id "forged"})
+        approval-result
+        (rp/record-policy-approval
+         reviewed
+         {:policy_id "heuristic_v1_restricted"
+          :version "2026-03-20"
+          :decision_id decision-id
+          :approval_id "approval-001"
+          :actor_id "approver-1"
+          :role "policy_approver"
+          :approved_at "2026-03-20T01:00:00Z"})
+        promotion (rp/promote-reviewed-policy
+                   {:registry (:registry approval-result)
+                    :policy_id "heuristic_v1_restricted"
+                    :version "2026-03-20"
+                    :decision_id decision-id
+                    :approval_id "approval-001"})]
+    (is (= "approval_required"
+           (get-in candidate
+                   [:shadow_review :promotion_decision :outcome])))
+    (is (= :policy_approval_required (:error-type forged)))
+    (is (:ok? approval-result))
+    (is (:ok? promotion))
+    (is (= "active"
+           (:state
+            (rp/resolve-registry-entry
+             (:registry promotion)
+             "heuristic_v1_restricted"
+             "2026-03-20"))))))
 
 (deftest policy-review-pipeline-builds-weekly-review-dataset-and-shadow-review-test
   (let [tmp-root (str (java.nio.file.Files/createTempDirectory "sci-policy-review-pipeline" (make-array java.nio.file.attribute.FileAttribute 0)))

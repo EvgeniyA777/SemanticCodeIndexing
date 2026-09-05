@@ -528,31 +528,40 @@
                                                        (:ground_truth_paths row)))
                    :payload (parse-json (or (:semantic_usage_feedback/payload row) (:payload row)))}))))))
 
-(defn- sink-events [sink opts]
+(defn sink-events
+  "Read usage events from any sink implementation, filtered by `opts`.
+
+   Public so reporting namespaces can read a sink without depending on whether
+   it is backed by PostgreSQL or memory."
+  [sink opts]
   (let [opts* (normalize-filter-opts opts)]
     (cond
-    (instance? InMemoryUsageMetrics sink)
-    (->> (emitted-events sink)
-         (filter #(event-matches? % opts*))
-         vec)
+      (instance? InMemoryUsageMetrics sink)
+      (->> (emitted-events sink)
+           (filter #(event-matches? % opts*))
+           vec)
 
-    (instance? PostgresUsageMetrics sink)
-    (postgres-events sink opts*)
+      (instance? PostgresUsageMetrics sink)
+      (postgres-events sink opts*)
 
-    :else [])))
+      :else [])))
 
-(defn- sink-feedback [sink opts]
+(defn sink-feedback
+  "Read feedback records from any sink implementation, filtered by `opts`.
+
+   Public for the same reason as `sink-events`."
+  [sink opts]
   (let [opts* (normalize-filter-opts opts)]
     (cond
-    (instance? InMemoryUsageMetrics sink)
-    (->> (emitted-feedback sink)
-         (filter #(feedback-matches? % opts*))
-         vec)
+      (instance? InMemoryUsageMetrics sink)
+      (->> (emitted-feedback sink)
+           (filter #(feedback-matches? % opts*))
+           vec)
 
-    (instance? PostgresUsageMetrics sink)
-    (postgres-feedback sink opts*)
+      (instance? PostgresUsageMetrics sink)
+      (postgres-feedback sink opts*)
 
-    :else [])))
+      :else [])))
 
 (defn- rate [numerator denominator]
   (if (pos? denominator)
@@ -693,9 +702,9 @@
                                predicted-mean (/ (reduce + 0.0 (map :predicted group*)) (double count*))
                                observed-mean (/ (reduce + 0.0 (map :observed group*)) (double count*))
                                mae (/ (reduce + 0.0
-                                               (map (fn [{:keys [predicted observed]}]
-                                                      (Math/abs (- predicted observed)))
-                                                    group*))
+                                              (map (fn [{:keys [predicted observed]}]
+                                                     (Math/abs (- predicted observed)))
+                                                   group*))
                                       (double count*))]
                            (assoc acc level
                                   {:count count*
@@ -719,9 +728,15 @@
          retrieval-events (->> events
                                (filter #(= "resolve_context" (:operation %)))
                                vec)
+         rate-limit-events (->> events
+                                (filter #(= "rate_limit_decision" (:operation %)))
+                                vec)
+         rate-limit-rejections (->> rate-limit-events
+                                    (filter #(= "rejected" (:result_status %)))
+                                    vec)
          stage-events (->> events
                            (filter #(contains? #{"resolve_context" "expand_context" "fetch_context_detail"}
-                                                (:operation %)))
+                                               (:operation %)))
                            vec)
          stage-groups (group-by operation-stage-name stage-events)
          cache-events (->> events
@@ -739,12 +754,16 @@
               :since (:since opts)}
       :totals {:events (count events)
                :index_events (count index-events)
-               :retrieval_events (count retrieval-events)}
+               :retrieval_events (count retrieval-events)
+               :rate_limit_decisions (count rate-limit-events)
+               :rate_limit_rejections (count rate-limit-rejections)}
       :index_latency_ms (latency-summary index-events)
       :retrieval_latency_ms (latency-summary retrieval-events)
       :cache_hit_ratio (rate (count (filter :cache_hit cache-events)) (count cache-events))
       :degraded_rate (rate degraded-count (count retrieval-events))
       :fallback_rate (rate fallback-count (count retrieval-events))
+      :rate_limit_rejection_rate (rate (count rate-limit-rejections)
+                                       (count rate-limit-events))
       :stage_latency_ms (into (sorted-map)
                               (for [[stage stage-group] stage-groups]
                                 [stage (latency-summary stage-group)]))

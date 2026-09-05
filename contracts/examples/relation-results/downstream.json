@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "snapshot_id": "c2e1d37b-7a1f-451e-b9a9-2ea1cbf02008",
+  "direction": "downstream",
+  "start_nodes": ["src/my/app/order.clj::my.app.order/process-order"],
+  "relation_types": ["dataflow/returns-call-result"],
+  "budgets": {
+    "max_depth": 2,
+    "max_nodes": 24,
+    "max_discovery_paths": 12,
+    "resolved_only": true
+  },
+  "nodes": [
+    {"unit_id": "src/my/app/order.clj::my.app.order/process-order", "depth": 0},
+    {"unit_id": "src/my/app/payments.clj::my.app.payments/charge", "depth": 1}
+  ],
+  "edges": [
+    {
+      "relation_id": "rel:0f5d2c1b9a8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c",
+      "from": "src/my/app/order.clj::my.app.order/process-order",
+      "to": "src/my/app/payments.clj::my.app.payments/charge",
+      "relation_type": "dataflow/returns-call-result",
+      "resolution_status": "resolved",
+      "depth": 1
+    }
+  ],
+  "discovery_paths": [
+    ["rel:0f5d2c1b9a8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c"]
+  ],
+  "truncated": {
+    "max_depth": false,
+    "max_nodes": false,
+    "max_discovery_paths": false
+  },
+  "selection_id": "36e755b1-7acd-4cbb-bfe6-d3499599364c"
+}

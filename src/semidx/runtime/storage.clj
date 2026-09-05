@@ -138,10 +138,30 @@
                       callers)))
        vec))
 
+(defn- relation-rows
+  "Flatten snapshot typed relations into one row per (relation, target unit id)
+  for the forward-only semantic_index_relations projection (ADR-040). Unresolved
+  relations carry no target unit ids and therefore produce no rows, which matches
+  the in-memory traversal semantics for unit-id nodes."
+  [index]
+  (->> (:relations index)
+       vals
+       (mapcat (fn [rel]
+                 (map (fn [target]
+                        {:relation_id (:relation_id rel)
+                         :relation_type (:relation_type rel)
+                         :resolution_status (:resolution_status rel)
+                         :source_unit_id (:source_unit_id rel)
+                         :target_unit_id target
+                         :target_key (:target_key rel)
+                         :evidence_quality (:evidence_quality rel)})
+                      (:target_unit_ids rel))))
+       vec))
+
 (defn- row-payload [row]
   (let [payload (parse-json (:semantic_index_units/payload row
-                                                          (:semantic_index_snapshots/payload row
-                                                                                             (:payload row))))]
+                                                           (:semantic_index_snapshots/payload row
+                                                                                              (:payload row))))]
     (if (map? payload)
       (semantic-id/enrich-unit payload)
       payload)))
@@ -224,7 +244,25 @@
                     (:root_path index)
                     (:snapshot_id index)
                     caller
-                    callee])))
+                    callee]))
+  (jdbc/execute! tx
+                 ["delete from semantic_index_relations where root_path = ? and snapshot_id = ?"
+                  (:root_path index)
+                  (:snapshot_id index)])
+  (doseq [r (relation-rows index)]
+    (jdbc/execute! tx
+                   ["insert into semantic_index_relations
+                     (root_path, snapshot_id, relation_id, relation_type, resolution_status, source_unit_id, target_unit_id, target_key, evidence_quality)
+                     values (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    (:root_path index)
+                    (:snapshot_id index)
+                    (:relation_id r)
+                    (:relation_type r)
+                    (:resolution_status r)
+                    (:source_unit_id r)
+                    (:target_unit_id r)
+                    (:target_key r)
+                    (:evidence_quality r)])))
 
 (defrecord PostgresStorage [datasource]
   IndexStorage
@@ -327,6 +365,25 @@
     (jdbc/execute! datasource
                    ["create index if not exists idx_semantic_index_call_edges_callee
                      on semantic_index_call_edges(callee_unit_id)"])
+    (jdbc/execute! datasource
+                   ["create table if not exists semantic_index_relations (
+                       id bigserial primary key,
+                       root_path text not null,
+                       snapshot_id text not null,
+                       relation_id text not null,
+                       relation_type text not null,
+                       resolution_status text not null,
+                       source_unit_id text not null,
+                       target_unit_id text not null,
+                       target_key text,
+                       evidence_quality text
+                     )"])
+    (jdbc/execute! datasource
+                   ["create index if not exists idx_semantic_index_relations_source
+                     on semantic_index_relations(root_path, snapshot_id, source_unit_id)"])
+    (jdbc/execute! datasource
+                   ["create index if not exists idx_semantic_index_relations_target
+                     on semantic_index_relations(root_path, snapshot_id, target_unit_id)"])
     true)
   (save-index! [_ index]
     (jdbc/with-transaction [tx datasource]
@@ -451,3 +508,63 @@
 (defn query-callees [storage root-path unit-id opts]
   (init-storage! storage)
   (fetch-callees storage root-path unit-id opts))
+
+(defn- relation-row-field [row unqualified]
+  (let [qualified (keyword "semantic_index_relations" (name unqualified))]
+    (get row qualified (get row unqualified))))
+
+(defn pg-relation-neighbor-provider
+  "PostgreSQL batched frontier neighbor provider for the traversal kernel
+  (`semidx.runtime.relations/traverse-relations-with`, ADR-040). Given a frontier
+  of nodes and a direction, it issues exactly one query per depth level over the
+  `semantic_index_relations` projection and returns {node -> (seq relations)}
+  shaped for the kernel (`:relation_id`, `:relation_type`, `:resolution_status`,
+  `:source_unit_id`, `:target_unit_ids`). Storage only optimizes the neighbor
+  fetch; the kernel still owns eligibility, fan-out, ordering, cycle handling, and
+  budgets, so its output stays at parity with the pure in-memory provider."
+  [datasource root-path snapshot-id]
+  (fn [nodes direction]
+    (if (empty? nodes)
+      {}
+      (let [node-col (case direction
+                       :downstream "source_unit_id"
+                       :upstream "target_unit_id")
+            rows (jdbc/execute! datasource
+                                [(str "select relation_id, relation_type, resolution_status,
+                                        source_unit_id, target_unit_id
+                                        from semantic_index_relations
+                                        where root_path = ? and snapshot_id = ?
+                                          and " node-col " = any(?)")
+                                 root-path snapshot-id (into-array String (vec nodes))])
+            norm (mapv (fn [row]
+                         {:relation_id (relation-row-field row :relation_id)
+                          :relation_type (relation-row-field row :relation_type)
+                          :resolution_status (relation-row-field row :resolution_status)
+                          :source_unit_id (relation-row-field row :source_unit_id)
+                          :target_unit_id (relation-row-field row :target_unit_id)})
+                       rows)]
+        (case direction
+          :downstream
+          (into {}
+                (map (fn [[src src-rows]]
+                       [src (->> (group-by :relation_id src-rows)
+                                 (mapv (fn [[_ rs]]
+                                         (let [f (first rs)]
+                                           {:relation_id (:relation_id f)
+                                            :relation_type (:relation_type f)
+                                            :resolution_status (:resolution_status f)
+                                            :source_unit_id (:source_unit_id f)
+                                            :target_unit_ids (vec (distinct (map :target_unit_id rs)))}))))]))
+                (group-by :source_unit_id norm))
+
+          :upstream
+          (into {}
+                (map (fn [[tgt tgt-rows]]
+                       [tgt (mapv (fn [r]
+                                    {:relation_id (:relation_id r)
+                                     :relation_type (:relation_type r)
+                                     :resolution_status (:resolution_status r)
+                                     :source_unit_id (:source_unit_id r)
+                                     :target_unit_ids [(:target_unit_id r)]})
+                                  tgt-rows)]))
+                (group-by :target_unit_id norm)))))))

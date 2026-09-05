@@ -185,8 +185,20 @@
                  method-arity (when-not (= "test" form)
                                 (shared/ex-def-arity signature-line))
                  unit-name (if (= "test" form)
-                             (let [test-node (first-descendant tree (:idx node) #(= "string" (:node-type %)))
-                                   test-name (or (some-> test-node node-value)
+                             ;; The test name lives on the string's
+                             ;; `quoted_content` leaf, not on the `string` node
+                             ;; itself, which carries no value. Reading the
+                             ;; `string` node named every ExUnit test
+                             ;; "test-unnamed", so the tree-sitter lane disagreed
+                             ;; with the regex lane on unit identity for every
+                             ;; test in the corpus. `string` is kept as a
+                             ;; fallback for a grammar that inlines the text.
+                             (let [descendant-value (fn [node-type]
+                                                      (some-> (first-descendant tree (:idx node)
+                                                                                #(= node-type (:node-type %)))
+                                                              node-value))
+                                   test-name (or (descendant-value "quoted_content")
+                                                 (descendant-value "string")
                                                  "unnamed")]
                                (shared/ex-test-symbol owner-module test-name))
                              (str (or owner-module "Elixir.Unknown") "/" (signature-name tree (:idx node))))

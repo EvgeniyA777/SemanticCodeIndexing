@@ -52,7 +52,14 @@
   #{:weights :caps :thresholds :confidence_scores :raw_fetch})
 
 (def ^:private registry-metadata-keys
-  [:notes :created_at :updated_at :activated_at :retired_at :shadow_review :governance])
+  [:notes
+   :created_at
+   :updated_at
+   :activated_at
+   :retired_at
+   :shadow_review
+   :approvals
+   :governance])
 
 (def ^:private default-governance
   {:promotion_mode "auto_promotable"
@@ -145,7 +152,27 @@
     (normalize-registry (edn/read rdr))))
 
 (defn write-registry! [path registry]
-  (spit path (pr-str (normalize-registry registry))))
+  (let [normalized (normalize-registry registry)
+        content (pr-str normalized)
+        target (io/file path)
+        dir (or (.getParentFile target) (io/file "."))
+        tmp (java.io.File/createTempFile (str (.getName target) ".") ".edn" dir)]
+    (try
+      (spit tmp content)
+      (let [from (.toPath tmp)
+            to (.toPath target)]
+        (try
+          (java.nio.file.Files/move from to
+                                    (into-array java.nio.file.CopyOption
+                                                [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+                                                 java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
+          (catch java.nio.file.AtomicMoveNotSupportedException _
+            (java.nio.file.Files/move from to
+                                      (into-array java.nio.file.CopyOption
+                                                  [java.nio.file.StandardCopyOption/REPLACE_EXISTING])))))
+      (catch Throwable t
+        (io/delete-file tmp true)
+        (throw t)))))
 
 (defn resolve-registry-source [value]
   (cond
@@ -373,3 +400,278 @@
       :snapshot_pinned (boolean (get-in index [:index_lifecycle :snapshot_pinned]))
       :index_provenance_source (get-in index [:index_lifecycle :provenance :source])
       :index_snapshot_id (:snapshot_id index)})))
+
+;; ---------------------------------------------------------------------------
+;; Online policy transition domain functions
+;; ---------------------------------------------------------------------------
+
+(def promotion-gate-version "1.0")
+
+(defn- canonical-value [value]
+  (cond
+    (map? value)
+    (into (sorted-map-by (fn [left right]
+                           (compare (pr-str left) (pr-str right))))
+          (map (fn [[key nested]]
+                 [key (canonical-value nested)]))
+          value)
+
+    (set? value)
+    (->> value
+         (map canonical-value)
+         (sort-by pr-str)
+         vec)
+
+    (sequential? value)
+    (mapv canonical-value value)
+
+    :else value))
+
+(defn content-digest [value]
+  (let [digest (java.security.MessageDigest/getInstance "SHA-256")
+        bytes (.getBytes (pr-str (canonical-value value))
+                         java.nio.charset.StandardCharsets/UTF_8)]
+    (->> (.digest digest bytes)
+         (map #(format "%02x" (bit-and 0xff %)))
+         (apply str))))
+
+(defn policy-entry-digest [entry]
+  (content-digest
+   (select-keys entry
+                [:policy_id :version :state :policy :governance])))
+
+(defn registry-revision [registry]
+  (let [registry* (normalize-registry registry)]
+    (content-digest
+     {:schema_version (:schema_version registry*)
+      :policies (mapv #(select-keys %
+                                    [:policy_id
+                                     :version
+                                     :state
+                                     :policy
+                                     :governance])
+                      (:policies registry*))})))
+
+(defn- decision-expired? [decision]
+  (when-let [expires-at (:expires_at decision)]
+    (try
+      (.isBefore (java.time.Instant/parse expires-at)
+                 (java.time.Instant/now))
+      (catch Exception _
+        true))))
+
+(defn- valid-approval? [entry approval-id decision-id]
+  (boolean
+   (some (fn [approval]
+           (and (= approval-id (:approval_id approval))
+                (= decision-id (:decision_id approval))
+                (= "policy_approver"
+                   (some-> (:role approval) name))))
+         (:approvals entry))))
+
+(defn record-policy-approval
+  "Record an offline approval bound to the current promotion decision."
+  [registry
+   {:keys [policy_id
+           version
+           decision_id
+           approval_id
+           actor_id
+           role
+           approved_at]}]
+  (let [registry* (normalize-registry registry)
+        entry (resolve-registry-entry registry* policy_id version)
+        current-decision-id (get-in entry
+                                    [:shadow_review
+                                     :promotion_decision
+                                     :decision_id])
+        role-name (some-> role name)]
+    (cond
+      (not entry)
+      {:ok? false
+       :error-type :policy_not_found
+       :message "candidate policy not found in registry"}
+
+      (or (not (seq decision_id))
+          (not= decision_id current-decision-id))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "approval does not target the current promotion decision"}
+
+      (or (not (seq approval_id))
+          (not (seq actor_id))
+          (not= "policy_approver" role-name)
+          (not (seq approved_at)))
+      {:ok? false
+       :error-type :invalid_request
+       :message "approval_id, actor_id, policy_approver role, and approved_at are required"}
+
+      :else
+      (let [approval {:approval_id approval_id
+                      :decision_id decision_id
+                      :actor_id actor_id
+                      :role role-name
+                      :approved_at approved_at}
+            approvals (->> (conj (vec (:approvals entry)) approval)
+                           (reduce (fn [by-id record]
+                                     (assoc by-id
+                                            (:approval_id record)
+                                            record))
+                                   {})
+                           vals
+                           (sort-by :approval_id)
+                           vec)]
+        {:ok? true
+         :registry
+         (upsert-registry-entry
+          registry*
+          (assoc entry :approvals approvals))}))))
+
+(defn promote-reviewed-policy
+  "Validate an offline promotion decision and return the corresponding pure
+   registry transition. Persistence and publication belong to the runtime edge."
+  [{:keys [registry policy_id version decision_id approval_id]}]
+  (let [registry* (normalize-registry registry)
+        entry (resolve-registry-entry registry* policy_id version)
+        baseline (active-registry-entry registry*)
+        review (:shadow_review entry)
+        decision (:promotion_decision review)
+        expected-candidate (:candidate decision)
+        expected-baseline (:baseline decision)
+        outcome (:outcome decision)]
+    (cond
+      (not entry)
+      {:ok? false
+       :error-type :policy_not_found
+       :message "candidate policy not found in registry"}
+
+      (not= "shadow" (:state entry))
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "candidate policy must be in shadow state to promote"}
+
+      (blocked? entry)
+      {:ok? false
+       :error-type :policy_blocked
+       :message "policy promotion is blocked by governance configuration"}
+
+      (or (not (seq decision_id))
+          (not (map? decision)))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "a persisted offline promotion decision is required"}
+
+      (not= decision_id (:decision_id decision))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "decision_id does not match the current shadow review"}
+
+      (not= promotion-gate-version (:gate_version decision))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "promotion decision uses an unsupported gate version"}
+
+      (decision-expired? decision)
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "promotion decision has expired"}
+
+      (not (:eligible_for_promotion review))
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "policy has not passed the offline promotion gates"}
+
+      (not= {:policy_id (:policy_id entry)
+             :version (:version entry)}
+            (select-keys expected-candidate [:policy_id :version]))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "promotion decision targets a different candidate"}
+
+      (not= (:digest expected-candidate)
+            (policy-entry-digest entry))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "candidate policy changed after offline review"}
+
+      (or (not baseline)
+          (not= {:policy_id (:policy_id baseline)
+                 :version (:version baseline)}
+                (select-keys expected-baseline [:policy_id :version]))
+          (not= (:digest expected-baseline)
+                (policy-entry-digest baseline)))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "active baseline changed after offline review"}
+
+      (not= (:registry_revision decision)
+            (registry-revision registry*))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "policy registry changed after offline review"}
+
+      (= "promotion_denied" outcome)
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "offline promotion decision denied this candidate"}
+
+      (and (manual-approval-required? entry)
+           (not (valid-approval? entry approval_id decision_id)))
+      {:ok? false
+       :error-type :policy_approval_required
+       :message "a matching policy_approver approval record is required"}
+
+      (and (manual-approval-required? entry)
+           (not= "approval_required" outcome))
+      {:ok? false
+       :error-type :stale_promotion_decision
+       :message "promotion decision does not match the approval tier"}
+
+      (and (not (manual-approval-required? entry))
+           (not= "promotion_allowed" outcome))
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "offline promotion decision does not allow promotion"}
+
+      :else
+      (let [retired (set-entry-state registry*
+                                     (:policy_id baseline)
+                                     (:version baseline)
+                                     "retired")
+            promoted (set-entry-state retired policy_id version "active")]
+        {:ok? true
+         :decision_id decision_id
+         :registry promoted}))))
+
+(defn retire-policy
+  "Return the pure registry transition for retiring a policy. The online retire
+   surface only decommissions non-active candidates: the active baseline is
+   retired exclusively by `promote-reviewed-policy`, which atomically swaps in a
+   replacement, so a standalone retire can never leave the registry without an
+   active policy. Retiring an already-retired entry is rejected as an idempotent
+   no-op."
+  [{:keys [registry policy_id version]}]
+  (let [registry* (normalize-registry registry)
+        entry (resolve-registry-entry registry* policy_id version)]
+    (cond
+      (not entry)
+      {:ok? false
+       :error-type :policy_not_found
+       :message "policy not found in registry"}
+
+      (= "active" (:state entry))
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "active policy is retired only by promoting a replacement"}
+
+      (= "retired" (:state entry))
+      {:ok? false
+       :error-type :policy_not_eligible
+       :message "policy is already retired"}
+
+      :else
+      {:ok? true
+       :registry (set-entry-state registry*
+                                  policy_id
+                                  version
+                                  "retired")})))

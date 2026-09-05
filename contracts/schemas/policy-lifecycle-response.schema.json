@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semidx.example/contracts/schemas/policy-lifecycle-response.schema.json",
+  "title": "Policy Lifecycle Response",
+  "description": "Successful policy promotion or retirement response.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["promoted", "decision_id"],
+      "additionalProperties": false,
+      "properties": {
+        "promoted": {"const": true},
+        "decision_id": {"$ref": "common.schema.json#/$defs/boundedString"}
+      }
+    },
+    {
+      "type": "object",
+      "required": ["retired"],
+      "additionalProperties": false,
+      "properties": {
+        "retired": {"const": true}
+      }
+    }
+  ]
+}

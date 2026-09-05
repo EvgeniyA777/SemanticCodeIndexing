@@ -18,7 +18,8 @@ The project defines how a host system should request code context, how retrieval
 - provides a working in-memory MVP runtime for `create-index`, `update-index`, `repo-map`, `resolve-context`, `expand-context`, `fetch-context-detail`, `resolve-context-detail`, `impact-analysis`, `skeletons`
 - now also provides exact `literal-file-slice`, semantic `snapshot-diff`, and offline `semantic-quality-report` evaluation surfaces
 - provides a Clojure-first `Code Context Compressor` lane for bounded architecture summaries, dependency-graph export, committed repo context docs, and pre-push/CI drift checks
-- includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript` and emits diagnostics/guardrails outputs
+- provides long-lived local server modes through MCP stdio, MCP HTTP, runtime HTTP, and runtime gRPC once those processes are started
+- includes parser adapters for `Clojure + Java + Elixir + Python + TypeScript + JavaScript + Lua + Zig + HTML + CSS` and emits diagnostics/guardrails outputs
 - supports versioned retrieval policy overrides plus emitted capability metadata for replayable ranking behavior
 - supports optional persistence adapters (`in-memory`, `PostgreSQL`) with snapshot + graph projection storage for PostgreSQL
 - supports optional usage metrics adapters (`in-memory`, `PostgreSQL`) for library, HTTP, gRPC, and MCP adoption/usefulness telemetry
@@ -29,9 +30,12 @@ The project defines how a host system should request code context, how retrieval
 
 - does not implement production-grade deep semantic parsing (full compiler-level resolution)
 - does not implement full compiler-grade interprocedural resolution across all languages
-- does not expose production API server endpoints yet
+- does not ship a managed production service or deployment package yet
+- does not yet ship a gRPC launcher profile or production supervision for local
+  runtime reuse; the shipped launcher covers the runtime HTTP and MCP HTTP
+  profiles
 
-Current scope is contract architecture plus a working MVP runtime implementation.
+Current scope is contract architecture plus working local/runtime surfaces.
 
 ## Repository Layout
 
@@ -75,6 +79,7 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Setup tree-sitter grammars (optional; Clojure/Elixir/Java/TypeScript): `./scripts/setup-tree-sitter-grammars.sh`
 - Scaffold new language adapter onboarding: `./scripts/new-language-adapter.sh <language> --ext .ext1,.ext2`
 - Validate language onboarding checklist and gates: `./scripts/validate-language-onboarding.sh <language>` (`--skip-gates` for fast checks)
+- Launcher reuse benchmark (cold CLI vs warm launcher vs direct HTTP): `./scripts/run-launcher-benchmark.sh --root . --runs 3`
 - Retrieval benchmarks: `./scripts/run-benchmarks.sh` (`--fixture-prefix retrieval_elixir_ --elixir-engine regex` for the Elixir regex baseline subset)
 - Offline replay evaluation: `clojure -M:eval --root . --dataset path/to/dataset.json --out "${TMPDIR:-.tmp}/sci-eval.json"`
 - Score a policy over a replay dataset: `clojure -M:eval score-policy --root . --dataset path/to/dataset.json --policy-file path/to/policy.edn --out "${TMPDIR:-.tmp}/sci-score.json"`
@@ -84,6 +89,8 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Harvest a replay dataset from recorded usage events and feedback: `clojure -M:eval harvest-replay-dataset --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-harvest.json"`
 - Build a calibration report from recorded usage events and feedback: `clojure -M:eval calibration-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-calibration.json"`
 - Build a weekly review artifact linking query, selected context, feedback, and outcome: `clojure -M:eval weekly-review-report --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --out "${TMPDIR:-.tmp}/sci-weekly-review.json"`
+- Run one benchmark attempt with the live evaluated-model agent (attempt context as JSON on stdin, result on stdout; needs `GEMINI_API_KEY`): `clojure -M:benchmark-agent < attempt-context.json`
+- Aggregate recorded four-arm benchmark attempts into a per-arm success-per-cost report: `clojure -M:eval benchmark-report --benchmark-records "${TMPDIR:-.tmp}/benchmark-records.json" --out "${TMPDIR:-.tmp}/sci-benchmark-report.json"`
 - Convert a weekly review artifact into a protected replay dataset: `clojure -M:eval protected-replay-dataset --weekly-review "${TMPDIR:-.tmp}/sci-weekly-review.json" --out "${TMPDIR:-.tmp}/sci-protected-replay.json"`
 - Build an offline semantic-quality report over expected snapshot-diff cases: `clojure -M:eval semantic-quality-report --dataset fixtures/semantic-quality/report-dataset.json --out "${TMPDIR:-.tmp}/semantic-quality-report.json"`
 - Run the Phase 5 batch loop from usage metrics into weekly review, protected replay dataset, and `shadow-review`: `clojure -M:eval policy-review-pipeline --root . --usage-metrics-jdbc-url jdbc:postgresql://localhost:5432/semantic_index --registry path/to/policy-registry.edn --out "${TMPDIR:-.tmp}/sci-policy-review-pipeline.json"`
@@ -109,6 +116,8 @@ Canonical retrieval flow is compact-first staged retrieval:
 - MCP HTTP server defaults to `127.0.0.1` and supports `--transport-mode dual|streamable|sse`; Streamable HTTP uses `POST /mcp` with `Mcp-Session-Id`, while legacy SSE uses `GET /mcp/sse` plus `POST /mcp/messages`
 - Run minimal HTTP edge: `clojure -M:runtime-http --host 127.0.0.1 --port 8787`
 - Run minimal gRPC edge: `clojure -M:runtime-grpc --host 127.0.0.1 --port 8789`
+- Runtime process model: `clojure -M:runtime` is a one-shot command and starts a JVM per invocation; MCP stdio, MCP HTTP, runtime HTTP, and runtime gRPC are long-lived once started. MCP stdio reuse is bounded by the MCP host process lifetime.
+- Reuse a local runtime instead of paying JVM startup per request: `clojure -M:launcher status|start|stop --root .` and `clojure -M:launcher request --root . --query <query.json> [--out <out.json>]`. The launcher reuses a healthy runtime HTTP server, starts one under an exclusive lock when needed, and forwards to the existing runtime HTTP endpoints. The same command manages a reusable local MCP endpoint with `--profile mcp-http`, which clients that speak Streamable HTTP can point at instead of spawning an MCP stdio process per host restart. See [docs/runtime-api.md](docs/runtime-api.md), [docs/mcp-api.md](docs/mcp-api.md#launcher-managed-mcp-http-reuse), and [plans/021_persistent_jvm_runtime_reuse_plan.md](plans/021_persistent_jvm_runtime_reuse_plan.md).
 - Optional service auth boundary flags: `--api-key <token> --require-tenant` (or env `SCI_RUNTIME_API_KEY`, `SCI_RUNTIME_REQUIRE_TENANT=true`)
 - Optional host-integrated authz policy file: `--authz-policy-file /path/to/authz-policy.edn` (or env `SCI_RUNTIME_AUTHZ_POLICY_FILE`)
 - Optional runtime policy registry file for HTTP/gRPC: `--policy-registry-file /path/to/policy-registry.edn` (or env `SCI_RUNTIME_POLICY_REGISTRY_FILE`)
@@ -122,6 +131,9 @@ Canonical retrieval flow is compact-first staged retrieval:
 - Runtime API docs: [docs/runtime-api.md](docs/runtime-api.md)
 - MCP docs: [docs/mcp-api.md](docs/mcp-api.md)
 - Agent MCP prompts: [docs/mcp-agent-prompts.md](docs/mcp-agent-prompts.md)
+- Project development strategy: [docs/development-strategy.md](docs/development-strategy.md)
+- Feature ledger: [FEATURES.md](FEATURES.md)
+- Persistent JVM runtime reuse plan: [plans/021_persistent_jvm_runtime_reuse_plan.md](plans/021_persistent_jvm_runtime_reuse_plan.md)
 - Roadmap status checklist: [docs/roadmap-status.md](docs/roadmap-status.md)
 - ADR for projection profiles and advisory semantic-quality gates: [adr/029-standardize-projection-profiles-and-advisory-semantic-quality-gates.md](adr/029-standardize-projection-profiles-and-advisory-semantic-quality-gates.md)
 - Compact-first staged retrieval execution plan: [plans/002_compact_first_staged_retrieval_plan.md](plans/002_compact_first_staged_retrieval_plan.md)
@@ -192,8 +204,8 @@ Roadmap status is tracked separately in [docs/roadmap-status.md](docs/roadmap-st
 - Python semantic-core now resolves imported symbols, relative imports, and module aliases more accurately, prefers local module/class ownership over imported-symbol collisions while preserving explicit module-alias calls, links `self`/`cls` and local class-qualified method calls back to class-owned methods, keeps decorated `@classmethod` / `@staticmethod` ownership intact, suppresses false edges from nested local defs/classes through immediate-scope local modeling, keeps methods inside local nested classes from leaking tail-token collisions, preserves conservative `@property` access behavior, and surfaces Python test-file linkage in `related_tests`
 - TypeScript semantic-core now lives on a dedicated language module, resolves named, namespace, and default-import ownership more accurately, preserves local `this.` and class-qualified method targeting, recognizes exported function-expression bindings alongside named functions and arrow bindings, and now keeps object-literal methods, class field arrow methods, `export default foo`, and direct re-export alias surfaces aligned across both regex and tree-sitter paths while the public confidence ceiling intentionally remains `low`
 - parsed files now also carry additive `semantic_pipeline` metadata so extraction can be stabilized internally without changing the public retrieval contracts
-- language entry namespaces now exist for `Clojure`, `Java`, `Elixir`, `Python`, and `TypeScript`, while `runtime/adapters` remains the thin public facade over those parser entrypoints
-- multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python, TypeScript
+- language entry namespaces exist for all supported languages, including the ZLS-primary Zig lane with bounded regex fallback, while `runtime/adapters` remains the thin public facade over those parser entrypoints
+- multi-language call/symbol resolution has module/class-aware normalization for Java, Elixir, Python, TypeScript, Lua, and Zig
 - import-aware and owner-aware disambiguation is applied when resolving ambiguous call targets
 - optional tree-sitter extraction path is available for Clojure/Elixir/Java/TypeScript (grammar-path configured)
 - tiered structural-first ranking and non-compensating confidence model implemented

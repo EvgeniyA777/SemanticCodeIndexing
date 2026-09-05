@@ -1,10 +1,18 @@
 ---
+title: "Persistent Index And Incremental Reuse"
+doc_type: "architecture_note"
+lifecycle: "superseded"
+agent_action: "historical_reference_only"
+updated: "2026-08-02"
+superseded_by:
+  - plans/007_semidx_extension_architecture_resolution_plan.md
+  - plans/008_stage_0_1_workspace_freshness.md
 file_type: working-note
 topic: persistent-index-and-incremental-reuse
 created_at: 2026-03-27T01:45:00-0700
 author: claude
 language: en
-status: draft
+status: superseded
 follows: notes/2026-03-27-agent-change-detection.md
 ---
 

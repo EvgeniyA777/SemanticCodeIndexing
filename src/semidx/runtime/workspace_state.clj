@@ -6,7 +6,7 @@
             [semidx.runtime.language-activation :as activation]
             [semidx.runtime.language-registry :as language-registry]))
 
-(def provider-registry-version "3")
+(def provider-registry-version "4")
 (def semantic-pipeline-version "1")
 
 (def provider-catalog

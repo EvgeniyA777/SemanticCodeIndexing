@@ -1,0 +1,241 @@
+{
+  "fixture_id": "provider_authority_java_overload_canonical_key_001",
+  "category": "cross_provider_identity",
+  "purpose": "Prove that regex, tree-sitter, SCIP, and LSP spellings of the SAME Java method overload normalize to one provider-neutral CanonicalFactKey, while distinct overloads of the same method name remain distinct keys.",
+  "plan_refs": [
+    "plans/018"
+  ],
+  "adr_refs": [
+    "ADR-039",
+    "ADR-046"
+  ],
+  "corpus_ref": "fixtures/provider-authority/corpus/java/src/example/OrderService.java",
+  "status": "golden_executed_by_stage_1_tests",
+  "notes": [
+    "regex and tree-sitter spellings are GROUND TRUTH captured from the current semidx extractor (semidx.runtime.languages.java/parse-file with default opts).",
+    "F1 RESOLVED (owner decision 2026-08-03): Variant C, precision-aware overload_identity. The heuristic tier commits arity only (signature_precision=arity_only, signature_key=null); the exact tier MAY add a typed signature. Stable unit identity anchors on the core key, not the typed hash. See reports/024, section 'F1 Resolution — Variant C'.",
+    "2026-08-28 (Stage 1): each distinct_facts_must_not_merge entry gained a structured expected_canonical_key. This restates the claim the prose already made so the fixture can be executed as a golden test instead of read by hand; no claim was changed.",
+    "2026-09-05 (Stage 4 preflight): the scip-java spelling was CORRECTED against real tool output and is now ground truth. The previously seeded 'representative' form claimed a scheme and a typed signature that scip-java does not emit; see scip_java_verified_contract below. The java-lsp spelling remains UNVERIFIED and was lowered to the conservative arity_only floor rather than left asserting a typed capability, because asserting an unverified exact-tier capability is the exact mistake this correction repairs. Stage 5 may raise it to typed only against real jdtls output.",
+    "2026-09-05: the Variant C claim 'the exact tier adds signature_precision=typed with a fully-qualified, type-only signature_key' is INVALIDATED FOR JAVA. It was never verified and is false for scip-java. Variant C's two-layer model (core key + optional refinement) is unchanged and still correct; only the premise that the Java exact tier can supply the refinement is withdrawn."
+  ],
+  "scip_java_verified_contract": {
+    "verified_at": "2026-09-05",
+    "tool": "scip-java (semanticdb-javac 0.12.3 + scip-semanticdb 0.12.3)",
+    "corpus": "fixtures/provider-authority/corpus/java",
+    "ground_truth": true,
+    "findings": [
+      "The symbol scheme is 'semanticdb', not 'scip-java'.",
+      "Overloads are disambiguated by a SOURCE-ORDER ORDINAL, not by parameter types: the first declaration of a method name is `handle().`, the second is `handle(+1).`. The ordinal counts over the method NAME across all arities, not per arity.",
+      "The symbol carries NO parameter types and NO arity. Neither is recoverable from the moniker alone.",
+      "Arity and a human-readable signature are available only from SymbolInformation.signature_documentation.text, e.g. 'public String handle(String order, int retries)'. Its type names are SIMPLE and its parameter names are INCLUDED — the same shape the regex tier already produces, and the shape F1 rejected as Variant B.",
+      "Fully-qualified parameter types appear only as separate occurrences inside the method's declaration range (e.g. java/lang/String#). Reconstructing a typed signature from occurrence layout is inference, not a provider claim, and the plan forbids guessing a canonical key.",
+      "JDK and other external symbols carry a non-'.' package name (e.g. 'semanticdb maven jdk 17 java/lang/String#') and are correctly excluded as external.",
+      "A Java moniker carries the PACKAGE path (example/), not the source file path. The file path must come from Document.relative_path, unlike TypeScript where the moniker reconstructs it."
+    ],
+    "consequence": "The Java exact tier commits arity_only, exactly like the heuristic tier. The native symbol, the +N disambiguator, and the raw signature documentation are EVIDENCE ONLY and must never enter the canonical key."
+  },
+  "same_fact_must_merge": {
+    "fact": "example.OrderService#handle(String)",
+    "provider_spellings": [
+      {
+        "provider_id": "java-regex",
+        "authority": "heuristic",
+        "native_symbol": "example.OrderService#handle",
+        "native_signature_key": "Stringorder",
+        "native_unit_id_suffix": "$arity1$sig5e75e42b",
+        "type_names": "simple",
+        "includes_param_names": true,
+        "ground_truth": true,
+        "variant_c_contribution": {
+          "signature_precision": "arity_only",
+          "signature_key": null
+        }
+      },
+      {
+        "provider_id": "java-tree-sitter",
+        "authority": "structural",
+        "native_symbol": "example.OrderService#handle",
+        "native_signature_key": "Stringorder",
+        "native_unit_id_suffix": "$arity1$sig5e75e42b",
+        "type_names": "simple",
+        "includes_param_names": true,
+        "ground_truth": true,
+        "variant_c_contribution": {
+          "signature_precision": "arity_only",
+          "signature_key": null
+        }
+      },
+      {
+        "provider_id": "scip-java",
+        "authority": "exact",
+        "native_symbol": "semanticdb maven . . example/OrderService#handle().",
+        "native_signature_key": null,
+        "native_disambiguator": "",
+        "native_signature_documentation": "public String handle(String order)",
+        "type_names": "none_in_symbol",
+        "includes_param_names": false,
+        "ground_truth": true,
+        "arity_source": "signature_documentation.text",
+        "variant_c_contribution": {
+          "signature_precision": "arity_only",
+          "signature_key": null
+        }
+      },
+      {
+        "provider_id": "java-lsp",
+        "authority": "exact",
+        "native_symbol": "example.OrderService.handle(java.lang.String) : java.lang.String",
+        "native_signature_key": null,
+        "type_names": "unverified",
+        "includes_param_names": false,
+        "ground_truth": false,
+        "unverified_note": "Stage 5 must capture this from real jdtls output. Held at the conservative arity_only floor until then: an unverified typed claim is what this fixture's 2026-09-05 correction exists to prevent. Raising it to typed is a fixture change that requires tool evidence.",
+        "variant_c_contribution": {
+          "signature_precision": "arity_only",
+          "signature_key": null
+        }
+      }
+    ],
+    "expected_canonical_key": {
+      "fact_schema_version": "1",
+      "language": "java",
+      "path": "src/example/OrderService.java",
+      "fact_kind": "unit",
+      "owner": "example.OrderService",
+      "symbol": "example.OrderService#handle",
+      "core_key": [
+        "java",
+        "src/example/OrderService.java",
+        "unit",
+        "example.OrderService",
+        "example.OrderService#handle",
+        1
+      ],
+      "overload_identity": {
+        "arity": 1,
+        "signature_precision": "arity_only",
+        "signature_key": null
+      },
+      "dispatch_identity": null,
+      "note": "Variant C: unit identity anchors on core_key (owner, symbol, arity[, same-arity ordinal]). No Java provider currently supplies the typed refinement, so the merged precision is arity_only. The two-layer model is unchanged: if a future verified Java provider supplies a typed signature, it refines this fact WITHOUT changing its identity."
+    },
+    "normalization_obligations": [
+      "Variant C (owner decision 2026-08-03): overload_identity is precision-aware, not one fixed string.",
+      "Heuristic tier (regex/tree-sitter) emits signature_precision=arity_only, signature_key=null; it must NOT guess parameter types.",
+      "Java exact tier (scip-java) ALSO emits signature_precision=arity_only, signature_key=null (owner decision 2026-09-05). It must NOT reconstruct a typed signature from occurrence layout: that is inference, and a wrong key is worse than an honest arity-only one.",
+      "scip-java's native symbol, its +N source-order disambiguator, and its signature_documentation text are EVIDENCE ONLY and must never enter the canonical key.",
+      "Java arity is taken from SymbolInformation.signature_documentation.text; a method whose arity cannot be determined must be degraded, not guessed.",
+      "Stable unit identity anchors on the core key (owner, symbol, arity[, same-arity ordinal]); a typed signature, if a verified provider ever supplies one, is refining evidence and not part of the unit_id.",
+      "Same-arity overloads MUST NOT silently merge into one exact fact — see same_arity_overloads_must_not_silently_merge."
+    ]
+  },
+  "same_arity_overloads_must_not_silently_merge": {
+    "status": "specification_for_stage_4",
+    "finding_ref": "F1a",
+    "verified_defect": {
+      "observed_at": "2026-09-05",
+      "description": "With every Java exact fact at arity_only, two genuinely distinct same-arity overloads share a core key and carry no typed signature to split on. fact-arbitration/arbitrate-facts takes its common-case branch (fewer than 2 distinct typed signatures) and merges them into ONE canonical fact at exact authority with ZERO diagnostics — a false exact identity.",
+      "reproduced_with": "two arity-1 facts on example.OrderService#handle, both signature_precision=arity_only, native symbols handle(). and handle(+1)."
+    },
+    "example": {
+      "fact_a": {
+        "signature": "handle(String)",
+        "native_symbol": "semanticdb maven . . example/OrderService#handle().",
+        "arity": 1
+      },
+      "fact_b": {
+        "signature": "handle(int)",
+        "native_symbol": "semanticdb maven . . example/OrderService#handle(+1).",
+        "arity": 1
+      },
+      "shared_core_key": [
+        "java",
+        "src/example/OrderService.java",
+        "unit",
+        "example.OrderService",
+        "example.OrderService#handle",
+        1
+      ]
+    },
+    "required_behaviour": [
+      "The Java adapter MUST detect a group of two or more definition facts sharing (language, path, owner, symbol, arity) where every fact is arity_only.",
+      "It MUST NOT emit a single exact canonical fact for that group.",
+      "It MUST emit a diagnostic identifying the ambiguous group.",
+      "It SHOULD withhold the exact contribution for that group and let the lower tiers supply the units, so no false exact identity is ever asserted.",
+      "Groups that are NOT ambiguous (a single definition per (owner, symbol, arity)) are unaffected and still merge with the heuristic tier on the core key."
+    ],
+    "note": "The corpus OrderService has no same-arity overload pair (handle is arity 1 and arity 2), so this case is specified and tested synthetically. Adding a same-arity pair to the protected corpus would change the Stage 0 extraction baseline and is deliberately avoided."
+  },
+  "distinct_facts_must_not_merge": [
+    {
+      "fact": "example.OrderService#handle(String, int)",
+      "reason": "arity 2 vs arity 1 for the same method name; distinct overload.",
+      "regex_ground_truth": {
+        "native_signature_key": "Stringorder,intretries",
+        "native_unit_id_suffix": "$arity2$sig5902c043"
+      },
+      "scip_java_ground_truth": {
+        "native_symbol": "semanticdb maven . . example/OrderService#handle(+1).",
+        "native_disambiguator": "+1",
+        "native_signature_documentation": "public String handle(String order, int retries)",
+        "note": "The +1 ordinal distinguishes it from handle(). in scip-java's own namespace only. Arity 2, parsed from the signature documentation, is what makes the canonical key distinct."
+      },
+      "expected_canonical_overload_identity": {
+        "arity": 2,
+        "signature_precision": "arity_only",
+        "signature_key": null,
+        "note": "Distinct core_key from arity 1; every tier separates it by arity alone, no ambiguity and no typed signature required."
+      },
+      "expected_canonical_key": {
+        "language": "java",
+        "fact_kind": "unit",
+        "path": "src/example/OrderService.java",
+        "owner": "example.OrderService",
+        "symbol": "example.OrderService#handle",
+        "arity": 2
+      }
+    },
+    {
+      "fact": "example.OrderService#handleAll(List<String>)",
+      "reason": "different method name and a generic parameter type; distinct symbol.",
+      "regex_ground_truth": {
+        "native_symbol": "example.OrderService#handleAll",
+        "native_signature_key": "List<String>orders",
+        "native_unit_id_suffix": "$arity1$sigdc13f0cf"
+      },
+      "scip_java_ground_truth": {
+        "native_symbol": "semanticdb maven . . example/OrderService#handleAll().",
+        "native_signature_documentation": "public List<String> handleAll(List<String> orders)"
+      },
+      "expected_canonical_key": {
+        "language": "java",
+        "fact_kind": "unit",
+        "path": "src/example/OrderService.java",
+        "owner": "example.OrderService",
+        "symbol": "example.OrderService#handleAll",
+        "arity": 1
+      }
+    },
+    {
+      "fact": "example.Validator#validate(String)",
+      "reason": "different owner/symbol; MUST NOT collide even though its regex signature hash (sig5e75e42b) is byte-identical to handle(String). A hash-only merge key would be unsafe; the canonical key must include owner+symbol+path, not only the signature hash.",
+      "regex_ground_truth": {
+        "native_symbol": "example.Validator#validate",
+        "native_signature_key": "Stringorder",
+        "native_unit_id_suffix": "$arity1$sig5e75e42b"
+      },
+      "scip_java_ground_truth": {
+        "native_symbol": "semanticdb maven . . example/Validator#validate().",
+        "native_signature_documentation": "public String validate(String order)"
+      },
+      "expected_canonical_key": {
+        "language": "java",
+        "fact_kind": "unit",
+        "path": "src/example/Validator.java",
+        "owner": "example.Validator",
+        "symbol": "example.Validator#validate",
+        "arity": 1
+      }
+    }
+  ]
+}
