@@ -479,7 +479,7 @@ medium effort unless new evidence raises the risk.
 | 3 — TypeScript SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | source identity and cross-provider normalization enter the weakest current lane |
 | 4 — Java SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | overload, constructor, import, and relation identities need careful parity |
 | 4.5 — project-scoped provider consolidation | Claude Code team lead | Claude Opus 4.6 | high | the catalog/planner seam this stage builds is the seam Stage 6 flips; a false provider status or a plan that is not byte-identical without batch input changes default behavior silently |
-| 5 — LSP overlay | Claude Code team lead | Claude Opus 4.6 | high | live freshness, cancellation, and deterministic batch behavior interact |
+| 5 — LSP overlay | Claude Code team lead | Claude Opus 4.6 for readiness/review; Claude Sonnet 4.6 only for bounded implementation after a locked subplan | high for readiness and final review; medium for mechanical implementation | live freshness, document versions, cancellation, and exact-authority conflicts need high-effort decisions; descriptor/runner/test wiring may use medium effort only after those decisions are explicit |
 | 6 — default switch | Claude Code team lead | Claude Opus 4.6 | high | this is the public authority and truthful-degradation decision gate |
 | 7 — cleanup | Claude Code team lead | Claude Sonnet 4.6 | medium | removal follows proven compatibility and retention gates |
 
@@ -852,6 +852,16 @@ change.
 
 Prerequisite: Stage 4.5, so the overlay joins an existing exact-tier provider
 model instead of introducing one.
+
+Execution routing note (owner decision, 2026-09-05): split Stage 5 by risk, not
+by habit. Use a high-effort model for the Plan Readiness Gate,
+source-identity/freshness decisions, document-version semantics, cancellation
+and timeout behavior, exact-authority conflict handling, and the final
+findings-first review. Use a medium-effort implementation pass only after that
+high-effort pass has produced a locked subplan with concrete files, contracts,
+tests, DoD, and stop/resume conditions. If the implementation pass has to decide
+product behavior, authority semantics, source identity, or conflict policy, it
+must stop and return to high-effort planning instead of guessing.
 
 Goal: add exact evidence for live or dirty workspace content not represented by
 the batch SCIP snapshot.
