@@ -201,10 +201,21 @@
     {:stderr-lines lines
      :stderr-future
      (future
-       (with-open [rdr (io/reader (.getErrorStream proc))]
-         (doseq [line (line-seq rdr)]
-           (swap! lines #(->> (conj % line) (take-last 200) vec))
-           (log-step! "server-stderr" line))))}))
+       (try
+         (with-open [rdr (io/reader (.getErrorStream proc))]
+           (doseq [line (line-seq rdr)]
+             (swap! lines #(->> (conj % line) (take-last 200) vec))
+             (log-step! "server-stderr" line)))
+         (catch java.io.IOException e
+           ;; `destroy-process!` closes this stream on purpose. A read that
+           ;; loses the race with that kill is the normal end of this future's
+           ;; life, not a failure — but the exception used to be stored in the
+           ;; future and rethrown by the `deref` in `destroy-process!`, so
+           ;; teardown failed because of the kill it had just performed. The
+           ;; reader owns the stream's lifecycle, so it is the right place to
+           ;; recognise the close. Reported, never swallowed silently.
+           (log-step! "server-stderr" (str "stream closed during shutdown: "
+                                           (.getMessage e))))))}))
 
 (defn- start-mcp-process! [opts]
   (let [{:keys [directory legacy-allowed-root-env]
