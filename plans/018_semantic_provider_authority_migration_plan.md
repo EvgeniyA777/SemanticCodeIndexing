@@ -478,6 +478,7 @@ medium effort unless new evidence raises the risk.
 | 2 — provider shadow path | Claude Code team lead | Claude Sonnet 4.6 | medium | bounded implementation behind a default-off seam |
 | 3 — TypeScript SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | source identity and cross-provider normalization enter the weakest current lane |
 | 4 — Java SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | overload, constructor, import, and relation identities need careful parity |
+| 4.5 — project-scoped provider consolidation | Claude Code team lead | Claude Opus 4.6 | high | the catalog/planner seam this stage builds is the seam Stage 6 flips; a false provider status or a plan that is not byte-identical without batch input changes default behavior silently |
 | 5 — LSP overlay | Claude Code team lead | Claude Opus 4.6 | high | live freshness, cancellation, and deterministic batch behavior interact |
 | 6 — default switch | Claude Code team lead | Claude Opus 4.6 | high | this is the public authority and truthful-degradation decision gate |
 | 7 — cleanup | Claude Code team lead | Claude Sonnet 4.6 | medium | removal follows proven compatibility and retention gates |
@@ -693,7 +694,164 @@ Exit criteria:
 
 Commit boundary: Java SCIP provider remains shadow/default-off.
 
+### Stage 4.5. Project-Scoped Provider Consolidation
+
+Owner decision (2026-09-05): this consolidation runs before Stage 5, not after.
+
+Goal: make the delivered SCIP providers ordinary participants of the provider
+catalog, planning policy, and execution boundary while default extraction,
+public confidence, and the legacy Java/TypeScript paths stay exactly as they
+are.
+
+Why here: Stages 3 and 4 shipped `semidx.runtime.providers.scip-typescript` and
+`semidx.runtime.providers.scip-java` as standalone entry points. SCIP indexes a
+project, not a file, so neither provider is in `providers/descriptors`, and
+`provider-selection` / `provider-execution` have never planned or executed an
+exact-tier provider. Stage 5 adds a live overlay and Stage 6 flips the public
+default; without this stage those two would have to land catalog integration,
+batch execution, live freshness, and the authority change together. This stage
+moves the batch-integration risk ahead of the authority risk and leaves it
+inert.
+
+In scope:
+
+- provider scope as an explicit descriptor field, and catalog ownership of the
+  two SCIP descriptors;
+- a project-scoped status probe that cannot report a false `ready`;
+- a project batch plan whose admitted/excluded records use the shape the
+  per-file plan already uses;
+- a batch execution boundary that runs each admitted project provider once and
+  distributes its facts to the documents it covered;
+- an optional batch-coverage input to per-file planning, absent by default;
+- the per-document freshness gate asserted as one cross-language contract;
+- shadow comparison promoted to a standard project-level diagnostic output.
+
+Out of scope:
+
+- any default-authority change; Stage 6 owns it;
+- LSP, any third language, and the SCIP `Relationship` / implementations /
+  `call/*` facts already deferred by Stage 4;
+- wiring into `semidx.runtime.index` or `semidx.runtime.adapters`, that is, the
+  snapshot path;
+- confidence ceilings, contract schema changes, and public transport fields;
+- removing or deprecating any legacy Java/TypeScript path or parser option.
+
+Decisions:
+
+1. **Descriptor scope is explicit and the catalog owns both SCIP descriptors.**
+   `providers/descriptors` gains `:scope :file` on its four existing entries, and
+   a sibling `project-descriptors` var carries the `scip-typescript` and
+   `scip-java` descriptors currently defined inside the adapter namespaces. The
+   adapters re-export the catalog entry rather than defining it, so there is one
+   source of truth and the dependency runs adapter -> catalog. The catalog must
+   not require the adapter namespaces: `semidx.runtime.scip` loads generated
+   protobuf classes, and the catalog is required by the per-file planning path,
+   which must keep loading without them.
+2. **`descriptors-for` stays file-scoped.** The per-file candidate list must not
+   change, so it filters `:scope :file`. Project-scoped ids stay reachable
+   through `descriptor` / `descriptors-by-id`.
+3. **`provider-status` must refuse project-scoped ids.** It currently returns
+   `ready` for every non-tree-sitter engine, so a SCIP descriptor reaching it
+   would report `ready` with no toolchain probe at all — a false status the
+   planner would then admit. It returns an explicit unsupported-scope status
+   instead, and the project probe is a separate role that calls each adapter's
+   own `provider-status`.
+4. **Batch execution is a new namespace, not an extension of
+   `provider-execution`.** `semidx.runtime.provider-batch` owns the project role
+   registry (one status function and one run function per project provider),
+   executes each admitted provider once, and distributes facts by document path.
+   Keeping it separate is what confines the protobuf-backed SCIP dependency to
+   one namespace and leaves per-file execution untouched.
+5. **Per-file planning takes batch coverage as an optional input.**
+   `provider-selection/provider-plan` accepts an optional `:batch_coverage` map
+   of `provider_id -> covered paths`. When present, the project provider is
+   admitted for a file inside that coverage; when absent, the plan is identical
+   to today's. This is the falsifiable form of "no default change".
+6. **The freshness gate is not reimplemented.**
+   `scip-adapter/document-freshness`, `scip-adapter/document-path-problem`, and
+   the arity-only overload guard stay where they are. This stage asserts them as
+   one cross-language contract at the batch boundary and reports
+   fresh / stale / invalid / uncovered document counts uniformly for both
+   languages.
+
+Deliverables:
+
+- `:scope` on every descriptor; `providers/project-descriptors`, a project
+  descriptor lookup, and a scope-refusing `provider-status`.
+- `provider-selection` project batch planning: bounded, deterministic, with the
+  same admitted/excluded record shape as `plan-operation`.
+- `semidx.runtime.provider-batch`: project role registry, one run per admitted
+  provider, path-keyed fact distribution, per-provider failure isolation, and a
+  coverage/diagnostics summary.
+- Optional `:batch_coverage` input on `provider-plan`, plus a project-level
+  shadow entry point composing batch execution with the existing
+  `provider-execution/shadow-facts-for-file`.
+- `scip-shadow-compare` extended to emit the project-level comparison as a
+  standard diagnostic: agreed, exact-only, legacy-only, and authority-upgrade
+  keys, plus fresh/stale/invalid/uncovered document counts, latency, and
+  fact-set size.
+- Tests as named under Verification, and the progress-log entry recording the
+  observed comparison numbers.
+
+Exit criteria:
+
+- With no `:batch_coverage` supplied, `provider-plan`, `execute-plan`, and
+  `shadow-facts-for-file` produce unchanged output for the protected Java and
+  TypeScript corpora, asserted against the pre-stage output rather than a
+  hand-written expectation.
+- `adapters/parse-file` is untouched and default Java/TypeScript extraction is
+  byte-identical.
+- A project provider is admitted only with an observed `ready` status; an
+  unobserved status is an exclusion with a recorded reason, exactly as the
+  per-file planner already does.
+- A missing CLI or toolchain, a failed index run, a stale document, and an
+  unsafe document path each produce a recorded degradation and zero exact
+  contributions, and never fail the run or the per-file path.
+- Both SCIP providers produce the same document-state vocabulary and the same
+  withheld-overload behavior through the shared boundary; no language-specific
+  branch enters `provider-batch`.
+- A canonical fact reaching arbitration from a batch provider and from a
+  per-file provider still collapses to one canonical fact retaining both
+  evidence records — the Stage 3 co-arbitration proof, now run through the
+  planner instead of the standalone harness.
+- Batch execution order does not change arbitrated output.
+- The project shadow comparison runs on the protected corpora, and its numbers
+  are recorded in the progress log as Stage 6 admission evidence.
+
+Verification:
+
+- Focused: `clojure -M:test -n` for `semidx.runtime.providers-test`,
+  `semidx.runtime.provider-selection-test`,
+  `semidx.runtime.provider-execution-test`, the new
+  `semidx.runtime.provider-batch-test`,
+  `semidx.runtime.providers.scip-typescript-test`,
+  `semidx.runtime.providers.scip-java-test`, and
+  `semidx.runtime.providers.scip-shadow-compare-test`.
+- Repository gates: `clojure -M:test`, `./scripts/validate-contracts.sh`,
+  `./scripts/run-mvp-gates.sh`, `clojure -M:ccc check --root .`.
+- Toolchain-sensitive tests assert whichever branch the environment actually
+  exercises and go through `semidx.test-support.scip-toolchain`, so a CI run
+  with `SEMIDX_REQUIRE_SCIP_TOOLCHAINS=1` fails instead of skipping. Run them
+  once with and once without a resolvable toolchain.
+
+Stop conditions:
+
+- If catalog integration cannot keep per-file output identical without changing
+  `providers/run-provider` dispatch, stop and record the finding instead of
+  widening the seam.
+- If a deliverable requires touching `semidx.runtime.index` or
+  `semidx.runtime.adapters`, stop: that wiring belongs to Stage 6.
+- If a public contract or a confidence ceiling would have to change, stop and
+  route the change through the Stage 6 approval instead.
+
+Commit boundary: catalog, planning, batch execution, and shadow comparison only.
+Both SCIP providers remain default-off; no default switch and no public contract
+change.
+
 ### Stage 5. LSP Live Overlay
+
+Prerequisite: Stage 4.5, so the overlay joins an existing exact-tier provider
+model instead of introducing one.
 
 Goal: add exact evidence for live or dirty workspace content not represented by
 the batch SCIP snapshot.
