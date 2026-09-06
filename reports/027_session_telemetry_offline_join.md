@@ -108,11 +108,19 @@ own now that recording is on. One global MCP server serves every project, so the
 telemetry already covers all of them, and `root_path_hash` separates them
 without exposing paths.
 
-**This repository is the biased sample.** Its own `CLAUDE.md` instructs an agent
-to use semidx first, so behaviour here is partly prescribed rather than chosen.
-The other four projects carry six sevenths of the usage and no such instruction,
-which makes them the more honest evidence — and it means any future verdict rule
-should be tested there rather than on self-observation.
+**The bias is global, not local.** An earlier version of this correction claimed
+the other projects carry "no such instruction" and were therefore the better
+evidence. That was wrong: `~/.claude/CLAUDE.md` mandates semidx-first in **every**
+project ("Semantic Code Indexing is mandatory for codebase exploration whenever
+it is available"), and the project-level `CLAUDE.md` files mention semidx not at
+all. So all 144 calls are instruction-following, and there is **no sample of
+unprompted choice anywhere**.
+
+That is a sharper limit than a biased repository would have been. Observational
+data can show how semidx performs when it is used, and what the agent does after
+a retrieval. It cannot show whether an agent would reach for it given a free
+choice, nor whether it beats the alternative — both need either withholding it
+in some sessions (`ideas/016`) or a comparative arm (`plans/020`).
 
 ## Re-query stays unresolved, as the plan required
 

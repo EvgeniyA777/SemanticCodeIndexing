@@ -382,10 +382,13 @@ Still a sample rather than a dataset, but the starting point is larger and it
 grows on its own now that recording is on: one global MCP server serves every
 project, so telemetry covers all of them and `root_path_hash` separates them.
 
-One caveat that matters more than the count: **this repository is the biased
-sample**, because its `CLAUDE.md` instructs an agent to use semidx first. Six
-sevenths of the usage is on projects with no such instruction, so a verdict rule
-should be tested there rather than on self-observation.
+One caveat that matters more than the count: **the bias is global, not local.**
+`~/.claude/CLAUDE.md` mandates semidx-first in every project, and the project
+`CLAUDE.md` files do not mention semidx at all — so all 144 calls are
+instruction-following and there is no sample of unprompted choice anywhere.
+Observational data can show how semidx performs when used; it cannot show
+whether an agent would choose it, nor whether it beats the alternative. Those
+need withholding (`ideas/016`) or a comparative arm (`plans/020`).
 
 This blocker resolves by waiting rather than by deciding — but the waiting
 period should be stated before anyone looks at a number.
