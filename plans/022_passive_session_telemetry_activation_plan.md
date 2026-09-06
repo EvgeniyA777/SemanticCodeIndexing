@@ -277,7 +277,10 @@ never as runtime event fields.
 ### [High] A verdict rule invented after looking at the data
 
 Mitigation: `trace_verdict_policy_v1` is written and versioned before any
-scoring, and Stage 2 explicitly produces no verdict.
+scoring, and Stage 2 explicitly produces no verdict. The five questions it is
+blocked on are listed under "Blockers before `trace_verdict_policy_v1`"; two of
+them — who declares a task and who authors the verdict — decide whether the
+resulting number is a measurement or a self-report.
 
 ### [Medium] Thin volume
 
@@ -288,6 +291,57 @@ and any pacing expectation should be set before anyone waits on a number.
 
 Mitigation: the Stage 0 inventory answers what is written; anything carrying
 prompt text or source code by default is a finding, not a feature.
+
+## Blockers before `trace_verdict_policy_v1`
+
+Five, all owner decisions rather than implementation. None may be settled by
+picking whichever answer makes the numbers look better; that is the failure the
+[High] risk above already names. Until all five are answered, this track keeps
+accumulating raw events and computes no task-level metric.
+
+### 1. What one task is
+
+Undefined today. One user intent, one ticket, one conversational turn? The
+choice sets the denominator of every later metric, and finer slicing flatters
+it: at one retrieval per task, almost every task looks like a direct hit.
+
+### 2. Who may declare a task boundary
+
+Stage 1b settled *how* a boundary is declared — explicitly, never inferred — but
+not *who* is entitled to. Today the agent declares its own, which means **the
+measured party defines the denominator of its own metric**. Re-declaring after
+each successful retrieval would improve the statistic with no bad intent at all,
+only carelessness. If the agent stays the author, that must be recorded as a
+self-reported measure rather than presented as independent.
+
+### 3. Who authors the verdict
+
+Separate from the boundary, and the first of the two gaps `ideas/016` left open.
+Behaviour is not agreement: a read of a file from the selection can mean "found
+it" or "started double-checking", and the transcript cannot tell them apart. A
+human judgement after the fact, a wrapper, and the agent itself are three
+different measurements, not three implementations of one.
+
+### 4. The attribution window
+
+Measured in Stage 2 and unresolved: between consecutive retrievals there are 0
+to 429 tool calls, and the distribution moves with the bound. See
+[`reports/027`](../reports/027_session_telemetry_offline_join.md).
+
+### 5. Volume
+
+Ten retrievals across four sessions at the time of Stage 2. A sample of
+behaviour, not a dataset. Recording is now enabled, so this one resolves by
+waiting rather than by deciding — but the waiting period should be stated before
+anyone looks at a number.
+
+### What is safe to do meanwhile
+
+Keep collecting raw events. Their value does not depend on how a task is later
+defined: `session_id`, `latency_ms`, `confidence_level`, `estimated_tokens`, and
+the transcript join stay correct under any of these answers. A metric computed
+on a prematurely chosen boundary does not — and once a number exists, it tends
+to set the frame it was supposed to test.
 
 ## Owner decisions (2026-09-05)
 
