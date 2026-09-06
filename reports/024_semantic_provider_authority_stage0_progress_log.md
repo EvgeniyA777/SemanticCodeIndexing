@@ -2106,3 +2106,187 @@ fallback_executor_or_model: none recommended for the freshness and cancellation
 model_availability_checked_at: not checked this session.
 confidence: high (every Stage 4.5 exit criterion has an executing test)
 ```
+
+---
+
+# Stage 5a — LSP Overlay Seam And TypeScript Live Provider (2026-09-05)
+
+Status: **complete**. Stage 5b (Java) remains deferred and blocked.
+
+The owner split Stage 5 before execution: a seam proved only against mocks would
+have its lifecycle, `initialize`, `didOpen`, document-version, and timeout
+assumptions rewritten the moment a real server arrived, and jdtls is a separate
+infrastructure problem. So 5a ships the language-neutral boundary **plus one
+complete real backend**, and no TypeScript lifecycle assumption may enter the
+seam.
+
+## Delivered
+
+| Artifact | Role |
+| --- | --- |
+| `scripts/lsp-toolchain/{package.json,package-lock.json}` | pinned `typescript-language-server` 6.0.0 + `typescript` 5.9.3 |
+| `scripts/setup-typescript-lsp.sh` | repo-managed install, fails closed on version drift and on a missing `tsserver.js` |
+| `src/semidx/runtime/provider_overlay.clj` | new: the language-neutral overlay boundary — roles, session lifecycle, source identity, failure taxonomy, coverage, delivery |
+| `src/semidx/runtime/providers/lsp_typescript.clj` | new: the thin TypeScript provider — toolchain resolution, symbol mapping, references |
+| `src/semidx/runtime/lsp_client.clj` | `:initialization_options` passthrough; `documentSymbol` takes `language_id`/`version` instead of hard-coding `"zig"` |
+| `src/semidx/runtime/providers.clj` | `typescript-lsp` descriptor; probe and executor refuse engines the catalog cannot handle; `statuses` covers only what it can probe |
+| `src/semidx/runtime/provider_selection.clj` | `:batch_statuses` generalised to `:observed_statuses`; an unobserved external tier no longer widens the operation set |
+| `src/semidx/runtime/fact_arbitration.clj` | `:equal_authority_value_conflict` diagnostic |
+| `.github/workflows/mvp-runtime.yml` | installs the LSP toolchain and sets `SEMIDX_REQUIRE_LSP_TOOLCHAINS=1` |
+| tests | new `provider_overlay_test` (16), `lsp_typescript_test` (8), plus additions to `fact_arbitration_test` and `providers_test` |
+
+## Four things the real server taught us that a mock would not have
+
+Every one of these was reproduced, and each would have been baked in as a false
+assumption had 5a been built against a stub.
+
+1. **`typescript-language-server` locates TypeScript from the *workspace*, not
+   from beside itself.** Indexing a workspace with no `node_modules/typescript`
+   fails the initialize handshake outright: *"Could not find a valid TypeScript
+   installation"*. The fix is `tsserver.path` in `initializationOptions`, which
+   the LSP client could not send at all — hence the new passthrough.
+2. **The `typescript` pin is load-bearing.** An unpinned install resolved
+   TypeScript 7.0.2, whose native compiler ships **no `lib/tsserver.js`**, and
+   the server cannot drive it. `typescript` is therefore a direct dependency
+   pinned to 5.9.3, and the setup script fails closed when `tsserver.js` is
+   absent rather than letting the failure surface inside a handshake.
+3. **A relative server path is not found.** `ProcessBuilder` resolves a relative
+   program against the process's working directory, which is the *workspace* —
+   so `.lsp-toolchain/node_modules/.bin/...` failed with `error=2`. Both
+   resolvers now return absolute paths. This is the same trap Stage 3 recorded
+   for `clojure.java.shell/sh`, in a different API.
+4. **`textDocument/references` returns nothing once the document is closed, and
+   its URIs do not match ours as strings.** The first version reused
+   `text-document-symbols!`, which closes the document as soon as symbols come
+   back, so every reference request resolved against a document the server no
+   longer held. After fixing that, references still vanished: `File.toURI`
+   produces `file:/Users/...` while the server answers with the normalized
+   `file:///Users/...`, so the string prefix test discarded every location
+   silently. URIs are now compared as decoded filesystem paths.
+
+## A defect in the arbitration kernel, found by writing the required test
+
+The plan requires a merge test for an **equal-authority conflict**. There was
+nothing to assert: `merge-one-canonical-fact` keeps all evidence but **discards
+`:value` entirely**, so two `exact` tiers describing the same definition
+differently produced one canonical fact, no diagnostic, and no trace of the
+disagreement. Reproduced in the REPL before fixing.
+
+`arbitrate-facts` now emits `:equal_authority_value_conflict` when providers of
+the same strongest authority disagree. Identity, authority, and the merge itself
+are unchanged — the contradiction is reported, not resolved, which is what
+Stage 1's exit criterion "equal-authority contradictions are observable" asked
+for. Only fields present in both values are compared, so a provider carrying
+extra native detail is not a false conflict; a lower tier disagreeing is not a
+conflict at all, because that is what the authority ladder is for.
+
+## Design decisions worth keeping
+
+- **The seam substitutes roles, never the wrapper.** Same rule as Stage 4.5, for
+  the same reason: injecting the runner would bypass the isolation and make it
+  untestable.
+- **Source identity is decided by which text was sent.** Text read from disk
+  anchors on the file-bytes digest — the same anchor the regex and SCIP tiers
+  use, so agreement between tiers is agreement about one file. A live buffer
+  that differs from disk anchors on `overlay_text_sha256` plus the document
+  version, so live evidence cannot be mistaken for a claim about the file. That
+  is the whole of "dirty evidence stays in the overlay scope"; it needs no
+  separate scoping mechanism.
+- **`:observed_statuses` replaced `:batch_statuses`.** One key for every tier the
+  catalog cannot probe, merged only where `providers/locally-probed?` is false,
+  so an externally supplied status can never override a real tree-sitter probe.
+  The planner names no provider and no family.
+- **An unobserved tier does not widen the plan.** Putting `typescript-lsp` in the
+  catalog initially added a `references` operation to *every* TypeScript plan,
+  with a permanent gap — exactly what Stage 2 refused to do when it declined to
+  claim operations nothing produces. The default operation set now comes from
+  locally probed descriptors plus externally probed ones that were actually
+  observed, and `providers/statuses` returns only what it can probe rather than
+  present-and-unavailable entries that read like a probe nobody ran.
+- **Containers give ownership, not units.** The regex tier mints no unit for a
+  TypeScript class, so neither does this one; a tier that invented one would show
+  up forever as a difference rather than as agreement.
+
+## Exit criteria check (plan Stage 5a)
+
+| Criterion | Result |
+| --- | --- |
+| LSP facts accepted only for matching source content | met — `resolve-document` tests; `version_mismatch` refuses a document contradicting the caller's digest |
+| Dirty evidence stays in the overlay scope | met — `dirty-overlay-evidence-stays-in-the-overlay-scope-test`: the live-only symbol is anchored on the buffer digest and the document version |
+| Timeout or crash cannot fail unrelated files or the index | met — `a-failing-document-does-not-stop-the-others-test`; an unavailable overlay leaves the per-file plan intact |
+| Batch snapshots reproducible with the overlay disabled | met — `an-unobserved-overlay-does-not-widen-the-default-plan-test`; full suite green |
+| No TypeScript-only assumption in the seam, planner, or executor | met — `provider-overlay` names TypeScript only in its role registry; `provider-selection` names no provider at all |
+| Every failure-taxonomy value reachable in a test | met — `every-failure-kind-is-reachable-test` covers all seven |
+
+## Taxonomy note
+
+The plan named six kinds; the implementation has seven. `server_error` was added
+for a JSON-RPC error response, which has neither crashed nor sent something
+malformed — folding it into either would misreport what happened. An
+unrecognised exception is reported as `crash`, because after one the session is
+no longer trusted and is closed.
+
+## Verification
+
+- `SEMIDX_REQUIRE_SCIP_TOOLCHAINS=1 SEMIDX_REQUIRE_LSP_TOOLCHAINS=1 clojure -M:test`:
+  **602 tests, 3303 assertions, 0 failures, 0 errors** (was 574 / 3215). Both
+  end-to-end tests are asserted to run, not skipped.
+- `./scripts/validate-contracts.sh`: ok, 72 files.
+- `./scripts/run-mvp-gates.sh` with both flags: ok, 23/23 benchmarks.
+- `clojure -M:ccc check --root .`: up to date after refresh.
+- Toolchain-absent branches are covered deterministically (injected
+  `unavailable`, nonexistent toolchain dir), not by the host environment.
+
+## Changed tests that were not new
+
+`selectors-choose-providers-by-path-test` and
+`path-eligibility-never-yields-a-project-provider-test` asserted the exact
+provider list for a `.ts` path, which now includes `typescript-lsp`. The
+assertions were widened to the new list and given an explicit check that no
+project provider leaks into path eligibility.
+
+## Deferred
+
+- **Stage 5b (Java)** — blocked on a repo-managed jdtls decision, not merely
+  unscheduled. `jdtls` exists on this machine via Homebrew, which does not
+  satisfy ADR-047.
+- Reference lookup is bounded at 32 definitions per document and reports its own
+  truncation; a larger corpus may want a different bound.
+- The overlay runs providers sequentially, as the batch tier does.
+- `documentSymbol` kinds outside function/method/term are recorded as unmapped
+  rather than modelled; promoting any of them is a Stage 6 question about what
+  the default tier should contain.
+
+## NextStageRoutingRecommendation
+
+```text
+completed_stage: 5a (LSP overlay seam and TypeScript live provider)
+recommended_next_stage: owner decision between 5b (Java LSP) and 6 (default
+  authority switch)
+recommended_executor: Claude Code team lead
+recommended_model: Claude Opus 4.6
+effort: high
+effort_justification: Stage 6 is the public authority and truthful-degradation
+  gate; Stage 5b starts with a toolchain decision that binds ADR-047.
+rationale: every exact tier the plan called for now exists and merges through
+  one path — batch SCIP for reproducible project evidence, LSP for live
+  documents — and equal-authority disagreement between them is finally
+  observable, which Stage 6 needs before it can make either authoritative.
+  Stage 5b adds a second consumer of a seam that is already proven against a
+  real server, so it is no longer on the critical path.
+prerequisites_or_blockers:
+  - 5b needs an owner decision on a repo-managed jdtls toolchain; a Homebrew
+    jdtls does not satisfy ADR-047.
+  - Stage 6 needs the plans/020 comparative evidence, and that track is paused
+    by the owner.
+  - the arbitration change is additive, but Stage 6 should decide whether an
+    equal-authority conflict may block a default-path fact rather than only
+    annotate it.
+file_ownership_and_conflict_risk: LOW for 5b (a new adapter plus one role entry);
+  MEDIUM-HIGH for Stage 6, which touches index/adapters wiring and public
+  confidence.
+fallback_executor_or_model: none for the authority switch.
+model_availability_checked_at: not checked this session.
+confidence: high (every Stage 5a exit criterion has an executing test, and the
+  four server-behaviour findings were reproduced rather than assumed)
+```

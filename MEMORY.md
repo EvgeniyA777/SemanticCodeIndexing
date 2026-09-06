@@ -170,7 +170,7 @@ after this memory file.
 - Compact-first staged retrieval is now fully aligned as the canonical public flow: `resolve_context` is compact-first, `expand_context` / `fetch_context_detail` are the explicit later stages, selection artifacts are snapshot-bound, and the implementation/docs/examples line is captured by `ADR-024` plus the completed `plans/002_compact_first_staged_retrieval_plan.md`.
 - `plans/019` is the planned LLM one-shot delivery track: add an external `get_context` facade over the same snapshot-bound staged state machine, retain ContextPacket as the structured source of truth, make Markdown an optional bounded projection, and contribute staged/one-shot strategy adapters to the benchmark substrate owned exclusively by `plans/020`. Its top-level response budget is authoritative, `structured`/`markdown`/diagnostic allocations are disjoint, and usage telemetry distinguishes aggregate from stage accounting. ADR-024 remains current; changing the documented canonical default requires comparative evidence and a new ADR.
 - `plans/020` is in progress and is the exclusive owner of the real-repository task corpus, immutable `BenchmarkRun`/`TaskAttempt` identities, A/B/C/D strategy harness, provider/API/model usage adapters, price schedules, and success-per-cost aggregation. Stage 1 (`returned_tokens` fidelity) is delivered. Stage 0 now separates harness executor models from `evaluated_*` attempt identities, uses `implicit_cache_observed_v1` (no explicit cache objects; implicit reads recorded), and gates the current Gemini 2.5 schedule at 2026-10-16; calibration/final lock remain pending, and Stage 2 has not started.
-- `plans/018` is in progress. Stages 0-3 are delivered and committed (see the numbered next-steps section below for the detail). Stage 3 (TypeScript SCIP) is complete: toolchain preflight, JVM SCIP reader, SCIP->CanonicalFactKey normalization, the shadow/default-off SCIP provider adapter (`semidx.runtime.providers.scip-typescript`) with a per-document stale gate, and the SCIP-vs-Stage-2 shadow comparison harness (`semidx.runtime.providers.scip-shadow-compare`) with latency/size metrics. Stage 4 (Java SCIP) is complete (2026-09-05): preflight (which invalidated Variant C's typed-refinement premise for Java and reproduced a same-arity false-exact-identity defect), a repo-managed external toolchain, language bridges in `scip-normalize`, the shared `scip-adapter` boundary, the `scip-java` adapter, and the same-arity overload guard. Stage 4.5 (project-scoped provider consolidation) is complete (2026-09-05): the two SCIP descriptors now live in `providers.clj` with an explicit `:scope`, `provider-selection` has `project-plan` plus an optional `:batch_coverage` input to per-file planning, and the new `semidx.runtime.provider-batch` runs each admitted project provider once and delivers its facts into per-file arbitration. Stages 5-7 are not started. All of it is still additive and default-off: `adapters/parse-file` owns default Java/TypeScript extraction, and a project provider is planned only when a caller supplies both an observed status and coverage from a completed run. Multi-provider evidence must normalize to a provider-neutral `CanonicalFactKey` before arbitration; provider ids, native symbols, source identity, and mutable evidence are not stable merge keys. Cross-provider Java overload and TypeScript re-export identity fixtures are Stage 0/1 admission gates (executed as goldens).
+- `plans/018` is in progress. Stages 0-3 are delivered and committed (see the numbered next-steps section below for the detail). Stage 3 (TypeScript SCIP) is complete: toolchain preflight, JVM SCIP reader, SCIP->CanonicalFactKey normalization, the shadow/default-off SCIP provider adapter (`semidx.runtime.providers.scip-typescript`) with a per-document stale gate, and the SCIP-vs-Stage-2 shadow comparison harness (`semidx.runtime.providers.scip-shadow-compare`) with latency/size metrics. Stage 4 (Java SCIP) is complete (2026-09-05): preflight (which invalidated Variant C's typed-refinement premise for Java and reproduced a same-arity false-exact-identity defect), a repo-managed external toolchain, language bridges in `scip-normalize`, the shared `scip-adapter` boundary, the `scip-java` adapter, and the same-arity overload guard. Stage 4.5 (project-scoped provider consolidation) is complete (2026-09-05): the two SCIP descriptors now live in `providers.clj` with an explicit `:scope`, `provider-selection` has `project-plan` plus an optional `:batch_coverage` input to per-file planning, and the new `semidx.runtime.provider-batch` runs each admitted project provider once and delivers its facts into per-file arbitration. Stage 5a (LSP overlay seam + TypeScript live provider) is complete (2026-09-05): `semidx.runtime.provider-overlay` is the language-neutral live-overlay boundary, `semidx.runtime.providers.lsp-typescript` is its first real backend, and `fact-arbitration` finally reports equal-authority contradictions. Stage 5b (Java LSP) is deferred and blocked on a repo-managed jdtls decision; Stages 6-7 are not started. All of it is still additive and default-off: `adapters/parse-file` owns default Java/TypeScript extraction, and a project provider is planned only when a caller supplies both an observed status and coverage from a completed run. Multi-provider evidence must normalize to a provider-neutral `CanonicalFactKey` before arbitration; provider ids, native symbols, source identity, and mutable evidence are not stable merge keys. Cross-provider Java overload and TypeScript re-export identity fixtures are Stage 0/1 admission gates (executed as goldens).
 - `plans/007` remains an active architecture reference, not an executable queue. It closes only after its continuation ownership, freshness/lifecycle, provider-catalog, relation-parity, public-boundary, and documentation-handoff gates have recorded evidence; a future successor must be self-contained rather than merely linked. On closure its frontmatter becomes `completed` / `historical_reference_only`, and active implementation must use the named successor plans and ADRs instead.
 - Stage execution routing is explicit in `plans/018`, `plans/019`, and `plans/020`: Claude Code owns the provider-authority track, while Antigravity owns the benchmark and one-shot delivery tracks. High effort is allowed when justified by contract irreversibility, identity/arbitration, freshness, benchmark verdicts, public defaults, conflicting evidence, or repeated verification failures, and a high-effort handoff must record its concrete justification. Every stage-closing model must read the candidate next stage, cross-plan gates, progress/MEMORY/SPEC state, completed diff and checks, file ownership, and current model/quota constraints, then record a `NextStageRoutingRecommendation`; it may recommend `stop` or `defer` and never auto-bypasses an admission gate.
 - Dedicated `impact_analysis` now computes impact hints directly from the resolved selection artifact instead of reading `expand_context`'s budget-gated `:impact_hints` field; it must return a non-null map with `:callers`, `:dependents`, `:related_tests`, and `:risky_neighbors` vectors even when `expand_context` omits impact hints for token-budget reasons.
@@ -562,6 +562,54 @@ after this memory file.
    and `adapters.clj` wiring (Stage 6 owns the default switch), SCIP
    relationships and `call/*`, nested Java types; newly named: batch providers
    run sequentially, which is right at two providers.
+   **Stage 5a is COMPLETE (2026-09-05): the live-overlay seam plus a real
+   TypeScript backend, opt-in and default-off.** The owner split Stage 5 into 5a
+   (language-neutral seam + one complete real provider) and 5b (Java), because a
+   seam proved only against mocks would have its lifecycle assumptions rewritten
+   when a real server arrived, and jdtls is separate infrastructure.
+   `semidx.runtime.provider-overlay` owns the roles, one session per operation,
+   source identity, the failure taxonomy, coverage, and delivery into per-file
+   arbitration through the same injected `run-provider` role the batch tier
+   uses; `providers.lsp-typescript` is thin. **Four things the real server taught
+   us, all reproduced**: (1) `typescript-language-server` locates TypeScript from
+   the *workspace*, not from beside itself, so a workspace without
+   `node_modules/typescript` fails `initialize` unless `tsserver.path` is passed
+   in `initializationOptions` — which the LSP client could not send, hence the
+   new passthrough; (2) the `typescript` pin is load-bearing — an unpinned
+   install resolved 7.0.2, whose native compiler ships **no `lib/tsserver.js`**,
+   so the toolchain pins 5.9.3 and the setup script fails closed on its absence;
+   (3) `ProcessBuilder` resolves a relative program against the process's working
+   directory, which is the *workspace*, so both resolvers must return absolute
+   paths — the same trap Stage 3 recorded for `clojure.java.shell/sh`, in a
+   different API; (4) `textDocument/references` returns nothing once the document
+   is closed (so the document is opened once and held, not via
+   `text-document-symbols!`), and `File.toURI` produces `file:/Users/...` while
+   the server answers `file:///Users/...`, so URIs must be compared as decoded
+   paths or every location is discarded silently. **Kernel defect found by
+   writing the required merge test**: `merge-one-canonical-fact` discards
+   `:value` entirely, so two `exact` tiers describing one definition differently
+   produced one silent canonical fact — Stage 1's "equal-authority
+   contradictions are observable" was not actually true. `arbitrate-facts` now
+   emits `:equal_authority_value_conflict`; identity, authority, and the merge
+   are unchanged, only fields present in both values are compared, and unequal
+   authority is never a conflict. **Two planner generalisations**:
+   `:batch_statuses` became `:observed_statuses`, merged only where
+   `providers/locally-probed?` is false, so an external status can never override
+   a real tree-sitter probe; and an unobserved external tier no longer widens the
+   operation set — putting `typescript-lsp` in the catalog initially added a
+   permanently-gapped `references` operation to every TypeScript plan, so
+   `providers/statuses` now returns only what it can probe rather than
+   present-and-unavailable entries. Source identity decides overlay scope by
+   itself: disk text anchors on the file-bytes digest (the same anchor the other
+   tiers use), a live buffer anchors on `overlay_text_sha256` plus the document
+   version, so dirty evidence cannot pose as a claim about the file. Failure
+   taxonomy is seven kinds — the plan's six plus `server_error` for a JSON-RPC
+   error response — and all seven are reachable in a test. Suite: 602 tests /
+   3303 assertions / 0 failures with both `SEMIDX_REQUIRE_*_TOOLCHAINS` set, so
+   both end-to-end tests are asserted to run rather than skip. Deferred: Stage 5b
+   (blocked on repo-managed jdtls; a Homebrew jdtls does not satisfy ADR-047),
+   reference lookup bounded at 32 definitions per document, and documentSymbol
+   kinds outside function/method/term recorded as unmapped rather than modelled.
 3. Execute `plans/019` as an additive one-shot delivery track after its budget
    ledger and the `plans/020` run/strategy contracts are accepted. Its evaluation
    stage contributes adapters to `plans/020`; it does not own a second corpus,

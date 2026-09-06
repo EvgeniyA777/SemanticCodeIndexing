@@ -137,7 +137,7 @@
   (let [plan (selection/provider-plan {:path ts-path
                                        :statuses {"typescript-regex" (status "ready")}
                                        :batch_coverage {"scip-typescript" [ts-path]}
-                                       :batch_statuses scip-ready})]
+                                       :observed_statuses scip-ready})]
     (testing "exact outranks the file tiers for definitions"
       (is (= ["scip-typescript" "typescript-regex"]
              (mapv :provider_id (get-in plan [:operations :definitions :providers])))))
@@ -151,7 +151,7 @@
     (let [plan (selection/provider-plan {:path ts-path
                                          :statuses {"typescript-regex" (status "ready")}
                                          :batch_coverage {"scip-typescript" ["src/other.ts"]}
-                                         :batch_statuses scip-ready})]
+                                         :observed_statuses scip-ready})]
       (is (= ["typescript-regex"]
              (mapv :provider_id (get-in plan [:operations :definitions :providers]))))
       (is (= [:definitions] (vec (keys (:operations plan))))))))

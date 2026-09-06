@@ -80,7 +80,7 @@
   (case method
     "workspace/configuration" (mapv (constantly nil) (or (:items params) []))
     "workspace/workspaceFolders" [{:uri (:root_uri session)
-                                     :name (:root_name session)}]
+                                   :name (:root_name session)}]
     "client/registerCapability" nil
     "client/unregisterCapability" nil
     "window/workDoneProgress/create" nil
@@ -164,7 +164,15 @@
     (close-session! session)))
 
 (defn start-session!
-  [{:keys [root_path command timeout_ms client_name]
+  "Start an LSP server over stdio and complete the initialize handshake.
+
+  `:initialization_options` is passed through as the LSP `initializationOptions`
+  field. It is required by servers that cannot locate their own backend from the
+  workspace alone — `typescript-language-server`, for one, refuses to initialize
+  against a workspace that has no `node_modules/typescript` unless it is given a
+  `tsserver.path` — so a caller must be able to supply it without this client
+  knowing anything about the server."
+  [{:keys [root_path command timeout_ms client_name initialization_options]
     :or {timeout_ms default-timeout-ms
          client_name "semidx"}}]
   (let [root-file (.getCanonicalFile (java.io.File. (str root_path)))
@@ -188,32 +196,43 @@
       (let [result (request!
                     session
                     "initialize"
-                    {:processId (.pid (java.lang.ProcessHandle/current))
-                     :clientInfo {:name client_name :version "1"}
-                     :rootUri root-uri
-                     :workspaceFolders [{:uri root-uri :name (.getName root-file)}]
-                     :capabilities {:workspace {:configuration true
-                                                :workspaceFolders true}
-                                    :textDocument {:documentSymbol
-                                                   {:hierarchicalDocumentSymbolSupport true}}}})]
+                    (cond-> {:processId (.pid (java.lang.ProcessHandle/current))
+                             :clientInfo {:name client_name :version "1"}
+                             :rootUri root-uri
+                             :workspaceFolders [{:uri root-uri :name (.getName root-file)}]
+                             :capabilities {:workspace {:configuration true
+                                                        :workspaceFolders true}
+                                            :textDocument {:documentSymbol
+                                                           {:hierarchicalDocumentSymbolSupport true}}}}
+                      (seq initialization_options)
+                      (assoc :initializationOptions initialization_options)))]
         (notify! session "initialized" {})
         (assoc session :server_capabilities (:capabilities result)
-                       :server_info (:serverInfo result)))
+               :server_info (:serverInfo result)))
       (catch Exception error
         (close-session! session)
         (throw error)))))
 
 (defn text-document-symbols!
-  [session root-path path text]
-  (let [uri (str (.toURI (.getCanonicalFile (java.io.File. (str root-path) (str path)))))]
-    (notify! session "textDocument/didOpen"
-             {:textDocument {:uri uri
-                             :languageId "zig"
-                             :version 1
-                             :text text}})
-    (try
-      (request! session "textDocument/documentSymbol"
-                {:textDocument {:uri uri}})
-      (finally
-        (notify! session "textDocument/didClose"
-                 {:textDocument {:uri uri}})))))
+  "Open one document with the exact text being indexed, request its symbols, and
+  close it again.
+
+  `language_id` and `version` are supplied by the caller: this client knows no
+  languages, and the document version is part of the source identity a provider
+  anchors its evidence to."
+  ([session root-path path text]
+   (text-document-symbols! session root-path path text {}))
+  ([session root-path path text {:keys [language_id version]
+                                 :or {version 1}}]
+   (let [uri (str (.toURI (.getCanonicalFile (java.io.File. (str root-path) (str path)))))]
+     (notify! session "textDocument/didOpen"
+              {:textDocument {:uri uri
+                              :languageId (or language_id "plaintext")
+                              :version version
+                              :text text}})
+     (try
+       (request! session "textDocument/documentSymbol"
+                 {:textDocument {:uri uri}})
+       (finally
+         (notify! session "textDocument/didClose"
+                  {:textDocument {:uri uri}}))))))

@@ -479,7 +479,8 @@ medium effort unless new evidence raises the risk.
 | 3 — TypeScript SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | source identity and cross-provider normalization enter the weakest current lane |
 | 4 — Java SCIP | Claude Code team lead | Claude Sonnet 4.6 | high | overload, constructor, import, and relation identities need careful parity |
 | 4.5 — project-scoped provider consolidation | Claude Code team lead | Claude Opus 4.6 | high | the catalog/planner seam this stage builds is the seam Stage 6 flips; a false provider status or a plan that is not byte-identical without batch input changes default behavior silently |
-| 5 — LSP overlay | Claude Code team lead | Claude Opus 4.6 for readiness/review; Claude Sonnet 4.6 only for bounded implementation after a locked subplan | high for readiness and final review; medium for mechanical implementation | live freshness, document versions, cancellation, and exact-authority conflicts need high-effort decisions; descriptor/runner/test wiring may use medium effort only after those decisions are explicit |
+| 5a — LSP overlay seam and TypeScript live provider | Claude Code team lead | Claude Opus 4.6 for readiness/review; Claude Sonnet 4.6 only for bounded implementation after a locked subplan | high for readiness and final review; medium for mechanical implementation | live freshness, document versions, cancellation, and exact-authority conflicts need high-effort decisions; descriptor/runner/test wiring may use medium effort only after those decisions are explicit. The seam built here is the one Java later reuses, so a TypeScript-shaped assumption inside it is a Stage 5b defect paid for twice |
+| 5b — Java LSP provider | Claude Code team lead | Claude Opus 4.6 | high | blocked on a repo-managed jdtls toolchain decision; workspace initialization and classpath discovery are their own risk and must not be mixed into the seam |
 | 6 — default switch | Claude Code team lead | Claude Opus 4.6 | high | this is the public authority and truthful-degradation decision gate |
 | 7 — cleanup | Claude Code team lead | Claude Sonnet 4.6 | medium | removal follows proven compatibility and retention gates |
 
@@ -866,15 +867,45 @@ must stop and return to high-effort planning instead of guessing.
 Goal: add exact evidence for live or dirty workspace content not represented by
 the batch SCIP snapshot.
 
-Deliverables:
+Scope split (owner decision, 2026-09-05): Stage 5 is delivered as **5a** — the
+language-neutral overlay seam plus one complete real provider — and **5b** — the
+Java provider over that same seam. The reasoning is recorded because it
+constrains 5a rather than merely ordering it: a seam proved only against mocks
+would have its lifecycle, `initialize`, `didOpen`, document-version, and timeout
+assumptions rewritten the moment a real server arrived, so 5a must ship a real
+backend; and jdtls is an infrastructure problem of its own (workspace directory,
+initialization latency, classpath discovery, toolchain size) that would mix two
+unrelated risks into one stage. TypeScript is therefore 5a's backend, and no
+TypeScript lifecycle assumption may enter the seam.
 
-- Narrow host-integrated LSP fact-source role; semidx does not implement an LSP
-  server.
-- Workspace-root, document-version, and content-digest validation.
-- TypeScript live overlay first, then Java.
-- Bounded requests, cancellation, timeout, and server-unavailable behavior.
-- Merge tests for clean agreement, dirty LSP override, stale SCIP exclusion, and
-  equal-authority conflict.
+#### Stage 5a. LSP Overlay Seam And TypeScript Live Provider
+
+Deliverables — language-neutral, and required to stay so:
+
+- An `lsp-overlay` / `lsp-provider` boundary. `provider-selection` and
+  `provider-execution` must not name `typescript-lsp` or branch on it.
+- Descriptor fields: `:scope :file`, `:provider_family :lsp`,
+  `:live_overlay true`.
+- Source-identity contract: workspace root, path, and document version or
+  content digest.
+- Lifecycle wrapper: one LSP session per indexing/overlay operation, following
+  the ADR-049 pattern already proven by the Zig lane.
+- An injectable fact-source role: document -> LSP result -> `FactBatch`.
+- One failure taxonomy for every LSP provider: `unavailable`, `timeout`,
+  `crash`, `stale_document`, `version_mismatch`, `malformed_response`.
+- Merge tests driven through the injected fact-source: clean agreement, dirty
+  LSP override, stale SCIP exclusion, and equal-authority conflict.
+
+Deliverables — TypeScript-specific, and deliberately thin:
+
+- Repo-managed `typescript-language-server` install and resolution, following
+  the ADR-047 chain used by the SCIP toolchains.
+- An explicit rejection of `tsserver`: the TypeScript package already vendored
+  under `.scip-toolchain` speaks its own protocol, not LSP, and must not be
+  reused as one.
+- `documentSymbol` and reference extraction mapping.
+- Normalization of TypeScript LSP symbols into the existing `CanonicalFactKey`.
+- The one real-toolchain end-to-end test.
 
 Exit criteria:
 
@@ -882,8 +913,26 @@ Exit criteria:
 - Dirty-file LSP evidence affects only the intended overlay/snapshot scope.
 - LSP timeout or crash cannot fail unrelated files or the whole index.
 - Batch snapshots remain reproducible when live overlay mode is disabled.
+- No TypeScript-only lifecycle assumption — npm/node process shape, CLI naming,
+  or startup semantics — appears in the seam, the planner, or the executor.
+- Every failure-taxonomy value is reachable in a test.
 
 Commit boundary: LSP remains opt-in and shadowed.
+
+#### Stage 5b. Java LSP Provider
+
+Deferred, and blocked rather than merely unscheduled.
+
+- It consumes the Stage 5a seam unchanged; if it cannot, that is a finding
+  against 5a, not a reason to widen 5b.
+- jdtls is **not accepted** until a repo-managed toolchain decision is made. A
+  server resolved from ambient `PATH` does not satisfy ADR-047, and the
+  toolchain's size and workspace-initialization model need an explicit owner
+  decision first.
+- The Java exact tier must not assume a typed-signature capability; the identity
+  fixture holds `java-lsp` at the `arity_only` floor pending real jdtls output.
+
+Commit boundary: not started.
 
 ### Stage 6. Default Authority Switch And Truthful Degradation
 

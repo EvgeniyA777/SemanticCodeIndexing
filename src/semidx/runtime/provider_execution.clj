@@ -136,13 +136,13 @@
   This is the Stage 2 seam end to end. Its result is a shadow artifact: no
   caller writes it into a snapshot, and default extraction is untouched.
 
-  `:batch_coverage` and `:batch_statuses` are the Stage 4.5 passthrough to
-  `provider-selection/provider-plan`. They let a project provider's already
-  computed facts join this file's arbitration, delivered through the injected
-  `run-provider` role; with neither supplied the plan and the result are what
-  they were before Stage 4.5."
+  `:batch_coverage` and `:observed_statuses` are the passthrough to
+  `provider-selection/provider-plan`. They let a project batch or a live overlay
+  provider's already computed facts join this file's arbitration, delivered
+  through the injected `run-provider` role; with neither supplied the plan and
+  the result are what they were before those tiers existed."
   [{:keys [root_path path lines parser_opts mode denied_providers execution_policy
-           run-provider batch_coverage batch_statuses]
+           run-provider batch_coverage observed_statuses]
     :or {mode "shadow"}}]
   (let [lines (or lines (shared/slurp-lines (File. (str root_path) (str path))))
         source-identity (providers/source-identity {:root_path root_path
@@ -156,7 +156,7 @@
                :denied_providers denied_providers
                :execution_policy execution_policy
                :batch_coverage batch_coverage
-               :batch_statuses batch_statuses})
+               :observed_statuses observed_statuses})
         execution (execute-plan plan {:root_path root_path
                                       :lines lines
                                       :parser_opts parser_opts

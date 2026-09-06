@@ -418,7 +418,8 @@
             (f (assoc parser-opts
                       :zig_lsp_fact_source
                       (fn [{:keys [root_path path text]}]
-                        {:symbols (lsp/text-document-symbols! session root_path path text)
+                        {:symbols (lsp/text-document-symbols! session root_path path text
+                                                              {:language_id "zig"})
                          :server_info (:server_info session)})))
             (finally
               (lsp/stop-session! session)))

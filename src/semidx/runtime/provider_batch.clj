@@ -324,7 +324,7 @@
                         :denied_providers denied_providers
                         :execution_policy execution_policy
                         :batch_coverage coverage
-                        :batch_statuses statuses
+                        :observed_statuses statuses
                         :run-provider runner}))
                     paths)]
     {:root_path root_path

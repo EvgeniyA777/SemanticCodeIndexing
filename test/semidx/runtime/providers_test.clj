@@ -32,8 +32,10 @@
 (deftest selectors-choose-providers-by-path-test
   (is (= #{"java-tree-sitter" "java-regex"}
          (set (map :provider_id (providers/descriptors-for java-path)))))
-  (is (= #{"typescript-tree-sitter" "typescript-regex"}
-         (set (map :provider_id (providers/descriptors-for ts-path)))))
+  (is (= #{"typescript-tree-sitter" "typescript-regex" "typescript-lsp"}
+         (set (map :provider_id (providers/descriptors-for ts-path))))
+      "the live overlay tier is file-scoped and eligible by path; whether it is
+       planned depends on an observed status, not on the selector")
   (is (empty? (providers/descriptors-for "src/main.py")))
   (testing "an operation the catalog does not claim selects nothing"
     (is (empty? (providers/descriptors-for java-path :type_hierarchy)))))
@@ -198,13 +200,22 @@
     (is (= 2 (count (providers/descriptors-for-project))))))
 
 (deftest path-eligibility-never-yields-a-project-provider-test
-  (testing "a .ts path selects only the file-scoped tiers"
-    (is (= ["typescript-tree-sitter" "typescript-regex"]
-           (mapv :provider_id (providers/descriptors-for ts-path)))))
+  (testing "a .ts path selects the file-scoped tiers and no project provider"
+    (let [eligible (set (map :provider_id (providers/descriptors-for ts-path)))]
+      (is (= #{"typescript-tree-sitter" "typescript-regex" "typescript-lsp"} eligible))
+      (is (not (contains? eligible "scip-typescript")))))
 
   (testing "and a .java path likewise"
-    (is (= ["java-tree-sitter" "java-regex"]
-           (mapv :provider_id (providers/descriptors-for java-path))))))
+    (let [eligible (set (map :provider_id (providers/descriptors-for java-path)))]
+      (is (= #{"java-tree-sitter" "java-regex"} eligible))
+      (is (not (contains? eligible "scip-java"))))))
+
+(deftest statuses-cover-only-what-the-catalog-can-probe-test
+  (testing "an unprobed tier is absent from the catalog's statuses, not present
+            and unavailable: a present entry would read as a probe nobody ran"
+    (let [observed (providers/statuses ts-path {})]
+      (is (= #{"typescript-tree-sitter" "typescript-regex"} (set (keys observed))))
+      (is (not (contains? observed "typescript-lsp"))))))
 
 (deftest project-scoped-status-is-refused-not-guessed-test
   (testing "the file probe cannot observe a SCIP toolchain and must not claim it can"

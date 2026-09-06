@@ -114,28 +114,44 @@
   `operations` defaults to every operation the eligible descriptors claim, so a
   caller cannot silently plan fewer operations than the catalog supports.
 
-  Stage 4.5 adds two optional inputs, both absent by default:
+  Two optional inputs, both absent by default:
 
   - `:batch_coverage` — `provider_id -> covered paths` from a completed project
-    provider run;
-  - `:batch_statuses` — `provider_id -> status` for those providers, observed by
-    `semidx.runtime.provider-batch`. Without it a project candidate is excluded
-    as `provider_status_unknown`, exactly like any unobserved provider.
+    provider run (Stage 4.5). A project provider becomes a candidate for this
+    file only where a run actually covered it.
+  - `:observed_statuses` — statuses for providers the catalog cannot probe
+    itself: project batch indexers and language servers, observed by the
+    boundary that owns their lifecycle. They are merged only for candidates
+    where `providers/locally-probed?` is false, so an externally supplied status
+    can never override a real tree-sitter or regex probe. Without one such a
+    candidate is excluded as `provider_status_unknown`, exactly like any
+    unobserved provider.
 
   With neither supplied, the candidate list, the statuses, and the operation set
-  are the ones this function produced before Stage 4.5, so the plan is
-  unchanged."
+  are what this function produced before the provider tiers were added, so the
+  plan is unchanged."
   [{:keys [path language source_identity operations mode parser_opts
-           execution_policy denied_providers statuses batch_coverage batch_statuses]
+           execution_policy denied_providers statuses batch_coverage
+           observed_statuses]
     :or {mode default-mode}}]
   (let [batch-descriptors (batch-descriptors-for path batch_coverage)
         descriptors (into (providers/descriptors-for path) batch-descriptors)
+        externally-probed (->> descriptors
+                               (remove providers/locally-probed?)
+                               (mapv :provider_id))
         statuses (merge (or statuses (providers/statuses path (or parser_opts {})))
-                        (select-keys (or batch_statuses {})
-                                     (mapv :provider_id batch-descriptors)))
+                        (select-keys (or observed_statuses {}) externally-probed))
         policy (merge default-execution-policy execution_policy)
+        ;; An externally probed provider widens the operation set only once it
+        ;; has actually been observed. The catalog knowing that some tier could
+        ;; answer `references` is not a reason to plan that operation on every
+        ;; file and report a permanent gap for it; that is the same rule Stage 2
+        ;; applied when it refused to claim operations nothing produces.
         operations (or (seq operations)
                        (->> descriptors
+                            (filter (fn [descriptor]
+                                      (or (providers/locally-probed? descriptor)
+                                          (contains? statuses (:provider_id descriptor)))))
                             (mapcat (comp keys :operation_capabilities))
                             distinct
                             sort

@@ -124,15 +124,23 @@ jobs:
       - name: Setup Java SCIP toolchain
         run: ./scripts/setup-scip-java.sh
 
+      # Same reasoning as the SCIP steps: install without --write-env-file, so
+      # the end-to-end tests exercise the repo-managed resolution step they are
+      # named for rather than the environment override that outranks it.
+      - name: Setup TypeScript LSP toolchain
+        run: ./scripts/setup-typescript-lsp.sh
+
       - name: Verify generated gRPC sources
         run: clojure -T:build grpc-verify-generated
 
       - name: Run MVP Gates
         env:
           # Assert the end-to-end tests actually ran instead of trusting the
-          # steps above: with this set, an unresolved SCIP toolchain fails the
-          # test rather than printing a skip.
+          # steps above: with these set, an unresolved toolchain fails the test
+          # rather than printing a skip. The two flags are separate because
+          # installing a toolchain and requiring it are separate decisions.
           SEMIDX_REQUIRE_SCIP_TOOLCHAINS: "1"
+          SEMIDX_REQUIRE_LSP_TOOLCHAINS: "1"
         run: ./scripts/run-mvp-gates.sh
 
   semantic-quality-report:

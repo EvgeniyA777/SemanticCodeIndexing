@@ -1,0 +1,10 @@
+{
+  "name": "semidx-lsp-toolchain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Repo-managed LSP toolchain for the plans/018 Stage 5a TypeScript live overlay. typescript is a direct dependency here, not a transitive one: typescript-language-server drives a classic tsserver, and TypeScript 7 ships a native compiler with no lib/tsserver.js, so the major version must be pinned deliberately rather than floated.",
+  "dependencies": {
+    "typescript": "5.9.3",
+    "typescript-language-server": "6.0.0"
+  }
+}

@@ -186,7 +186,7 @@
                  :flow_identity {:arg_index 0}}
         a (fa/arbitrate-facts [{:key rel-key
                                 :evidence [{:provider_id "scip-java" :authority "exact" :freshness "exact"
-               :source_identity {:content_digest "sha256:orderservice"}}]}
+                                            :source_identity {:content_digest "sha256:orderservice"}}]}
                                {:key rel-key
                                 :evidence [{:provider_id "java-regex" :authority "heuristic" :freshness "unknown"}]}])]
     (is (= 1 (count (:facts a))) "same relation identity from two providers merges to one fact")
@@ -479,3 +479,51 @@
         (finally
           (jdbc/execute! ds [(str "drop table if exists " table)]))))
     (is true "SEMIDX_TEST_POSTGRES_URL is not set; skipping postgres fact round-trip test.")))
+
+;; --- Stage 5a: equal-authority contradictions are observable -------------
+
+(defn- valued-fact [provider-id authority value]
+  {:key {:fact_kind "unit"
+         :language "typescript"
+         :path "src/orders.ts"
+         :owner "src.orders"
+         :symbol "src.orders/normalize"
+         :overload_identity nil}
+   :evidence [{:provider_id provider-id
+               :provider_version "1"
+               :authority authority
+               :operation "definitions"
+               :freshness "exact"
+               :source_identity {:content_digest "sha256:x"}}]
+   :value value})
+
+(deftest equal-authority-value-conflict-is-reported-test
+  (testing "merging keeps all evidence but discards :value, so without this
+            diagnostic two exact tiers disagreeing produced one silent fact"
+    (let [{:keys [facts diagnostics]}
+          (fa/arbitrate-facts [(valued-fact "scip-typescript" "exact" {:kind "term"})
+                               (valued-fact "typescript-lsp" "exact" {:kind "function"})])
+          conflict (first (filter #(= :equal_authority_value_conflict (:code %)) diagnostics))]
+      (is (= 1 (count facts)) "identity and merge behaviour are unchanged")
+      (is (= "exact" (:authority (first facts))))
+      (is (some? conflict))
+      (is (= [:kind] (:fields conflict)))
+      (is (= "exact" (:authority conflict)))
+      (is (= ["scip-typescript" "typescript-lsp"] (:provider_ids conflict))))))
+
+(deftest unequal-authority-is-not-a-conflict-test
+  (testing "a lower tier disagreeing is the normal case the authority ladder
+            already resolves, and must not be reported as a contradiction"
+    (let [{:keys [diagnostics]}
+          (fa/arbitrate-facts [(valued-fact "typescript-lsp" "exact" {:kind "function"})
+                               (valued-fact "typescript-regex" "heuristic" {:kind "term"})])]
+      (is (empty? (filter #(= :equal_authority_value_conflict (:code %)) diagnostics))))))
+
+(deftest extra-native-detail-is-not-a-conflict-test
+  (testing "only fields present in both values are compared, so a provider that
+            carries more detail does not read as a disagreement"
+    (let [{:keys [diagnostics]}
+          (fa/arbitrate-facts [(valued-fact "scip-typescript" "exact" {:kind "function"})
+                               (valued-fact "typescript-lsp" "exact"
+                                            {:kind "function" :signature "f()"})])]
+      (is (empty? (filter #(= :equal_authority_value_conflict (:code %)) diagnostics))))))

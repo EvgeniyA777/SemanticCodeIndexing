@@ -28,6 +28,15 @@
 
 (def catalog-version "1")
 
+(def locally-probed-engines
+  "Engines this catalog can observe by itself.
+
+  Everything else — a project batch indexer, a language server — is probed by
+  the boundary that owns its lifecycle, and its status reaches planning through
+  `provider-selection/provider-plan`'s `:observed_statuses`. Keeping the set
+  explicit is what stops an unprobed provider from defaulting to `ready`."
+  #{:tree-sitter :regex})
+
 (def descriptors
   "Versioned file-scoped provider descriptors.
 
@@ -73,7 +82,24 @@
     :engine :regex
     :scope :file
     :selectors {:extensions [".ts" ".tsx"]}
-    :operation_capabilities {:definitions "heuristic"}}])
+    :operation_capabilities {:definitions "heuristic"}}
+   ;; Stage 5a. File-scoped like the parsers above — a language server answers
+   ;; about one document — but neither probed nor executed by this catalog:
+   ;; `semidx.runtime.provider-overlay` owns the session lifecycle and supplies
+   ;; the facts through the injected `run-provider` role. `:live_overlay` marks
+   ;; the tier whose evidence may describe buffer content that differs from the
+   ;; file on disk.
+   {:provider_id "typescript-lsp"
+    :provider_version "1"
+    :languages ["typescript"]
+    :classification "semantic"
+    :engine :lsp
+    :scope :file
+    :provider_family :lsp
+    :live_overlay true
+    :selectors {:extensions [".ts" ".tsx"]}
+    :operation_capabilities {:definitions "exact"
+                             :references "exact"}}])
 
 (def project-descriptors
   "Versioned project-scoped provider descriptors (Stage 4.5).
@@ -161,19 +187,27 @@
 
 (defn- now-iso [] (str (Instant/now)))
 
+(defn locally-probed?
+  "True when this catalog can observe the provider's runtime status itself."
+  [descriptor]
+  (boolean (and (= :file (:scope descriptor))
+                (contains? locally-probed-engines (:engine descriptor)))))
+
 (defn provider-status
-  "Observe whether a file-scoped provider can run right now.
+  "Observe whether a locally probed provider can run right now.
 
   A tree-sitter provider needs both the CLI and a grammar for its language; the
   reason codes name which one is missing, so a degradation is explicit rather
   than an empty result.
 
-  A project-scoped provider is refused here rather than answered. This probe
-  reports `ready` for every engine it does not know how to test, so a SCIP
-  descriptor reaching it would be declared ready without its toolchain having
-  been looked at once — a false status the planner would then admit. Project
-  status is observed by `semidx.runtime.provider-batch/project-statuses`, which
-  calls each adapter's own probe."
+  Anything this catalog cannot test is refused rather than answered, and the
+  refusal is by construction: the probe reports `ready` only for the engines in
+  `locally-probed-engines`. A project batch indexer or a language server
+  reaching here would otherwise be declared ready without its toolchain having
+  been looked at once — a false status the planner would then admit. Those
+  statuses come from the boundary that owns the lifecycle
+  (`provider-batch/project-statuses`, `provider-overlay/overlay-statuses`) and
+  enter planning as `:observed_statuses`."
   ([provider-id] (provider-status provider-id {}))
   ([provider-id parser-opts]
    (let [descriptor (descriptor provider-id)
@@ -185,6 +219,9 @@
 
        (not= :file (:scope descriptor))
        (assoc base :state "unavailable" :reason_codes ["provider_scope_not_file"])
+
+       (not (contains? locally-probed-engines (:engine descriptor)))
+       (assoc base :state "unavailable" :reason_codes ["provider_engine_not_probed_here"])
 
        (not= :tree-sitter (:engine descriptor))
        (assoc base :state "ready" :reason_codes [])
@@ -200,11 +237,17 @@
                 :reason_codes reasons))))))
 
 (defn statuses
-  "Status for every descriptor eligible for `path`, keyed by provider id."
+  "Status for every locally probed descriptor eligible for `path`, keyed by
+  provider id.
+
+  Providers this catalog cannot test are absent rather than present-and-
+  unavailable. Their status belongs to the boundary that owns their lifecycle,
+  and a plan that has not been given one must treat the provider as unobserved:
+  present-but-unavailable would look like a probe result nobody performed."
   ([path] (statuses path {}))
   ([path parser-opts]
    (into {} (map (fn [d] [(:provider_id d) (provider-status (:provider_id d) parser-opts)]))
-         (descriptors-for path))))
+         (filter locally-probed? (descriptors-for path)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Source identity
@@ -351,11 +394,12 @@
   decide authority beyond the descriptor's static claim, does not merge, and
   does not touch the default extraction path.
 
-  A project-scoped provider is refused rather than run. `parse-with-engine`
-  dispatches on language, not engine, so a SCIP descriptor arriving here would
-  quietly parse the file with the language lane's own parser and return those
-  units under an `exact` claim. Project providers are executed by
-  `semidx.runtime.provider-batch`, and their facts reach per-file execution
+  A provider this catalog cannot execute is refused rather than run.
+  `parse-with-engine` dispatches on language, not engine, so a SCIP or LSP
+  descriptor arriving here would quietly parse the file with the language lane's
+  own parser and return those units under an `exact` claim. Those providers are
+  executed by `semidx.runtime.provider-batch` and
+  `semidx.runtime.provider-overlay`, and their facts reach per-file execution
   through the injected `run-provider` role."
   [provider-id {:keys [path lines] :as request}]
   (let [descriptor (or (descriptor provider-id)
@@ -367,6 +411,11 @@
                             {:error_code :provider_scope_not_file
                              :provider_id provider-id
                              :scope (:scope descriptor)})))
+        _ (when-not (contains? locally-probed-engines (:engine descriptor))
+            (throw (ex-info "run-provider executes locally probed engines only"
+                            {:error_code :provider_engine_not_executable_here
+                             :provider_id provider-id
+                             :engine (:engine descriptor)})))
         language (first (:languages descriptor))
         authority (get-in descriptor [:operation_capabilities :definitions])
         parsed (parse-with-engine descriptor request)

@@ -244,6 +244,49 @@
      :authority authority
      :evidence evidences}))
 
+(defn- fact-authority [fact]
+  (strongest-authority (:evidence fact)))
+
+(defn- equal-authority-value-conflict
+  "Diagnostic when two providers of the same strongest authority describe one
+  canonical fact differently.
+
+  Until Stage 5a this was invisible: merging keeps all evidence but discards
+  `:value` entirely, so a SCIP and an LSP tier disagreeing about the same
+  definition produced one silent canonical fact. Authority and identity are
+  unchanged by this check — the disagreement is reported, not resolved, which is
+  what the plan means by an equal-authority contradiction being observable.
+
+  Only fields present in both values are compared, so a provider carrying extra
+  native detail does not read as a contradiction."
+  [key-id facts]
+  (let [authority (strongest-authority (mapcat :evidence facts))
+        top (filter #(= authority (fact-authority %)) facts)
+        values (->> top (keep :value) distinct vec)]
+    (when (< 1 (count values))
+      (let [shared (reduce (fn [acc value] (filter (set (keys value)) acc))
+                           (keys (first values))
+                           (rest values))
+            conflicting (->> shared
+                             (filter (fn [field]
+                                       (< 1 (count (distinct (map #(get % field) values))))))
+                             sort
+                             vec)]
+        (when (seq conflicting)
+          {:code :equal_authority_value_conflict
+           :canonical_fact_key_id key-id
+           :authority authority
+           :fields conflicting
+           :provider_ids (->> top
+                              (mapcat :evidence)
+                              (filter #(= authority (:authority %)))
+                              (map :provider_id)
+                              distinct
+                              sort
+                              vec)
+           :message (str "Providers of equal authority " (pr-str authority)
+                         " disagree on " (pr-str conflicting) ".")})))))
+
 ;; --- FactBatch ---
 
 (def batch-schema-version "1")
@@ -339,15 +382,21 @@
     into either overload.
 
   Merge never lets lower authority overwrite higher authority; all evidence is
-  retained; output ordering is deterministic regardless of input order. Returns
-  {:facts <sorted vec of canonical facts> :diagnostics <vec>}."
+  retained; output ordering is deterministic regardless of input order. Two
+  providers of equal strongest authority describing the same fact differently
+  are reported as an `:equal_authority_value_conflict` diagnostic; the merge
+  itself is unchanged, because the contradiction is theirs to explain and not
+  this kernel's to resolve. Returns {:facts <sorted vec of canonical facts>
+  :diagnostics <vec>}."
   [facts]
   (let [grouped (group-by (fn [f] (canonical-fact-key-id (:key f))) facts)
         result
         (reduce
          (fn [{:keys [facts diagnostics]} [key-id group]]
            (let [core-fields (core-key-fields (:key (first group)))
-                 sig-keys (typed-signature-keys group)]
+                 sig-keys (typed-signature-keys group)
+                 conflict (equal-authority-value-conflict key-id group)
+                 diagnostics (cond-> diagnostics conflict (conj conflict))]
              (if (>= (count sig-keys) 2)
                ;; Distinct same-arity overloads: split by typed signature.
                (let [typed-facts (filter #(get-in % [:key :overload_identity :signature_key]) group)
