@@ -122,41 +122,61 @@
     (cond-> {:surface "mcp"
              :session_id (:session_id state*)}
       (:name client-info) (assoc :actor_id (:name client-info))
-      (:tenant_id state*) (assoc :tenant_id (:tenant_id state*)))))
+      (:tenant_id state*) (assoc :tenant_id (:tenant_id state*))
+      ;; The task declared through `set_task_context`, if any. It describes the
+      ;; work in progress rather than one request, so every call in the staged
+      ;; flow inherits it without the caller repeating it.
+      (:task_id state*) (assoc :task_id (:task_id state*)))))
+
+(defn- resolve-identity
+  "Reconcile a session-scoped identity with one supplied on the call.
+
+  The session-scoped value wins, because it describes the working context rather
+  than a single request. A per-call value that loses is returned as `:evidence`
+  instead of being dropped — it is what an offline join against a host
+  transcript keys on. With no session-scoped value the per-call one is used
+  outright, which keeps the pre-existing `query.trace` contract working."
+  [session-value supplied-value]
+  (if session-value
+    {:value session-value
+     :evidence (when (and supplied-value (not= session-value supplied-value))
+                 supplied-value)}
+    {:value supplied-value}))
 
 (defn record-mcp-event!
   "Record one MCP usage event, merging the session's own identity with whatever
   the request supplied.
 
-  Three rules, all from plans/022 Stage 0 findings:
+  Identity rules, all from plans/022 Stage 0 findings:
 
   - a trace **refines** identity, it never erases it. Fields the request did not
     supply are dropped before merging, so a query without a trace no longer
     blanks the server's `actor_id` or `tenant_id`;
-  - the **server session id wins outright**. It is the identity of the MCP
-    session itself, so a client-supplied `session_id` cannot replace it. Before
-    this, `resolve_context` was the one operation that lost its session id —
-    null when no trace was sent, and a client value when one was — while every
-    neighbouring call in the same session carried the server id, so events did
-    not group;
-  - a client session id that lost is **kept as evidence**, in
-    `payload.client_session_id`, rather than discarded. It is what an offline
-    join against a host transcript keys on, and it is only recorded when it
-    differs from the server's, so the common case stays unchanged."
+  - **session-scoped identity wins**: the server session id is the identity of
+    the MCP session itself, and a task declared through `set_task_context` is
+    the identity of the work in progress. Before this, `resolve_context` was the
+    one operation that lost its session id, so events did not group;
+  - a per-call value that loses is **kept as evidence** in
+    `payload.client_session_id` / `payload.client_task_id`, only when it differs
+    from the winner, so the common case gains no payload noise;
+  - with no declared task, `query.trace.task_id` still applies to that call, so
+    the existing trace contract keeps working."
   [state event]
   (when-let [sink (:usage_metrics @state)]
     (let [context (tool-usage-context state)
           supplied (into {} (remove (comp nil? val)) event)
-          server-session (:session_id context)
-          client-session (:session_id supplied)
+          session (resolve-identity (:session_id context) (:session_id supplied))
+          task (resolve-identity (:task_id context) (:task_id supplied))
           merged (cond-> (merge context supplied)
-                   server-session (assoc :session_id server-session))]
+                   (:value session) (assoc :session_id (:value session))
+                   (:value task) (assoc :task_id (:value task)))
+          evidence (cond-> {}
+                     (:evidence session) (assoc :client_session_id (:evidence session))
+                     (:evidence task) (assoc :client_task_id (:evidence task)))]
       (usage/safe-record-event!
        sink
        (cond-> merged
-         (and server-session client-session (not= server-session client-session))
-         (assoc :payload (assoc (or (:payload merged) {})
-                                :client_session_id client-session)))))))
+         (seq evidence) (assoc :payload (merge (or (:payload merged) {}) evidence)))))))
 
 (def capture-query-text-env "SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT")
 
@@ -1165,6 +1185,12 @@
                                "unit_ids" {:type "array" :items {:type "string"}}}
                   :required ["index_id"]
                   :additionalProperties false}}
+   {:name "set_task_context"
+    :description "Declare which task this session is working on, so usage events group into one task attempt. Call it before starting a task and again when switching; pass null to clear. Optional: telemetry is only recorded when the host enables it."
+    :inputSchema {:type "object"
+                  :properties {"task_id" {:type ["string" "null"]
+                                          :description "Identifier for the current task. Null clears the task context."}}
+                  :additionalProperties false}}
    {:name "health"
     :description "Check if the SCI MCP server is alive and ready. Returns immediately with server status and uptime. Use to verify MCP availability before starting a workflow."
     :inputSchema {:type "object"
@@ -1191,6 +1217,43 @@
      :capabilities_summary {:capability_version capabilities/current-capability-version
                             :lanes_count (count registry/language-lanes)}}))
 
+(defn tool-set-task-context
+  "Declare, change, or clear the task this MCP session is working on.
+
+  A task boundary is declared and never inferred (plans/022). `task_id`
+  describes the working context rather than one retrieval, so it lives on the
+  session: every later call inherits it and a staged flow — create_index,
+  resolve_context, expand_context, fetch_context_detail — groups into one task
+  attempt without the caller repeating the field.
+
+  This is deliberately not part of `initialize`: that is a transport handshake,
+  while one session can work through several tasks in sequence.
+
+  Passing `null` (or omitting `task_id`) clears it, which must be explicit —
+  a task never expires on its own."
+  [state args]
+  (when-not (map? args)
+    (invalid-request "set_task_context arguments must be an object"))
+  (let [raw (:task_id args)
+        task-id (cond
+                  (nil? raw) nil
+                  (string? raw) (let [trimmed (str/trim raw)]
+                                  (when-not (str/blank? trimmed) trimmed))
+                  :else (invalid-request "task_id must be a string or null"))
+        previous (:task_id @state)]
+    (if task-id
+      (swap! state assoc :task_id task-id)
+      (swap! state dissoc :task_id))
+    {:task_id task-id
+     :previous_task_id previous
+     :session_id (:session_id @state)
+     :status (cond
+               (and task-id (= task-id previous)) "unchanged"
+               task-id "declared"
+               previous "cleared"
+               :else "noop")
+     :recommended_next_step "create_index"}))
+
 (def tool-handlers
   {"create_index" tool-create-index
    "repo_map" tool-repo-map
@@ -1203,7 +1266,8 @@
    "traverse_relations" tool-traverse-relations
    "skeletons" tool-skeletons
    "health" tool-health
-   "capabilities" tool-capabilities})
+   "capabilities" tool-capabilities
+   "set_task_context" tool-set-task-context})
 
 (defn format-json [payload]
   (json/write-str payload :escape-slash false))

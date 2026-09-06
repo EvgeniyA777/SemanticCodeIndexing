@@ -4,7 +4,7 @@ doc_type: "implementation_plan"
 lifecycle: "active"
 status: "planned"
 agent_action: "reference_for_context"
-updated: "2026-09-05"
+updated: "2026-09-06"
 ---
 
 # Plan: Passive Session Telemetry Activation
@@ -175,12 +175,27 @@ Deliverables:
   on. Recorded only when it differs from the server's, so the common case gains
   no payload noise. Owner decision; verified on the live database.
 
-Open before this stage can start: **how a task boundary is declared over MCP**.
-`task_id` arrives today only inside a retrieval `query.trace`, which
-`create_index`, `expand_context`, and `fetch_context_detail` do not carry, so a
-task spanning a normal staged flow cannot be expressed yet. Choosing between a
-per-call argument and a session-scoped declaration changes the public tool
-contract and is an owner decision, not an implementation detail.
+Owner decision (2026-09-06): **session-scoped declaration through a dedicated
+tool**, not `initialize` and not a per-call argument.
+
+- `set_task_context {task_id}` writes the task onto the session state, and every
+  later event inherits it, so `create_index` → `resolve_context` →
+  `expand_context` → `fetch_context_detail` groups into one task attempt.
+- Not `initialize`, because that is a transport handshake while one session can
+  work through several tasks in sequence.
+- Not a per-call argument, because `task_id` describes the working context
+  rather than one retrieval, and repeating it on every tool would widen every
+  schema.
+- Precedence: a declared task wins; a `query.trace.task_id` that loses is kept
+  as `payload.client_task_id`, so grouping never fragments; with no declared
+  task the trace value still applies, keeping the existing contract working.
+- Clearing is explicit — `set_task_context {task_id: null}`. A task never
+  expires on its own.
+
+Status: **complete (2026-09-06)**. Verified on the live database across a real
+session: a declared task is inherited by the whole staged flow, a conflicting
+trace task is preserved as evidence beside it, switching works, and after an
+explicit clear the events are ungrouped again.
 
 Exit criteria:
 

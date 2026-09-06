@@ -302,7 +302,7 @@
               tool-names (->> tools
                               (map :name)
                               set)]
-          (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health"}
+          (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health" "set_task_context"}
                  tool-names))
           (is (str/includes? (some->> tools
                                       (filter #(= "create_index" (:name %)))
@@ -744,7 +744,7 @@
             tool-names (->> (get-in tools-response [:result :tools])
                             (map :name)
                             set)]
-        (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health"}
+        (is (= #{"capabilities" "create_index" "repo_map" "resolve_context" "expand_context" "fetch_context_detail" "literal_file_slice" "snapshot_diff" "impact_analysis" "traverse_relations" "skeletons" "health" "set_task_context"}
                tool-names)))
       (finally
         (destroy-process! handle)))))

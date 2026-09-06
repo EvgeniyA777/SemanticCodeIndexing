@@ -1,10 +1,10 @@
 ---
-title: "Passive Session Telemetry — Stage 0 Inventory and Stage 1a"
+title: "Passive Session Telemetry — Stage 0 Inventory, Stage 1a and 1b"
 doc_type: "progress_log"
 lifecycle: "active"
 status: "completed"
 agent_action: "reference_for_context"
-updated: "2026-09-05"
+updated: "2026-09-06"
 ---
 
 # Stage 0 Inventory: What Real Sessions Actually Record
@@ -236,7 +236,92 @@ path.
   (was 615 / 3343).
 - Live re-run of the same MCP session against PostgreSQL, quoted above.
 
-## Not done, deliberately
+## Not done in 1a, deliberately
 
 `task_id` mechanics (Stage 1b), `selected_paths` on the runtime event (owner
 decision: it stays a Stage 2 offline-join concern), cost, and verdicts.
+
+---
+
+# Stage 1b: Task Identity (2026-09-06)
+
+Status: **complete**. Session grouping is now clean, so task grouping sits on
+something consistent.
+
+## The declared mechanism
+
+Owner decision: a session-scoped declaration through a dedicated tool.
+`set_task_context {task_id}` writes the task onto the session state, and every
+later event inherits it. Not `initialize`, which is a transport handshake while
+one session runs several tasks in sequence; and not a per-call argument, because
+`task_id` describes the working context rather than one retrieval and repeating
+it would widen every tool schema.
+
+Passing `null` clears it. A task never expires on its own, which keeps the rule
+"declared, never inferred" true at both ends.
+
+The tool answers with `task_id`, `previous_task_id`, and a `status` of
+`declared`, `unchanged`, `cleared`, or `noop`, so a wrapper can tell a switch
+from a repeat without tracking state itself.
+
+## Precedence
+
+`resolve-identity` reconciles a session-scoped value with a per-call one and is
+shared by both `session_id` and `task_id`:
+
+| Situation | Column | Payload evidence |
+| --- | --- | --- |
+| declared task, no trace task | declared | — |
+| declared task, different trace task | declared | `client_task_id` |
+| no declared task, trace task | trace value | — |
+| declared task, identical trace task | declared | — |
+
+The losing value is kept rather than dropped because it is what an offline join
+against a host transcript keys on, and it is recorded only when it differs, so
+the common case gains no payload noise.
+
+## Verified on the live database
+
+One real session, one server, the full staged flow:
+
+| operation | task_id | client_task_id | client_session_id |
+| --- | --- | --- | --- |
+| `set_task_context` | task-alpha | | |
+| `create_index` | task-alpha | | |
+| `resolve_context` | task-alpha | | |
+| `resolve_context` (trace with its own ids) | task-alpha | telemetry-probe-task | telemetry-probe-session |
+| `expand_context` | task-alpha | | |
+| `fetch_context_detail` | task-alpha | | |
+| `set_task_context` | task-beta | | |
+| `repo_map` | task-beta | | |
+| `set_task_context` (clear) | | | |
+| `repo_map` | | | |
+
+The staged flow groups under one task, a conflicting per-call task is preserved
+beside it instead of splitting the group, switching works, and after an explicit
+clear events are ungrouped again.
+
+## Tests
+
+`semidx.mcp.usage-identity-test` is now 15 tests / 46 assertions, covering
+inheritance across the staged flow, the precedence table above, explicit
+clearing and switching, and that the tool works with no sink configured — which
+is the default, and where a telemetry-shaped feature most easily breaks a plain
+session.
+
+Two existing tests pinned the exact tool list and failed as designed when the
+new tool appeared; both were updated. That is the assertion doing its job on a
+public-surface change, not noise.
+
+## Verification
+
+- `clojure -M:test`: **630 tests, 3389 assertions, 0 failures, 0 errors**
+  (was 625 / 3373).
+- `./scripts/validate-contracts.sh`: ok. `./scripts/run-mvp-gates.sh`: ok.
+- Live database evidence quoted above.
+
+## What Stage 1 leaves for Stage 2
+
+Nothing new. `selected_paths` is still absent from MCP events by decision, so
+the offline join takes the returned selection from the host transcript and the
+database supplies identity, timing, and outcome.

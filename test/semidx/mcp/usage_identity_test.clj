@@ -122,6 +122,83 @@
         (is (< 1 (count events)))
         (is (= #{"server-session-1"} (set (map :session_id events))))))))
 
+;; --- Task identity (Stage 1b) -------------------------------------------
+
+(defn- declare-task! [state task-id]
+  (-> (core/handle-tools-call state {:name "set_task_context"
+                                     :arguments {:task_id task-id}})
+      (get-in [:content 0 :text])
+      (json/read-str :key-fn keyword)))
+
+(deftest a-declared-task-is-inherited-by-the-whole-staged-flow-test
+  (testing "task_id describes the working context, not one retrieval, so every
+            call in the flow inherits it without the caller repeating it"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (declare-task! state "task-alpha")
+      (call-resolve! state root {:intent "find the order flow"})
+      (let [events (remove #(= "set_task_context" (:operation %)) (usage/emitted-events sink))]
+        (is (< 1 (count events)) "create_index and resolve_context both ran")
+        (is (= #{"task-alpha"} (set (map :task_id events)))
+            "the staged flow groups into one task attempt")
+        (is (= 1 (count (set (map :session_id events)))))))))
+
+(deftest a-declared-task-outranks-a-per-call-one-but-keeps-it-test
+  (testing "grouping must not fragment when a client also sends a task in its
+            trace; the loser is kept as evidence like client_session_id"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (declare-task! state "task-alpha")
+      (call-resolve! state root
+                     {:query {:schema_version "1.0"
+                              :intent {:purpose "code_understanding" :details "order flow"}
+                              :targets {:symbols ["process-order"]}
+                              :trace {:trace_id trace-id-1
+                                      :request_id "r-9"
+                                      :task_id "task-from-trace"}}})
+      (let [event (first (resolve-events sink))]
+        (is (= "task-alpha" (:task_id event)))
+        (is (= "task-from-trace" (get-in event [:payload :client_task_id])))))))
+
+(deftest without-a-declared-task-the-trace-still-applies-test
+  (testing "the pre-existing per-call contract keeps working as a fallback"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (call-resolve! state root
+                     {:query {:schema_version "1.0"
+                              :intent {:purpose "code_understanding" :details "order flow"}
+                              :targets {:symbols ["process-order"]}
+                              :trace {:trace_id trace-id-1
+                                      :request_id "r-10"
+                                      :task_id "task-from-trace"}}})
+      (let [event (first (resolve-events sink))]
+        (is (= "task-from-trace" (:task_id event)))
+        (is (not (contains? (:payload event) :client_task_id))
+            "nothing lost, so nothing to record as evidence")))))
+
+(deftest clearing-a-task-is-explicit-test
+  (testing "a task never expires on its own; the wrapper says when it ends"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (is (= "declared" (:status (declare-task! state "task-alpha"))))
+      (is (= "unchanged" (:status (declare-task! state "task-alpha"))))
+      (let [switched (declare-task! state "task-beta")]
+        (is (= "declared" (:status switched)))
+        (is (= "task-alpha" (:previous_task_id switched))))
+      (let [cleared (declare-task! state nil)]
+        (is (= "cleared" (:status cleared)))
+        (is (nil? (:task_id cleared)))
+        (is (= "task-beta" (:previous_task_id cleared))))
+      (call-resolve! state root {:intent "find the order flow"})
+      (let [event (first (resolve-events sink))]
+        (is (nil? (:task_id event))
+            "after an explicit clear, events are ungrouped again")))))
+
+(deftest a-task-context-call-does-not-need-telemetry-test
+  (testing "the tool is usable with no sink configured, which is the default"
+    (let [state (core/new-session-state {:session-id "no-sink"})]
+      (is (= "declared" (:status (declare-task! state "task-alpha")))))))
+
 ;; --- Query text redaction ------------------------------------------------
 
 (deftest query-text-is-not-written-by-default-test
