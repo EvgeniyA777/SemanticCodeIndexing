@@ -75,6 +75,10 @@
   [opts]
   (or (existing-dir (:java_lsp_home opts))
       (existing-dir (System/getenv "SEMIDX_JDTLS_HOME"))
+      ;; The setup script installs into SEMIDX_JDTLS_TOOLCHAIN_DIR when it is
+      ;; set, so a custom install would otherwise succeed there and stay
+      ;; invisible here unless a second variable were also exported.
+      (existing-dir (System/getenv "SEMIDX_JDTLS_TOOLCHAIN_DIR"))
       (existing-dir toolchain-dir-name)))
 
 (defn resolve-launcher

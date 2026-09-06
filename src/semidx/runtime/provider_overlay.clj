@@ -334,6 +334,31 @@
                                        documents))}])))
         executions))
 
+(defn statuses-for-path
+  "Overlay statuses narrowed to one document.
+
+  A provider's status is provider-level: it says the session started, not that
+  this document was analysed. An overlay provider is file-scoped, so unlike the
+  project batch tier it is a plan candidate by selector alone — which means a
+  document that timed out, was stale, or mismatched would still admit the
+  provider and report a gap for an operation nothing was going to answer.
+
+  Coverage is the per-document authority, exactly as it is for the batch tier:
+  outside it the provider is downgraded to unavailable, carrying the reason the
+  document actually failed with."
+  [statuses coverage document-states path]
+  (reduce (fn [acc [provider-id status]]
+            (let [covered? (contains? (set (get coverage provider-id)) path)
+                  failure (get-in document-states [provider-id :failed path])]
+              (assoc acc provider-id
+                     (if (or covered? (not= "ready" (:state status)))
+                       status
+                       (assoc status
+                              :state "unavailable"
+                              :reason_codes [(str "overlay_" (or failure "document_not_analysed"))])))))
+          {}
+          statuses))
+
 (defn- eligible-providers [paths roles]
   (->> roles
        keys
@@ -384,6 +409,7 @@
                                                   (assoc opts :overlay_roles roles))]))
                          ready)
         coverage (overlay-coverage executions)
+        states (document-states executions)
         runner (overlay-run-provider executions run-provider)
         files (mapv (fn [{:keys [path]}]
                       (provider-execution/shadow-facts-for-file
@@ -394,7 +420,7 @@
                         :denied_providers denied_providers
                         :execution_policy execution_policy
                         :batch_coverage coverage
-                        :observed_statuses statuses
+                        :observed_statuses (statuses-for-path statuses coverage states path)
                         :run-provider runner}))
                     documents)]
     {:root_path root_path
@@ -402,7 +428,7 @@
      :overlay_statuses statuses
      :planned_provider_ids ready
      :overlay_coverage coverage
-     :documents (document-states executions)
+     :documents states
      :files files
      :diagnostics (vec (concat (mapcat :diagnostics (vals executions))
                                (mapcat :diagnostics files)))}))

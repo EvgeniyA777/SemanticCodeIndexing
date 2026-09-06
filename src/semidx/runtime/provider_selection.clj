@@ -142,16 +142,19 @@
         statuses (merge (or statuses (providers/statuses path (or parser_opts {})))
                         (select-keys (or observed_statuses {}) externally-probed))
         policy (merge default-execution-policy execution_policy)
-        ;; An externally probed provider widens the operation set only once it
-        ;; has actually been observed. The catalog knowing that some tier could
-        ;; answer `references` is not a reason to plan that operation on every
-        ;; file and report a permanent gap for it; that is the same rule Stage 2
-        ;; applied when it refused to claim operations nothing produces.
+        ;; An externally probed provider widens the operation set only when it is
+        ;; actually `ready` for this file. The catalog knowing that some tier
+        ;; could answer `references` is not a reason to plan that operation and
+        ;; report a permanent gap for it — and neither is having observed that
+        ;; tier to be unavailable, which is the same absence stated out loud.
+        ;; This is the rule Stage 2 applied when it refused to claim operations
+        ;; nothing produces.
         operations (or (seq operations)
                        (->> descriptors
                             (filter (fn [descriptor]
                                       (or (providers/locally-probed? descriptor)
-                                          (contains? statuses (:provider_id descriptor)))))
+                                          (= "ready" (get-in statuses
+                                                             [(:provider_id descriptor) :state])))))
                             (mapcat (comp keys :operation_capabilities))
                             distinct
                             sort

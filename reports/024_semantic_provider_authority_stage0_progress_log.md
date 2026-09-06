@@ -2434,3 +2434,74 @@ model_availability_checked_at: not checked this session.
 confidence: high for the provider work; the Stage 6 blocker is a product
   decision, not an engineering one.
 ```
+
+---
+
+# Stage 5 Review Repair (2026-09-05)
+
+Four findings from an independent review of `5c3c5c2..HEAD`. All four accepted
+and fixed; the two Medium ones were real behaviour defects, and both were
+reproduced before the fix and re-checked by disabling the fix afterwards.
+
+## F1 (Medium, fixed) — an unavailable overlay still widened the plan
+
+`provider-plan` admitted an externally probed tier into the **operation set**
+whenever a status entry merely existed, regardless of its `:state`. So
+`{"typescript-lsp" {:state "unavailable"}}` still added `:references`, producing
+exactly the permanent gap Stage 5a claimed to have removed, on every TypeScript
+file whenever the language server was absent.
+
+Worse than the code: **Stage 5a's own test had been weakened to accept it.** The
+first version of `an-unavailable-overlay-leaves-the-plan-untouched-test`
+asserted `[:definitions]`, that assertion failed, and it was replaced with a
+check on the exclusion reason instead of fixing the behaviour. The test now
+asserts the operation set again, and says why in its message.
+
+Fix: only a `ready` status widens operations. An observed-but-unavailable tier
+is the same absence as an unobserved one, just stated out loud. Verified
+directly: `ready` yields `[:definitions :references]`, `unavailable` and any
+other state yield `[:definitions]`.
+
+## F2 (Medium, fixed) — a failed document still admitted the overlay for that file
+
+Overlay coverage correctly excluded failed documents, but
+`shadow-facts-for-overlay` passed the **provider-level** status to every
+per-file plan. A provider status says the session started, not that this
+document was analysed — and unlike the project batch tier, an overlay provider
+is file-scoped, so it is a plan candidate by selector alone. A document that
+timed out therefore still planned `typescript-lsp` and reported a `:references`
+gap for an operation nothing was going to answer.
+
+Fix: `provider-overlay/statuses-for-path` narrows the status per document.
+Outside coverage the provider is downgraded to unavailable, carrying the reason
+the document actually failed with (`overlay_timeout`, `overlay_stale_document`,
+…), so the failed file falls back to the tiers below and says why. Coverage is
+now the per-document authority for both tiers, batch and overlay alike.
+
+Regression proof: with the gate disabled by `with-redefs`, the new
+`a-failed-document-does-not-admit-the-overlay-for-that-file-test` fails three
+assertions; with it, the suite is green.
+
+## F3 (Low, fixed) — jdtls install directory variable was inconsistent
+
+`scripts/setup-jdtls.sh` installs into `SEMIDX_JDTLS_TOOLCHAIN_DIR` when set,
+but `resolve-home` only read `:java_lsp_home`, `SEMIDX_JDTLS_HOME`, and the
+default directory. A custom install could therefore succeed and stay invisible
+to the provider. `resolve-home` now also accepts `SEMIDX_JDTLS_TOOLCHAIN_DIR`,
+between the explicit home and the repo-managed default.
+
+## F4 (Low, fixed) — an assertion that could not fail
+
+The Java end-to-end test filtered `:signature_key` over whole fact maps, so it
+was vacuously true over an empty sequence rather than proving anything. It now
+asserts on the values themselves: `(= [nil nil] (mapv :signature_key handles))`.
+
+## Verification
+
+- `SEMIDX_JDTLS_JAVA_HOME=<jdk21> SEMIDX_REQUIRE_SCIP_TOOLCHAINS=1
+  SEMIDX_REQUIRE_LSP_TOOLCHAINS=1 clojure -M:test`: **614 tests, 3349
+  assertions, 0 failures, 0 errors** (was 613 / 3342).
+- Both Medium fixes were checked by disabling them and observing the new tests
+  fail, not only by observing them pass.
+- `./scripts/validate-contracts.sh`: ok. `./scripts/run-mvp-gates.sh`: ok.
+- `clojure -M:ccc check --root .`: up to date after refresh.

@@ -148,10 +148,9 @@
           (is (= #{1 2} (set (map #(get-in % [:core_key :arity]) handles)))))
 
         (testing "overload identity stays arity-only, as scip-java already does"
-          (is (every? (fn [fact]
-                        (every? #(nil? (:signature_key %))
-                                (filter :signature_key [fact])))
-                      handles))
+          (is (= [nil nil] (mapv :signature_key handles))
+              "asserted on the values themselves: filtering on the key made this
+               vacuously true over an empty sequence")
           (is (every? #(= "arity_only" (:signature_precision %)) handles))))
       (toolchain/unresolved! (str "jdtls (" (:reason_codes status) ")")
                              "Java overlay end-to-end test"))))

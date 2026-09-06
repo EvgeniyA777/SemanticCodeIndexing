@@ -115,8 +115,7 @@
              (kind-of (overlay/execute-overlay
                        "typescript-lsp"
                        [{:root_path corpus-root :path "src/missing.ts"}]
-                       {:overlay_roles (roles (fn [_ _ _] {:facts []}))}))
-             )
+                       {:overlay_roles (roles (fn [_ _ _] {:facts []}))})))
           "a document that cannot be read never reaches the server")
       (is (= "version_mismatch"
              (get-in (overlay/execute-overlay
@@ -209,12 +208,50 @@
     (is (= {} (:overlay_coverage result)))
     (is (not (contains? (set admitted) "typescript-lsp"))
         "an unavailable overlay is never admitted")
+    (is (= [:definitions] (vec (keys (:operations plan))))
+        "an observed-but-unavailable tier is the same absence as an unobserved
+         one, so it must not widen the plan into a permanent references gap")
     (is (= "provider_unavailable"
            (->> (get-in plan [:operations :definitions :excluded])
                 (filter #(= "typescript-lsp" (:provider_id %)))
                 first
                 :reason))
         "and its absence is recorded with the reason, not silently dropped")))
+
+(deftest a-failed-document-does-not-admit-the-overlay-for-that-file-test
+  (testing "provider status says the session started, not that this document was
+            analysed; an overlay provider is file-scoped, so without a
+            path-scoped gate a timed-out document would still plan it"
+    (let [result (run-overlay [{:path "src/orders.ts"} {:path "src/validator.ts"}]
+                              (roles (fn [_ document _]
+                                       (if (= "src/orders.ts" (:path document))
+                                         (throw (ex-info "boom" {:type :lsp_request_timeout}))
+                                         {:facts [(unit-fact "src/validator.ts"
+                                                             "src.validator/check")]}))))
+          plan-for (fn [path]
+                     (:plan (first (filter #(= path (:path %)) (:files result)))))
+          failed-plan (plan-for "src/orders.ts")
+          ok-plan (plan-for "src/validator.ts")]
+      (is (= {"typescript-lsp" ["src/validator.ts"]} (:overlay_coverage result)))
+
+      (testing "the failed document falls back to the tiers below"
+        (is (not (contains? (set (mapv :provider_id
+                                       (get-in failed-plan [:operations :definitions :providers])))
+                            "typescript-lsp")))
+        (is (= [:definitions] (vec (keys (:operations failed-plan))))
+            "and reports no references gap for an operation nothing would answer")
+        (is (= ["overlay_timeout"]
+               (->> (get-in failed-plan [:operations :definitions :excluded])
+                    (filter #(= "typescript-lsp" (:provider_id %)))
+                    first
+                    :reason_codes))
+            "the downgrade carries the reason the document actually failed with"))
+
+      (testing "the analysed document is unaffected"
+        (is (contains? (set (mapv :provider_id
+                                  (get-in ok-plan [:operations :definitions :providers])))
+                       "typescript-lsp"))
+        (is (= [:definitions :references] (vec (keys (:operations ok-plan)))))))))
 
 (deftest an-unobserved-overlay-does-not-widen-the-default-plan-test
   (testing "the catalog knowing a tier that could answer references is not a

@@ -644,6 +644,27 @@ after this memory file.
    `plans/020`** — a hard gate, plus an open policy question Stage 5a left:
    whether an `equal_authority_value_conflict` may block a default-path fact or
    only annotate it.
+   **Stage 5 review repair (2026-09-05), four findings, two of them real
+   behaviour defects.** (1) `provider-plan` widened the operation set for an
+   externally probed tier whenever a status entry merely *existed*, so an
+   `unavailable` LSP still added `:references` and produced a permanent gap on
+   every TypeScript file — and Stage 5a's own test had been *weakened* to accept
+   that instead of the behaviour being fixed. Only a `ready` status widens
+   operations now; an observed-but-unavailable tier is the same absence as an
+   unobserved one. (2) Overlay coverage excluded failed documents, but the
+   **provider-level** status was passed to every per-file plan, and an overlay
+   provider is file-scoped (a candidate by selector alone, unlike the batch
+   tier), so a timed-out document still planned `typescript-lsp`.
+   `provider-overlay/statuses-for-path` now narrows status per document and
+   downgrades outside coverage with the document's own failure reason
+   (`overlay_timeout`, …). **Coverage is the per-document authority for both
+   tiers.** (3) `resolve-home` also accepts `SEMIDX_JDTLS_TOOLCHAIN_DIR`, which
+   the setup script honours but the provider ignored. (4) A Java test filtered
+   `:signature_key` over whole fact maps and was vacuously true. Both Medium
+   fixes were verified by *disabling* them and watching the new tests fail, not
+   only by watching them pass. Suite: 614 tests / 3349 assertions / 0 failures.
+   **General lesson, and the second time this class appears in this log: when an
+   assertion fails, change the code or the claim — not the assertion.**
 3. Execute `plans/019` as an additive one-shot delivery track after its budget
    ledger and the `plans/020` run/strategy contracts are accepted. Its evaluation
    stage contributes adapters to `plans/020`; it does not own a second corpus,
