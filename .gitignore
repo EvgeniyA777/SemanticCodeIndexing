@@ -34,6 +34,8 @@ scripts/scip-toolchain/node_modules/
 .lsp-toolchain/
 .lsp.env
 scripts/lsp-toolchain/node_modules/
+.jdtls-toolchain/
+.jdtls.env
 
 # Python bytecode
 __pycache__/

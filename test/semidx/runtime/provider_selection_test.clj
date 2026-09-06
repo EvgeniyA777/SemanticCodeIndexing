@@ -22,11 +22,19 @@
 (defn- plan [statuses & {:as overrides}]
   (selection/provider-plan (merge {:path java-path :statuses statuses} overrides)))
 
+(defn- excluded-for
+  "Exclusions for one provider. The catalog also carries a `java-lsp` tier that
+  no local probe can observe, so it is excluded from every plan these tests
+  build; filtering keeps each assertion about the provider it is testing."
+  [definitions provider-id]
+  (filterv #(= provider-id (:provider_id %)) (:excluded definitions)))
+
 (deftest stronger-authority-is-planned-first-test
   (let [definitions (get-in (plan all-ready) [:operations :definitions])]
     (is (= ["java-tree-sitter" "java-regex"] (mapv :provider_id (:providers definitions)))
         "structural outranks heuristic, and the order is not registration order")
-    (is (empty? (:excluded definitions)))))
+    (is (empty? (excluded-for definitions "java-tree-sitter")))
+    (is (empty? (excluded-for definitions "java-regex")))))
 
 (deftest planning-is-deterministic-test
   (is (= (plan all-ready) (plan all-ready)))
@@ -42,26 +50,29 @@
              :reason "provider_unavailable"
              :state "unavailable"
              :reason_codes ["tree_sitter_grammar_missing"]}]
-           (:excluded definitions))
+           (excluded-for definitions "java-tree-sitter"))
         "the degradation is explicit, not an empty list")))
 
 (deftest forced-mode-ignores-status-gating-test
   (let [definitions (get-in (plan tree-sitter-missing :mode "forced") [:operations :definitions])]
-    (is (= ["java-tree-sitter" "java-regex"] (mapv :provider_id (:providers definitions)))
-        "forced is a test control: it plans providers status would have excluded")))
+    (is (= ["java-lsp" "java-tree-sitter" "java-regex"]
+           (mapv :provider_id (:providers definitions)))
+        "forced is a test control: it plans providers status would have excluded,
+         including the exact tier that no local probe can observe")))
 
 (deftest execution-limit-is-explicit-and-recorded-test
   (let [definitions (get-in (plan all-ready
                                   :execution_policy {:max_providers_per_operation 1})
                             [:operations :definitions])]
     (is (= ["java-tree-sitter"] (mapv :provider_id (:providers definitions))))
-    (is (= ["execution_limit_reached"] (mapv :reason (:excluded definitions))))))
+    (is (= ["execution_limit_reached"] (mapv :reason (excluded-for definitions "java-regex"))))))
 
 (deftest denied-providers-are-excluded-by-override-test
   (let [definitions (get-in (plan all-ready :denied_providers ["java-tree-sitter"])
                             [:operations :definitions])]
     (is (= ["java-regex"] (mapv :provider_id (:providers definitions))))
-    (is (= ["denied_by_override"] (mapv :reason (:excluded definitions))))))
+    (is (= ["denied_by_override"]
+           (mapv :reason (excluded-for definitions "java-tree-sitter"))))))
 
 (deftest plan-defaults-to-shadow-and-carries-its-policy-test
   (let [p (plan all-ready)]
@@ -88,12 +99,13 @@
                :reason "provider_status_unknown"
                :state "unknown"
                :reason_codes ["status_not_observed"]}]
-             (:excluded definitions)))))
+             (excluded-for definitions "java-tree-sitter")))))
 
   (testing "forced mode still admits it, and says the state was not observed"
     (let [definitions (get-in (plan {"java-regex" (status "ready")} :mode "forced")
                               [:operations :definitions])]
-      (is (= ["java-tree-sitter" "java-regex"] (mapv :provider_id (:providers definitions))))
+      (is (= ["java-lsp" "java-tree-sitter" "java-regex"]
+             (mapv :provider_id (:providers definitions))))
       (is (= "forced" (:state (first (:providers definitions))))))))
 
 (deftest planned-tasks-are-per-operation-test

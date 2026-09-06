@@ -93,7 +93,8 @@
                   {:run-provider (scripted-runner {})})
           definitions (first (filter #(= :definitions (:operation %)) (:gaps result)))]
       (is (= "no_provider_admitted" (:reason definitions)))
-      (is (= ["java-tree-sitter" "java-regex"] (mapv :provider_id (:excluded definitions))))))
+      (is (= ["java-lsp" "java-tree-sitter" "java-regex"]
+           (mapv :provider_id (:excluded definitions))))))
 
   (testing "a covered operation is not a gap"
     (let [result (execution/execute-plan
@@ -155,7 +156,7 @@
                  :denied_providers ["java-tree-sitter"]})
         definitions (get-in result [:plan :operations :definitions])]
     (testing "the structural provider is excluded with a stated reason"
-      (is (= ["java-tree-sitter"] (mapv :provider_id (:excluded definitions))))
+      (is (= ["java-lsp" "java-tree-sitter"] (mapv :provider_id (:excluded definitions))))
       (is (seq (:reason (first (:excluded definitions))))))
     (testing "the lexical provider covers the operation, so there is no gap"
       (is (= ["java-regex"] (mapv :provider_id (:providers definitions))))

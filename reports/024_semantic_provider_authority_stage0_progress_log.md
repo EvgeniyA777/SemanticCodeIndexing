@@ -2290,3 +2290,147 @@ model_availability_checked_at: not checked this session.
 confidence: high (every Stage 5a exit criterion has an executing test, and the
   four server-behaviour findings were reproduced rather than assumed)
 ```
+
+---
+
+# Stage 5b — Java LSP Provider (2026-09-05)
+
+Status: **complete**. Stage 5 is now closed.
+
+Unblocked by owner decision: jdtls is installed as a repo-managed sha256-pinned
+tarball, the direct analogue of the pinned jars the Java SCIP toolchain uses. An
+ambient `PATH` jdtls stays unacceptable under ADR-047 — it pins nothing, so the
+provider's output would differ between a developer machine and CI.
+
+## Delivered
+
+| Artifact | Role |
+| --- | --- |
+| `scripts/setup-jdtls.sh` | downloads jdtls 1.54.0, verifies sha256 **before** extraction, replaces a drifted install, caches by version marker |
+| `src/semidx/runtime/providers/lsp_java.clj` | the Java provider: toolchain and JVM resolution, JDK gating, readiness polling, symbol mapping |
+| `src/semidx/runtime/providers.clj` | `java-lsp` descriptor, `definitions` only |
+| `src/semidx/runtime/provider_overlay.clj` | **one role entry**, nothing else |
+| `.github/workflows/mvp-runtime.yml` | installs the toolchain; the existing `SEMIDX_REQUIRE_LSP_TOOLCHAINS=1` now asserts this end-to-end test too |
+| `test/.../lsp_java_test.clj` | new, 11 tests |
+
+The seam is unchanged. `provider-overlay`, `provider-selection`, and
+`provider-execution` gained no Java-specific branch — the only edit to the
+boundary is the role entry, which is what Stage 5a was built to make possible.
+
+## Preflight findings (real jdtls 1.54.0, before any code)
+
+Same discipline as the Stage 4 preflight, and it again invalidated assumptions.
+
+1. **jdtls requires JDK 21+.** Under this machine's default JDK 17 it does not
+   start at all: `Unresolved requirement: osgi.ee; filter:="(&(osgi.ee=JavaSE)
+   (version=21))"`, then `Application "org.eclipse.jdt.ls.core.id1" could not be
+   found in the registry`. The stream simply closes, which the client reports as
+   `EOFException` — an unreadable failure if the version is not checked first.
+   The JVM that hosts the server is therefore resolved and version-checked
+   separately from the JVM running semidx, which may stay on 17.
+2. **Members arrive late, and their absence is silent.** Immediately after
+   `didOpen`, `documentSymbol` returns only the package and the class, with no
+   children and no error. A naive adapter would publish that as a complete
+   answer. The adapter polls until members appear and reports exhaustion as a
+   timeout instead.
+3. **The `arity_only` floor is confirmed, not lifted.** Symbols are named
+   `handle(String)`, `handle(String, int)`, `handleAll(List<String>)`,
+   `OrderService(Validator)`. Arity is recoverable, but the parameter types are
+   **simple names** — exactly the form Stage 4 rejected as Variant B for
+   `scip-java`. Types stay evidence; the key stays arity-only.
+4. **References are unavailable in this mode.** `textDocument/references` for
+   `Validator#validate` returns empty even though the corpus calls it twice from
+   another file: with no build file jdtls runs an invisible project with no
+   resolved classpath. The descriptor claims `definitions` only, rather than
+   reporting a permanent gap on every Java file.
+
+## The defect that only a real server would have shown
+
+The first implementation produced `OrderService#handle`, not
+`example.OrderService#handle`, so **the LSP tier did not merge with the regex
+tier at all** — two separate canonical facts for one method, which is precisely
+the duplicate-identity failure the whole plan exists to prevent.
+
+Cause: jdtls returns the package and the type as **siblings** at depth 0, not as
+parent and child. Walking the tree for ownership therefore never picks the
+package up. The package name is now read off the top level and used as the
+prefix for everything beside it. Covered by
+`the-package-is-a-sibling-not-a-parent-test`, which states the failure mode in
+its name so a future refactor cannot quietly reintroduce it.
+
+## Exit criteria check (plan Stage 5b)
+
+| Criterion | Result |
+| --- | --- |
+| Seam unchanged | met — one role entry; no Java branch in the boundary, planner, or executor |
+| Same canonical key as `scip-java` and regex; overloads distinct by arity | met — end-to-end test: both tiers merge onto one `exact` fact, and the two `handle` overloads stay separate at arity 1 and 2 |
+| JDK < 21, missing toolchain, and a never-ready project each degrade with a named reason | met — `a-jdk-below-21-is-refused-before-startup-test`, `missing-toolchain-is-reported-not-guessed-test`, `:lsp_project_not_ready` mapped onto the `timeout` kind |
+| End-to-end asserted, not skipped, when required | met — runs under `SEMIDX_REQUIRE_LSP_TOOLCHAINS=1` |
+
+## Notes worth keeping
+
+- **No ambient `PATH` step.** Unlike the other toolchains, this chain stops at
+  the repo-managed directory: a `jdtls` on `PATH` is exactly the unpinned
+  install the decision rejected.
+- **`-configuration` is copied per workspace.** jdtls writes into it, so
+  pointing every workspace at the shared install would have them corrupt each
+  other. The `-data` workspace lives under `~/.cache/semidx/jdtls/<digest>`,
+  keyed by canonical root, mirroring where the runtime launcher keeps its state.
+- **A readiness timeout is reported as `timeout`**, not as a new taxonomy kind:
+  we waited and the answer never came, which is what that kind means.
+- The download URL is the `downloads.php` mirror selector, because the direct
+  `download.eclipse.org/jdtls/` path returned 504 during this work. The sha256
+  is what makes either source acceptable.
+
+## Verification
+
+- `SEMIDX_JDTLS_JAVA_HOME=<jdk21> SEMIDX_REQUIRE_SCIP_TOOLCHAINS=1
+  SEMIDX_REQUIRE_LSP_TOOLCHAINS=1 clojure -M:test`: **613 tests, 3342
+  assertions, 0 failures, 0 errors** (was 602 / 3303).
+- Without a JDK 21 configured the Java end-to-end test skips with
+  `jdtls_java_too_old` and the suite stays green — the developer path.
+- `./scripts/validate-contracts.sh`: ok, 72 files.
+- `./scripts/run-mvp-gates.sh` with every flag: ok.
+- `clojure -M:ccc check --root .`: up to date after refresh.
+
+## Changed tests that were not new
+
+Adding `java-lsp` to the catalog widened the eligible provider list for `.java`
+paths, so eleven assertions that pinned exact provider or exclusion lists were
+updated: `provider_selection_test` gained an `excluded-for` helper so each
+assertion is about the provider it is testing, and `providers_test` and
+`provider_execution_test` now include the new tier. No expectation was weakened —
+forced mode, for instance, now correctly admits the exact tier first.
+
+## NextStageRoutingRecommendation
+
+```text
+completed_stage: 5b (Java LSP provider); Stage 5 closed
+recommended_next_stage: 6 (default authority switch) — owner decision required
+recommended_executor: Claude Code team lead
+recommended_model: Claude Opus 4.6
+effort: high
+effort_justification: Stage 6 is the public authority and truthful-degradation
+  gate: it changes what users see, lowers confidence for fallback-only
+  repositories, and is the first stage to touch the snapshot path.
+rationale: every tier the plan called for now exists behind one seam — batch
+  SCIP for reproducible project evidence, LSP for live documents, tree-sitter
+  and regex below them — and all of it is default-off. What remains is the
+  decision to make them authoritative.
+prerequisites_or_blockers:
+  - Stage 6's exit criteria require comparative task-value evidence from
+    plans/020, and that track is PAUSED by the owner. Either the owner accepts a
+    different evidence basis or plans/020 resumes first. This is a hard gate,
+    not a formality.
+  - Stage 6 should decide whether an equal_authority_value_conflict may block a
+    default-path fact or only annotate it; Stage 5a made it observable but left
+    the policy open.
+  - index.clj / adapters.clj wiring has been deliberately untouched since Stage
+    2 and lands here for the first time.
+file_ownership_and_conflict_risk: HIGH. Stage 6 touches the index lifecycle,
+  public capability projection, and confidence ceilings.
+fallback_executor_or_model: none.
+model_availability_checked_at: not checked this session.
+confidence: high for the provider work; the Stage 6 blocker is a product
+  decision, not an engineering one.
+```

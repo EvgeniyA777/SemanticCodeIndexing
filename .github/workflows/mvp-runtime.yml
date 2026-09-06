@@ -130,6 +130,14 @@ jobs:
       - name: Setup TypeScript LSP toolchain
         run: ./scripts/setup-typescript-lsp.sh
 
+      # jdtls needs a JDK 21 or newer to run at all; under 17 its OSGi framework
+      # refuses to resolve and the application never registers. CI's JDK already
+      # satisfies that, so no separate JVM is configured here — the adapter
+      # checks the version itself and degrades with a named reason when it does
+      # not hold.
+      - name: Setup jdtls toolchain
+        run: ./scripts/setup-jdtls.sh
+
       - name: Verify generated gRPC sources
         run: clojure -T:build grpc-verify-generated
 

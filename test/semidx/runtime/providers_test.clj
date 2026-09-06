@@ -30,7 +30,7 @@
     (is (= providers/descriptors (read-string (pr-str providers/descriptors))))))
 
 (deftest selectors-choose-providers-by-path-test
-  (is (= #{"java-tree-sitter" "java-regex"}
+  (is (= #{"java-tree-sitter" "java-regex" "java-lsp"}
          (set (map :provider_id (providers/descriptors-for java-path)))))
   (is (= #{"typescript-tree-sitter" "typescript-regex" "typescript-lsp"}
          (set (map :provider_id (providers/descriptors-for ts-path))))
@@ -207,7 +207,7 @@
 
   (testing "and a .java path likewise"
     (let [eligible (set (map :provider_id (providers/descriptors-for java-path)))]
-      (is (= #{"java-tree-sitter" "java-regex"} eligible))
+      (is (= #{"java-tree-sitter" "java-regex" "java-lsp"} eligible))
       (is (not (contains? eligible "scip-java"))))))
 
 (deftest statuses-cover-only-what-the-catalog-can-probe-test

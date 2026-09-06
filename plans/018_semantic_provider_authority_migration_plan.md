@@ -921,18 +921,69 @@ Commit boundary: LSP remains opt-in and shadowed.
 
 #### Stage 5b. Java LSP Provider
 
-Deferred, and blocked rather than merely unscheduled.
+Unblocked by owner decision (2026-09-05): jdtls is installed as a **repo-managed
+sha256-pinned tarball** in a gitignored `.jdtls-toolchain/`, the direct analogue
+of the pinned jars the Java SCIP toolchain already uses. An ambient `PATH`
+jdtls remains unacceptable under ADR-047.
 
-- It consumes the Stage 5a seam unchanged; if it cannot, that is a finding
-  against 5a, not a reason to widen 5b.
-- jdtls is **not accepted** until a repo-managed toolchain decision is made. A
-  server resolved from ambient `PATH` does not satisfy ADR-047, and the
-  toolchain's size and workspace-initialization model need an explicit owner
-  decision first.
-- The Java exact tier must not assume a typed-signature capability; the identity
-  fixture holds `java-lsp` at the `arity_only` floor pending real jdtls output.
+It consumes the Stage 5a seam unchanged; if it cannot, that is a finding against
+5a, not a reason to widen 5b.
 
-Commit boundary: not started.
+##### Preflight findings (2026-09-05, real jdtls 1.54.0)
+
+Verified against the protected Java corpus before any code was written, in the
+same spirit as the Stage 4 preflight:
+
+- **jdtls requires JDK 21 or newer.** Under JDK 17 it does not start at all:
+  `Unresolved requirement: osgi.ee; filter:="(&(osgi.ee=JavaSE)(version=21))"`,
+  and the launcher then reports the application as missing from the registry.
+  The JVM that runs the server is therefore resolved and version-checked
+  separately from the JVM that runs semidx, which may remain 17.
+- **Members arrive late, and their absence is silent.** Immediately after
+  `didOpen`, `documentSymbol` returns only the package and the class, with no
+  children and no error. The provider must poll until members appear and treat
+  exhaustion as an explicit degradation, never emit the early, incomplete answer
+  as if it were complete.
+- **The `arity_only` floor is confirmed, not lifted.** Method symbols are named
+  `handle(String)`, `handle(String, int)`, `handleAll(List<String>)`, and the
+  constructor `OrderService(Validator)`. Arity is recoverable; the parameter
+  types are **simple names**, which is exactly the form Stage 4 rejected as
+  Variant B for `scip-java`. Types stay evidence, never key material.
+- **References are not available in this mode.** `textDocument/references` for
+  `Validator#validate` returns empty even though the corpus calls it twice from
+  another file: without a build file jdtls runs an invisible project with no
+  resolved classpath. The descriptor therefore claims `definitions` only —
+  claiming `references` would report a permanent gap on every file, the same
+  mistake Stage 2 refused to make.
+- The server starts in about three seconds, needs a writable `-configuration`
+  directory and a `-data` workspace directory outside the repository, and picks
+  a per-platform `config_*` directory. None of that reaches the seam.
+
+##### Deliverables
+
+- `scripts/setup-jdtls.sh`: sha256-pinned tarball download into a gitignored
+  `.jdtls-toolchain/`, failing closed on digest mismatch.
+- `semidx.runtime.providers.lsp-java`: toolchain and JVM resolution with an
+  explicit JDK-version check, session startup, readiness polling, and symbol
+  normalization onto the existing `CanonicalFactKey` spelling
+  (`example.OrderService#handle`, arity-only overload identity).
+- A `java-lsp` catalog descriptor claiming `definitions` only.
+- One role entry in `provider-overlay/overlay-roles`, and nothing else in the
+  seam.
+
+##### Exit criteria
+
+- The seam is unchanged: `provider-overlay`, `provider-selection`, and
+  `provider-execution` gain no Java-specific branch.
+- A Java LSP definition lands on the same canonical key as the `scip-java` and
+  regex spellings of the same method, and the two `handle` overloads stay
+  distinct by arity.
+- A JDK below 21, a missing toolchain, and a project that never becomes ready
+  each degrade with a named reason and produce no facts.
+- The end-to-end test runs a real jdtls and is asserted, not skipped, when the
+  toolchain is required.
+
+Commit boundary: Java overlay remains opt-in and shadowed.
 
 ### Stage 6. Default Authority Switch And Truthful Degradation
 

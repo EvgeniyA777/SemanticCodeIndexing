@@ -32,6 +32,7 @@
   (:require [clojure.java.io :as io]
             [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.providers :as providers]
+            [semidx.runtime.providers.lsp-java :as lsp-java]
             [semidx.runtime.providers.lsp-typescript :as lsp-typescript])
   (:import [java.io File]
            [java.nio.charset StandardCharsets]
@@ -46,7 +47,11 @@
   {"typescript-lsp" {:status-fn lsp-typescript/provider-status
                      :open-fn lsp-typescript/open-session
                      :close-fn lsp-typescript/close-session
-                     :fact-source-fn lsp-typescript/document-facts}})
+                     :fact-source-fn lsp-typescript/document-facts}
+   "java-lsp" {:status-fn lsp-java/provider-status
+               :open-fn lsp-java/open-session
+               :close-fn lsp-java/close-session
+               :fact-source-fn lsp-java/document-facts}})
 
 (def failure-kinds
   "Every way an overlay document can fail to produce facts.

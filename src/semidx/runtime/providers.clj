@@ -99,7 +99,21 @@
     :live_overlay true
     :selectors {:extensions [".ts" ".tsx"]}
     :operation_capabilities {:definitions "exact"
-                             :references "exact"}}])
+                             :references "exact"}}
+   ;; Stage 5b. `definitions` only: jdtls runs an invisible project without a
+   ;; build file, so `textDocument/references` comes back empty even for a
+   ;; method the corpus calls twice. Claiming it would report a permanent gap on
+   ;; every Java file.
+   {:provider_id "java-lsp"
+    :provider_version "1"
+    :languages ["java"]
+    :classification "semantic"
+    :engine :lsp
+    :scope :file
+    :provider_family :lsp
+    :live_overlay true
+    :selectors {:extensions [".java"]}
+    :operation_capabilities {:definitions "exact"}}])
 
 (def project-descriptors
   "Versioned project-scoped provider descriptors (Stage 4.5).
