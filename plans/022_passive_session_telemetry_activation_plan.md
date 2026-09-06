@@ -123,20 +123,50 @@ around it.
 
 Commit boundary: the MCP HTTP sink wiring, docs, and the inventory report.
 
-### Stage 1. Task identity
+### Stage 1a. Session identity and privacy hardening
+
+Goal: make a session group, and stop the raw prompt reaching the database,
+before any task-level work. Owner decision (2026-09-05): the two Stage 0
+findings are an input gate to task identity, not a parallel concern — a task id
+on top of an inconsistent session id would group events inside a session that
+does not group.
+
+Deliverables:
+
+- **Session id precedence**: the server session id is the identity of the MCP
+  session and wins outright; a trace refines identity and never erases it. A
+  client `session_id` cannot replace it, and a request that supplies no trace no
+  longer blanks fields the server already knows.
+- **Query text redacted by default**: telemetry stores `details_hash` and
+  `details_chars` instead of the user's words, keeping `purpose`,
+  `target_keys`, and `token_budget`. Raw text only under
+  `SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT=1`. The summary returned **to the
+  caller** is untouched.
+- Tests for the three precedence cases and for redaction, including one that
+  proves the caller still sees its own normalized query.
+
+Exit criteria:
+
+- Every operation in one session carries the same session id, verified against a
+  live database and not only in a unit test.
+- No query text reaches the database with the default configuration.
+- A client that supplies a full trace keeps `trace_id`, `request_id`, and
+  `task_id`.
+
+Commit boundary: identity and redaction only.
+
+### Stage 1b. Task identity
 
 Goal: make events group into task attempts, which is the unit of observation the
 whole idea rests on.
 
-Prerequisite: Stage 0's inventory, because the design depends on whether
-`task_id` arrives today and from where.
+Prerequisite: Stage 1a, so the grouping key underneath is consistent.
 
 Deliverables:
 
-- A decision, recorded in this plan, on how a task boundary is declared in a
-  real session — this is one of `ideas/016`'s open questions and cannot be
-  guessed.
-- Whatever minimal mechanism that decision implies, on the MCP path.
+- The declared task-boundary mechanism on the MCP path, per the owner decision
+  recorded above: the host or a session wrapper supplies `task_id`, and an event
+  without one is written as ungrouped. No runtime inference.
 - Tests that events carry the identity, and that its absence degrades to
   ungrouped events rather than failing a request.
 

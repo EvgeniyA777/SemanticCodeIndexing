@@ -124,9 +124,63 @@
       (:name client-info) (assoc :actor_id (:name client-info))
       (:tenant_id state*) (assoc :tenant_id (:tenant_id state*)))))
 
-(defn record-mcp-event! [state event]
+(defn record-mcp-event!
+  "Record one MCP usage event, merging the session's own identity with whatever
+  the request supplied.
+
+  Two rules, both from plans/022 Stage 0 findings:
+
+  - a trace **refines** identity, it never erases it. Fields the request did not
+    supply are dropped before merging, so a query without a trace no longer
+    blanks the server's `actor_id` or `tenant_id`;
+  - the **server session id wins outright**. It is the identity of the MCP
+    session itself, so a client-supplied `session_id` cannot replace it. Before
+    this, `resolve_context` was the one operation that lost its session id —
+    null when no trace was sent, and a client value when one was — while every
+    neighbouring call in the same session carried the server id, so events did
+    not group."
+  [state event]
   (when-let [sink (:usage_metrics @state)]
-    (usage/safe-record-event! sink (merge (tool-usage-context state) event))))
+    (let [context (tool-usage-context state)
+          supplied (into {} (remove (comp nil? val)) event)]
+      (usage/safe-record-event!
+       sink
+       (cond-> (merge context supplied)
+         (:session_id context) (assoc :session_id (:session_id context)))))))
+
+(def capture-query-text-env "SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT")
+
+(defn capture-query-text?
+  "Whether raw query text may be written to telemetry. Off unless explicitly
+  enabled, because passive collection runs unattended."
+  []
+  (= "1" (str/trim (str (System/getenv capture-query-text-env)))))
+
+(defn redact-query-summary
+  "The telemetry copy of a normalized query summary.
+
+  `details` is the user's own words. Passive collection writes to a database
+  nobody is watching at the time, so by default the text is replaced with a
+  digest and a length: enough to tell two queries apart, to spot repeats, and to
+  correlate with a host transcript that does hold the text, without storing the
+  prompt itself. Everything structural — purpose, target kinds, budget — is kept
+  as is.
+
+  Set `SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT=1` to record the raw text.
+
+  This affects telemetry only. The summary returned to the caller is untouched:
+  a client asking what its query normalized to must still get an answer."
+  [summary]
+  (when summary
+    (let [details (:details summary)
+          text (when (string? details) details)]
+      (cond
+        (nil? text) summary
+        (capture-query-text?) summary
+        :else (-> summary
+                  (dissoc :details)
+                  (assoc :details_hash (usage/hash-root-path text)
+                         :details_chars (count text)))))))
 
 (defn usage-fields-for-query [query]
   {:trace_id (get-in query [:trace :trace_id])
@@ -752,7 +806,7 @@
                       :policy_version (get-in result-meta [:retrieval_policy :version])
                       :query_ingress_mode query_ingress_mode
                       :query_normalized query_normalized
-                      :normalized_query_summary continuation-summary
+                      :normalized_query_summary (redact-query-summary continuation-summary)
                       :continuation_artifact {:selection_id (:selection_id result)
                                               :snapshot_id (:snapshot_id result)
                                               :next_tool "expand_context"}

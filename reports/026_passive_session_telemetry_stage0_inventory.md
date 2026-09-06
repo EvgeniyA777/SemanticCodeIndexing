@@ -1,5 +1,5 @@
 ---
-title: "Passive Session Telemetry — Stage 0 Inventory"
+title: "Passive Session Telemetry — Stage 0 Inventory and Stage 1a"
 doc_type: "progress_log"
 lifecycle: "active"
 status: "completed"
@@ -164,3 +164,79 @@ Stage 1, but its scope is now larger than "add `task_id`": Finding 1 must be
 fixed first, because supplying a task id on top of an inconsistent session id
 would produce grouped events inside a session that does not group. Finding 3
 needs an owner decision before collection widens beyond this machine.
+
+---
+
+# Stage 1a: Session Identity And Privacy Hardening (2026-09-05)
+
+Status: **complete**. Owner turned the two open findings into an input gate for
+task identity, so both were fixed before any `task_id` work.
+
+## Finding 1, fixed — session id precedence
+
+`record-mcp-event!` merged the request's fields over the session's own, so the
+`nil`s that `usage-fields-for-query` produces for a query without a trace
+overwrote what the server already knew, and a client-supplied `session_id`
+replaced the server's outright.
+
+Two rules now hold, both stated in the function:
+
+- fields the request did not supply are dropped before merging, so a trace
+  **refines** identity and never erases it;
+- the **server session id wins outright**, because it is the identity of the MCP
+  session itself.
+
+Verified on the live database by re-running the same session:
+
+| operation | session_id | task_id |
+| --- | --- | --- |
+| `create_index` | `19fbee28-…` | |
+| `resolve_context` (no trace) | `19fbee28-…` | |
+| `resolve_context` (trace with its own session id) | `19fbee28-…` | `telemetry-probe-task` |
+| `expand_context` | `19fbee28-…` | |
+| `fetch_context_detail` | `19fbee28-…` | |
+
+All five events share one session id, and the client's trace fields survive.
+Before the fix, the two `resolve_context` rows carried `null` and
+`telemetry-probe-session` respectively while their neighbours carried the server
+id.
+
+## Finding 3, fixed — query text redacted by default
+
+Telemetry now stores `details_hash` and `details_chars` in place of the user's
+words, keeping `purpose`, `target_keys`, `token_budget`, and `include_tests`.
+That is enough to tell queries apart, spot repeats, and correlate with a host
+transcript that does hold the text.
+
+Raw text is opt-in through `SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT=1`.
+
+Redaction applies to telemetry only. The `normalized_query_summary` returned
+**to the caller** is unchanged — a client asking what its query normalized to
+still gets an answer — and a test asserts exactly that, because the tempting
+implementation redacts both.
+
+Verified live: `normalized_query_summary.details` is empty for every recorded
+event, with `details_chars` 54 and 46 and distinct hashes.
+
+## Tests
+
+`semidx.mcp.usage-identity-test`, 8 tests / 27 assertions, covering the three
+precedence cases the owner specified, redaction defaults, the opt-in, an
+end-to-end event carrying no query text, and the caller's own summary staying
+intact.
+
+Two test defects were caught by writing them: the `status` assertion revealed
+that a canonical query with a non-UUID `trace_id` and no `targets` is rejected,
+so the identity tests had been exercising the error path rather than the success
+path.
+
+## Verification
+
+- `clojure -M:test`: **623 tests, 3370 assertions, 0 failures, 0 errors**
+  (was 615 / 3343).
+- Live re-run of the same MCP session against PostgreSQL, quoted above.
+
+## Not done, deliberately
+
+`task_id` mechanics (Stage 1b), `selected_paths` on the runtime event (owner
+decision: it stays a Stage 2 offline-join concern), cost, and verdicts.
