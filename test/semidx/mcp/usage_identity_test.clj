@@ -86,6 +86,32 @@
         (is (= trace-id-2 (:trace_id event)))
         (is (= "r-2" (:request_id event)))))))
 
+(deftest a-losing-client-session-id-is-kept-as-evidence-test
+  (testing "the client id is what an offline join against a host transcript keys
+            on, so losing the precedence contest must not mean being discarded"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (call-resolve! state root
+                     {:query {:schema_version "1.0"
+                              :intent {:purpose "code_understanding" :details "order flow"}
+                              :targets {:symbols ["process-order"]}
+                              :trace {:trace_id trace-id-2
+                                      :request_id "r-3"
+                                      :session_id "host-session-abc"}}})
+      (let [event (first (resolve-events sink))]
+        (is (= "server-session-1" (:session_id event)))
+        (is (= "host-session-abc" (get-in event [:payload :client_session_id]))
+            "kept in the payload rather than in the column")))))
+
+(deftest no-client-session-id-adds-no-payload-noise-test
+  (testing "the common case is unchanged: nothing is recorded when the client
+            sent no session id of its own"
+    (let [root (sample-repo!)
+          [state sink] (session-with-sink)]
+      (call-resolve! state root {:intent "find the order flow"})
+      (let [event (first (resolve-events sink))]
+        (is (not (contains? (:payload event) :client_session_id)))))))
+
 (deftest every-operation-in-one-session-shares-the-session-id-test
   (testing "grouping is the whole point: create_index and resolve_context must
             agree, which they did not before Stage 1a"

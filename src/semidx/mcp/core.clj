@@ -128,7 +128,7 @@
   "Record one MCP usage event, merging the session's own identity with whatever
   the request supplied.
 
-  Two rules, both from plans/022 Stage 0 findings:
+  Three rules, all from plans/022 Stage 0 findings:
 
   - a trace **refines** identity, it never erases it. Fields the request did not
     supply are dropped before merging, so a query without a trace no longer
@@ -138,15 +138,25 @@
     this, `resolve_context` was the one operation that lost its session id —
     null when no trace was sent, and a client value when one was — while every
     neighbouring call in the same session carried the server id, so events did
-    not group."
+    not group;
+  - a client session id that lost is **kept as evidence**, in
+    `payload.client_session_id`, rather than discarded. It is what an offline
+    join against a host transcript keys on, and it is only recorded when it
+    differs from the server's, so the common case stays unchanged."
   [state event]
   (when-let [sink (:usage_metrics @state)]
     (let [context (tool-usage-context state)
-          supplied (into {} (remove (comp nil? val)) event)]
+          supplied (into {} (remove (comp nil? val)) event)
+          server-session (:session_id context)
+          client-session (:session_id supplied)
+          merged (cond-> (merge context supplied)
+                   server-session (assoc :session_id server-session))]
       (usage/safe-record-event!
        sink
-       (cond-> (merge context supplied)
-         (:session_id context) (assoc :session_id (:session_id context)))))))
+       (cond-> merged
+         (and server-session client-session (not= server-session client-session))
+         (assoc :payload (assoc (or (:payload merged) {})
+                                :client_session_id client-session)))))))
 
 (def capture-query-text-env "SEMIDX_USAGE_METRICS_CAPTURE_QUERY_TEXT")
 

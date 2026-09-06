@@ -169,6 +169,18 @@ Deliverables:
   without one is written as ungrouped. No runtime inference.
 - Tests that events carry the identity, and that its absence degrades to
   ungrouped events rather than failing a request.
+- **Delivered early (2026-09-06)**: a client `session_id` that loses the
+  precedence contest is kept as `payload.client_session_id` instead of being
+  discarded, because it is what an offline join against a host transcript keys
+  on. Recorded only when it differs from the server's, so the common case gains
+  no payload noise. Owner decision; verified on the live database.
+
+Open before this stage can start: **how a task boundary is declared over MCP**.
+`task_id` arrives today only inside a retrieval `query.trace`, which
+`create_index`, `expand_context`, and `fetch_context_detail` do not carry, so a
+task spanning a normal staged flow cannot be expressed yet. Choosing between a
+per-call argument and a session-scoped declaration changes the public tool
+contract and is an owner decision, not an implementation detail.
 
 Exit criteria:
 
