@@ -233,6 +233,20 @@ rest of the idea rests on it.
 
 Commit boundary: the offline tool and its report; no runtime change.
 
+Status: **complete (2026-09-06)**, report in
+[`reports/027`](../reports/027_session_telemetry_offline_join.md). The join holds
+mechanically — the selection, the host token split, and the follow-up commands
+are all recoverable from real transcripts. What does not hold is the verdict
+rule on top: `ideas/016` never bounds "what the agent did next", and between two
+retrievals there are 0 to 429 tool calls, so the distribution moves with an
+attribution window nobody has justified. A session reads as a miss or not
+depending on that number. Ten retrievals across four sessions is far too few to
+settle it, so `trace_verdict_policy_v1` now has two named prerequisites: a
+window with a basis, and sessions to test it on. Re-query stays explicitly
+unresolved and is never scored as a miss. The database half is implemented and
+tested but not yet exercisable on real paired data, because the host that
+produced these transcripts ran without the sink enabled.
+
 ### Stage 3. Provider summary — owned by `plans/018`
 
 Recorded here for coordination only. The provider state, facts, gaps, conflicts,
