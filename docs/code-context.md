@@ -1,6 +1,6 @@
 # Code Context: semidx
 
-- fingerprint: de1cdf64a4a1e49efcfd64d69e1683a03f5f0a7b
+- fingerprint: 8c1507c4c441551d87078b2db08e2008d6a863ff
 
 ## Tree
 ```text
@@ -100,7 +100,7 @@ semidx
 - semidx.core -> semidx.runtime.usage-metrics
 - semidx.integration.css-onboarding-test -> clojure.java.io
 - semidx.integration.css-onboarding-test -> clojure.test
-- ... +599 more
+- ... +602 more
 
 ## Namespaces
 ### semidx.contracts.cli
@@ -163,8 +163,8 @@ semidx
 - mcp-retrieval-query-schema [section]
 ### semidx.mcp.http-server
 - path: src/semidx/mcp/http_server.clj
-- requires: clojure.data.json, clojure.java.io, clojure.string, semidx.mcp.core, semidx.mcp.session-registry
-- aliases: core -> semidx.mcp.core, io -> clojure.java.io, json -> clojure.data.json, sessions -> semidx.mcp.session-registry, str -> clojure.string
+- requires: clojure.data.json, clojure.java.io, clojure.string, semidx.core, semidx.mcp.core, semidx.mcp.session-registry, semidx.runtime.usage-metrics
+- aliases: core -> semidx.mcp.core, io -> clojure.java.io, json -> clojure.data.json, sci -> semidx.core, sessions -> semidx.mcp.session-registry, str -> clojure.string, usage -> semidx.runtime.usage-metrics
 - symbols:
 - default-host [section]
 - default-port [section]

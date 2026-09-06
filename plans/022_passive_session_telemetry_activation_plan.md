@@ -218,12 +218,45 @@ and any pacing expectation should be set before anyone waits on a number.
 Mitigation: the Stage 0 inventory answers what is written; anything carrying
 prompt text or source code by default is a finding, not a feature.
 
-## Open owner decisions
+## Owner decisions (2026-09-05)
 
-1. How a task boundary is declared in a real session (blocks Stage 1).
-2. Whether `SPEC.md` §5.1 is rewritten to state what observational evidence
-   counts as a pass, since its current North Star cannot be produced without the
-   comparative arms.
-3. Which surfaces are in scope for collection: interactive MCP only, or library,
-   HTTP, and gRPC as well.
-4. Whether the paused `plans/020` artefacts stay available as a fallback.
+All four questions below were settled before Stage 0 ran.
+
+1. **Task boundary is declared, never inferred.** `session_id` is the whole
+   interactive session, `task_id` is one user goal or attempt inside it, and
+   `request_id` is one MCP tool call. The host or a session wrapper supplies the
+   task id; an event without one is written as ungrouped. No runtime inference
+   from text.
+2. **`SPEC.md` §5.1 is not rewritten.** Observability yields admission and
+   evidence, not a value verdict; the comparative North Star stands and
+   `plans/020` remains the path to a real verdict.
+3. **Collection starts with the interactive MCP surfaces only** — stdio and
+   Streamable HTTP. Library, HTTP, and gRPC are connected later, and only if
+   Stage 0 shows the event shape and privacy are sound.
+4. **The paused `plans/020` artefacts stay** as the fallback comparative path.
+
+## Stage 0 result (2026-09-05)
+
+Complete. Full inventory in
+[`reports/026`](../reports/026_passive_session_telemetry_stage0_inventory.md).
+Four findings, one already fixed:
+
+- **The MCP HTTP transport recorded nothing** (fixed): it built no sink, and an
+  absent sink is indistinguishable from a quiet session. Now wired and tested.
+- **`resolve_context` loses the session id** (High, open): the query's `trace`
+  *overwrites* the server session id instead of refining it, so a client that
+  sends no trace leaves the field null on exactly the operation that matters,
+  while its neighbours carry the server id. Events do not group today.
+- **The selection is not on the event payload** (High, open): `selected_paths`
+  and `selected_unit_ids` exist on the library path but not on the MCP tool
+  event, so Stage 2's load-bearing rule is not computable from the database
+  alone. It remains computable from the host transcript, which retains the full
+  MCP result per call — Stage 2 is written against that shape.
+- **The raw intent text is recorded by default** (Medium, open): source code is
+  never recorded, but `normalized_query_summary.details` stores the user's query
+  verbatim. Against the stated "no full prompt by default" constraint this needs
+  an owner decision — hash, truncate, or opt-in — before collection widens.
+
+Stage 1 therefore starts with the session-id defect, not with `task_id`:
+supplying a task id on top of an inconsistent session id would group events
+inside a session that does not group.

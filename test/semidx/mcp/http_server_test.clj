@@ -3,7 +3,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [semidx.mcp.http-server :as mcp-http])
+            [semidx.mcp.http-server :as mcp-http]
+            [semidx.runtime.usage-metrics :as usage])
   (:import [java.io BufferedReader InputStreamReader OutputStreamWriter]
            [java.net HttpURLConnection URL]
            [java.nio.charset StandardCharsets]))
@@ -36,7 +37,7 @@
      (when payload
        (.setDoOutput conn true)
        (.setRequestProperty conn "Content-Type" "application/json")
-     (with-open [w (OutputStreamWriter. (.getOutputStream conn) StandardCharsets/UTF_8)]
+       (with-open [w (OutputStreamWriter. (.getOutputStream conn) StandardCharsets/UTF_8)]
          (.write w (json/write-str payload :escape-slash false))))
      (let [status (.getResponseCode conn)
            stream (try
@@ -110,7 +111,7 @@
           (let [list-response (request! "POST"
                                         (str base-url "/mcp")
                                         {:jsonrpc "2.0"
-                                        :id 2
+                                         :id 2
                                          :method "tools/list"}
                                         {"Mcp-Session-Id" session-id})]
             (is (= 200 (:status list-response)))
@@ -388,3 +389,42 @@
       (finally
         (close-sse! sse)
         (mcp-http/stop-http-server! server)))))
+
+(deftest http-sessions-record-usage-metrics-test
+  (testing "the Streamable HTTP transport records usage like the stdio one.
+
+           Until plans/022 Stage 0 this transport built no sink at all, so a
+           host using it produced no telemetry and produced it silently: the
+           sink is optional everywhere, so its absence is indistinguishable
+           from a quiet session."
+    (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                         "sci-mcp-http-usage" (make-array java.nio.file.attribute.FileAttribute 0)))
+          _ (create-sample-repo! tmp-root)
+          sink (usage/in-memory-usage-metrics)
+          server (mcp-http/start-http-server! {:host "127.0.0.1"
+                                               :port 0
+                                               :transport-mode "dual"
+                                               :usage-metrics sink})
+          base-url (str "http://127.0.0.1:" (:port server))]
+      (try
+        (let [init (request! "POST" (str base-url "/mcp")
+                             {:jsonrpc "2.0" :id 1 :method "initialize"
+                              :params {:protocolVersion "2024-11-05"
+                                       :capabilities {}
+                                       :clientInfo {:name "usage-test" :version "1.0"}}}
+                             nil)
+              session-id (get-in init [:headers "Mcp-Session-Id"])]
+          (request! "POST" (str base-url "/mcp")
+                    {:jsonrpc "2.0" :id 2 :method "tools/call"
+                     :params {:name "create_index" :arguments {:root_path tmp-root}}}
+                    {"Mcp-Session-Id" session-id})
+          (let [events (usage/emitted-events sink)
+                index-events (filter #(= "create_index" (:operation %)) events)]
+            (is (seq index-events) "a tool call on this transport is recorded")
+            (is (= #{"mcp"} (set (map :surface index-events))))
+            (is (= #{session-id} (set (map :session_id index-events)))
+                "events carry the MCP session id, so a session groups")
+            (is (= #{"usage-test"} (set (map :actor_id index-events)))
+                "and the client identity from clientInfo")))
+        (finally
+          (mcp-http/stop-http-server! server))))))

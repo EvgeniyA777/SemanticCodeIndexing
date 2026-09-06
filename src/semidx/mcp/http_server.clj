@@ -3,8 +3,10 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [semidx.core :as sci]
             [semidx.mcp.core :as core]
-            [semidx.mcp.session-registry :as sessions])
+            [semidx.mcp.session-registry :as sessions]
+            [semidx.runtime.usage-metrics :as usage])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.net InetSocketAddress URLDecoder]
            [java.nio.charset StandardCharsets]
@@ -108,9 +110,10 @@
 (defn- invalid-jsonrpc! [^HttpExchange exchange id message]
   (write-json! exchange 400 (jsonrpc-error-body id -32600 message)))
 
-(defn- create-session! [{:keys [session-registry max-indexes policy-registry]}]
+(defn- create-session! [{:keys [session-registry max-indexes policy-registry usage-metrics]}]
   (sessions/create-session! session-registry {:max-indexes max-indexes
-                                              :policy-registry policy-registry}))
+                                              :policy-registry policy-registry
+                                              :usage-metrics usage-metrics}))
 
 (defn- ensure-session! [server-state session-id]
   (when session-id
@@ -244,7 +247,14 @@
           (write-json! exchange 500 (jsonrpc-error-body nil -32603 (.getMessage e))))))))
 
 (defn start-http-server!
-  [{:keys [host port max-indexes policy-registry transport-mode session-registry]
+  "Start the MCP Streamable HTTP / SSE transport.
+
+  `:usage-metrics` is carried on the server state and handed to every session,
+  so this transport records usage exactly like the stdio one. Without it a host
+  on this transport produced no telemetry at all, and silently — the sink is
+  optional everywhere, so its absence looks the same as a quiet session."
+  [{:keys [host port max-indexes policy-registry transport-mode session-registry
+           usage-metrics]
     :or {host default-host
          port default-port
          max-indexes core/default-max-indexes
@@ -254,6 +264,7 @@
         server-state {:max-indexes max-indexes
                       :policy-registry policy-registry
                       :transport-mode transport-mode
+                      :usage-metrics usage-metrics
                       :session-registry (or session-registry (sessions/new-registry))}]
     (.setExecutor server executor)
     (.createContext server "/health" (with-handler handle-health))
@@ -280,14 +291,28 @@
         max-indexes (or max_indexes
                         (some-> (System/getenv "SEMIDX_MCP_MAX_INDEXES") parse-long)
                         core/default-max-indexes)
-        transport-mode (or transport_mode "dual")]
+        transport-mode (or transport_mode "dual")
+        ;; Same activation contract as the stdio transport: default-off, and
+        ;; enabled only by the environment.
+        usage-metrics (when-let [jdbc-url (System/getenv "SEMIDX_USAGE_METRICS_JDBC_URL")]
+                        (sci/postgres-usage-metrics {:jdbc-url jdbc-url
+                                                     :user (System/getenv "SEMIDX_USAGE_METRICS_DB_USER")
+                                                     :password (System/getenv "SEMIDX_USAGE_METRICS_DB_PASSWORD")}))]
     (core/log! "semidx_mcp_http_started" {:host host
-                                                          :port port
-                                                          :transport_mode transport-mode
-                                                          :max_indexes max-indexes})
+                                          :port port
+                                          :transport_mode transport-mode
+                                          :max_indexes max-indexes
+                                          :usage_metrics (boolean usage-metrics)})
+    (when usage-metrics
+      (usage/safe-record-event! usage-metrics {:surface "mcp"
+                                               :operation "server_start"
+                                               :status "success"
+                                               :payload {:transport "http"
+                                                         :max_indexes max-indexes}}))
     (start-http-server! {:host host
                          :port port
                          :max-indexes max-indexes
                          :policy-registry policy-registry
-                         :transport-mode transport-mode})
+                         :transport-mode transport-mode
+                         :usage-metrics usage-metrics})
     @(promise)))
