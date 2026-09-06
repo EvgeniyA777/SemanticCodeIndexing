@@ -309,9 +309,30 @@
          distinct
          vec)))
 
-(defn normalize-parser-opts [parser-opts]
+(def provider-pipeline-env "SEMIDX_PROVIDER_PIPELINE")
+
+(defn deployment-parser-opts
+  "Parser options the deployment sets rather than the caller.
+
+  Only the plans/018 provider pipeline mode today. It belongs in the environment
+  because it is an operator's decision to observe, made once for a server, and a
+  caller should not have to repeat it on every `create_index` — nor be able to
+  forget it and silently stop observing."
+  []
+  (if-let [mode (some-> (System/getenv provider-pipeline-env) str/trim not-empty)]
+    {:provider_pipeline mode}
+    {}))
+
+(defn normalize-parser-opts
+  "Caller options win over deployment options, which win over nothing.
+
+  An explicit `parser_opts` still replaces the built-in defaults, as before; the
+  deployment layer is merged underneath so switching observation on does not
+  require touching any caller."
+  [parser-opts]
   (let [opts (ensure-map-or-nil parser-opts "parser_opts")]
-    (if (nil? opts) default-parser-opts opts)))
+    (merge (deployment-parser-opts)
+           (if (nil? opts) default-parser-opts opts))))
 
 (defn normalize-language-policy [language-policy]
   (let [policy (ensure-map-or-nil language-policy "language_policy")]

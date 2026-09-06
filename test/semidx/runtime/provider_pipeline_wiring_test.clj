@@ -7,6 +7,7 @@
   on, not that it is."
   (:require [clojure.test :refer [deftest testing is]]
             [semidx.core :as sci]
+            [semidx.mcp.core :as mcp]
             [semidx.runtime.index :as idx]
             [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.usage-metrics :as usage]))
@@ -73,3 +74,21 @@
       (sci/create-index {:root_path java-corpus :usage_metrics sink})
       (is (not (contains? (:payload (first (usage/emitted-events sink))) :provider_summary))
           "a default build records what it always recorded"))))
+
+(deftest the-deployment-can-switch-observation-on-without-touching-callers-test
+  (testing "an operator decides once for a server; a caller should not have to
+            repeat it on every create_index, nor be able to forget it"
+    (with-redefs [mcp/deployment-parser-opts (constantly {:provider_pipeline "shadow"})]
+      (is (= :shadow (idx/provider-pipeline-mode (mcp/normalize-parser-opts nil)))
+          "with no caller opts, the deployment setting applies")
+      (is (= :shadow (idx/provider-pipeline-mode
+                      (mcp/normalize-parser-opts {:clojure_engine :regex})))
+          "and it survives caller opts that say nothing about it")
+      (is (= :off (idx/provider-pipeline-mode
+                   (mcp/normalize-parser-opts {:provider_pipeline "off"})))
+          "but an explicit caller value still wins")))
+
+  (testing "with nothing set, nothing changes"
+    (with-redefs [mcp/deployment-parser-opts (constantly {})]
+      (is (= :off (idx/provider-pipeline-mode (mcp/normalize-parser-opts nil))))
+      (is (= mcp/default-parser-opts (mcp/normalize-parser-opts nil))))))
