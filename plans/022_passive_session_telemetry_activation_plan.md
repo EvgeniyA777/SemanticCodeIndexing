@@ -240,7 +240,7 @@ are all recoverable from real transcripts. What does not hold is the verdict
 rule on top: `ideas/016` never bounds "what the agent did next", and between two
 retrievals there are 0 to 429 tool calls, so the distribution moves with an
 attribution window nobody has justified. A session reads as a miss or not
-depending on that number. Ten retrievals across four sessions is far too few to
+depending on that number. The sample available at the time was far too small to
 settle it, so `trace_verdict_policy_v1` now has two named prerequisites: a
 window with a basis, and sessions to test it on. Re-query stays explicitly
 unresolved and is never scored as a miss. The database half is implemented and
@@ -373,10 +373,22 @@ arbitrary number could not be used.
 
 ### 5. Volume
 
-Ten retrievals across four sessions at the time of Stage 2. A sample of
-behaviour, not a dataset. Recording is now enabled, so this one resolves by
-waiting rather than by deciding — but the waiting period should be stated before
-anyone looks at a number.
+Corrected 2026-09-06. Stage 2 first reported ten retrievals across four
+sessions; that counted only this repository. Across all projects the transcripts
+hold **144 semidx calls in 35 sessions**, and nothing had rotated away as that
+report claimed.
+
+Still a sample rather than a dataset, but the starting point is larger and it
+grows on its own now that recording is on: one global MCP server serves every
+project, so telemetry covers all of them and `root_path_hash` separates them.
+
+One caveat that matters more than the count: **this repository is the biased
+sample**, because its `CLAUDE.md` instructs an agent to use semidx first. Six
+sevenths of the usage is on projects with no such instruction, so a verdict rule
+should be tested there rather than on self-observation.
+
+This blocker resolves by waiting rather than by deciding — but the waiting
+period should be stated before anyone looks at a number.
 
 ### What is safe to do meanwhile
 

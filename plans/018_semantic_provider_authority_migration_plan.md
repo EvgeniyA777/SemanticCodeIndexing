@@ -985,6 +985,46 @@ same spirit as the Stage 4 preflight:
 
 Commit boundary: Java overlay remains opt-in and shadowed.
 
+#### Stage 6a. Pipeline Wiring, Default-Off (complete, 2026-09-06)
+
+Goal: make the provider pipeline run where real indexing happens, without making
+it authoritative.
+
+Why separately from Stage 6: Stage 6's exit criteria require comparative
+evidence, and `plans/020` — the track that was to supply it — is paused. Until
+this stage the pipeline had never executed during an actual index build, only
+through fixtures and standalone shadow entry points, so there was nothing to
+compare against the path in use. `plans/022` then made real sessions
+observable, which turned "wire it up so it can be measured" from an assertion
+into something with a measuring instrument behind it.
+
+Delivered:
+
+- `index/provider-pipeline-mode`: `:off` (default) or `:shadow`, read from
+  parser opts as keyword or string.
+- In `:shadow`, every provider-eligible path in the build is run through
+  `provider-execution/shadow-facts-for-file`, and the observations reduce to an
+  additive `:provider_summary` — counts, authority distribution, diagnostic
+  codes, latency. Never the facts themselves, which would duplicate the
+  snapshot.
+- The summary rides on the `create_index` usage event, which is the provider
+  summary `plans/022` asked for.
+- A provider that throws is counted as a failed observation; a shadow run can
+  never fail a real build.
+
+Exit criteria, all met:
+
+- A default build is unchanged, and carries **no** `:provider_summary` key at
+  all — conditional rather than nil-valued, because a snapshot is serialized,
+  diffed, and round-tripped, so an always-present key would change the shape of
+  every build. A test asserts the absence, and caught exactly that mistake.
+- A shadow build produces the same units and the same unit identities as a
+  default one: an observation, not a second opinion.
+- Telemetry carries the summary only when the pipeline ran.
+
+Not in scope, and unchanged: authority, confidence, `parser_mode`, and the
+default extraction path. Stage 6 still owns all four.
+
 ### Stage 6. Default Authority Switch And Truthful Degradation
 
 Goal: make the reviewed provider plan authoritative for Java and TypeScript.

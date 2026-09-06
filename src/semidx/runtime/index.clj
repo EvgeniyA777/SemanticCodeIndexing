@@ -48,6 +48,79 @@
    {}
    units))
 
+(def provider-pipeline-modes
+  "How the plans/018 provider pipeline participates in an index build.
+
+  `:off` is the default and costs nothing: not a single provider is planned or
+  executed, and the build is byte-identical to one from before this seam
+  existed. `:shadow` runs the pipeline alongside the real parse and records what
+  it would have produced, changing no unit and no snapshot.
+
+  Stage 6 adds the third mode that makes it authoritative. Until then the point
+  is only that the pipeline runs where real indexing happens, so it can be
+  compared against the path in use rather than against fixtures."
+  #{:off :shadow})
+
+(defn provider-pipeline-mode [parser-opts]
+  (let [mode (or (:provider_pipeline parser-opts)
+                 (:provider-pipeline parser-opts))
+        mode (cond-> mode (string? mode) keyword)]
+    (if (contains? provider-pipeline-modes mode) mode :off)))
+
+(defn- provider-shadow-for-file
+  "Run the provider pipeline for one file and reduce it to a summary.
+
+  Failure is contained here on purpose: a shadow observation must never be able
+  to fail a real index build, so anything thrown becomes a recorded error rather
+  than an exception."
+  [root-path path parser-opts]
+  (let [started (System/nanoTime)]
+    (try
+      (let [result ((requiring-resolve 'semidx.runtime.provider-execution/shadow-facts-for-file)
+                    {:root_path root-path :path path :parser_opts parser-opts})
+            elapsed (/ (double (- (System/nanoTime) started)) 1e6)]
+        {:path path
+         :elapsed_ms elapsed
+         :fact_count (count (:facts result))
+         :authorities (frequencies (map :authority (:facts result)))
+         :gap_count (count (get-in result [:execution :gaps]))
+         :diagnostic_codes (mapv :code (:diagnostics result))
+         :error_count (count (:errors result))})
+      (catch Throwable t
+        {:path path
+         :elapsed_ms (/ (double (- (System/nanoTime) started)) 1e6)
+         :failed true
+         :error (or (.getMessage t) (str (class t)))}))))
+
+(defn provider-shadow-summary
+  "Aggregate provider-pipeline observations over the files of one build.
+
+  Additive and bounded: counts, authority distribution, diagnostic codes, and
+  latency — never the facts themselves, which would duplicate the snapshot."
+  [observations]
+  (when (seq observations)
+    (let [failed (filter :failed observations)]
+      {:mode "shadow"
+       :files_observed (count observations)
+       :files_failed (count failed)
+       :fact_count (reduce + 0 (keep :fact_count observations))
+       :gap_count (reduce + 0 (keep :gap_count observations))
+       :error_count (reduce + 0 (keep :error_count observations))
+       :authorities (->> observations
+                         (mapcat (comp seq :authorities))
+                         (reduce (fn [acc [authority n]] (update acc authority (fnil + 0) n)) {})
+                         (into (sorted-map)))
+       :diagnostic_codes (->> observations
+                              (mapcat :diagnostic_codes)
+                              (map str)
+                              frequencies
+                              (into (sorted-map)))
+       :total_elapsed_ms (Math/round (reduce + 0.0 (keep :elapsed_ms observations)))})))
+
+(defn- provider-eligible-paths [paths]
+  (let [descriptors-for (requiring-resolve 'semidx.runtime.providers/descriptors-for)]
+    (filterv #(seq (descriptors-for %)) paths)))
+
 (defn- parse-files [root-path paths parser-opts]
   (letfn [(distinct-vec [xs]
             (->> xs (remove nil?) distinct vec))
@@ -473,41 +546,47 @@
          resolved-relations (resolve-relation-targets (:relations files-data) units-by-id (:files files-data))
          relation-indexes (relations/index-relations resolved-relations)]
      (attach-lifecycle
-      {:root_path root-path
-       :snapshot_id (uuid)
-       :indexed_at (now-iso)
-       :repo_identity repo-identity*
-       :repo_key (:repo_key repo-identity*)
-       :workspace_path (:workspace_path repo-identity*)
-       :workspace_key (:workspace_key repo-identity*)
-       :git_branch (:git_branch repo-identity*)
-       :git_commit (:git_commit repo-identity*)
-       :git_dirty (:git_dirty repo-identity*)
-       :identity_source (:identity_source repo-identity*)
-       :files (:files files-data)
-       :file_snapshots (build-file-snapshots root-path (:files files-data))
-       :diagnostics (:diagnostics files-data)
-       :units units-by-id
-       :unit_order (mapv :unit_id units)
-       :symbol_index (build-symbol-index units)
-       :path_index (index-by :path units)
-       :module_index (index-by :module units)
-       :callers_index callers-index
-       :callees_index callees-index
-       :relations (:relations relation-indexes)
-       :relation_forward_index (:relation_forward_index relation-indexes)
-       :relation_reverse_index (:relation_reverse_index relation-indexes)
-       :relation_diagnostics (:relation_diagnostics relation-indexes)
-       :module_dependents (build-module-dependents (:files files-data))
-       :test_target_index (build-test-target-index (:files files-data))
-       :detected_languages (:detected_languages activation-metadata)
-       :active_languages (:active_languages activation-metadata)
-       :language_fingerprint (:language_fingerprint activation-metadata)
-       :activation_state (:activation_state activation-metadata)
-       :supported_languages (:supported_languages activation-metadata)
-       :selection_hint (:selection_hint activation-metadata)
-       :manual_language_selection (:manual_language_selection activation-metadata)
-       :workspace_state (:workspace_state lifecycle-opts)}
+      (cond->
+       {:root_path root-path
+        :snapshot_id (uuid)
+        :indexed_at (now-iso)
+        :repo_identity repo-identity*
+        :repo_key (:repo_key repo-identity*)
+        :workspace_path (:workspace_path repo-identity*)
+        :workspace_key (:workspace_key repo-identity*)
+        :git_branch (:git_branch repo-identity*)
+        :git_commit (:git_commit repo-identity*)
+        :git_dirty (:git_dirty repo-identity*)
+        :identity_source (:identity_source repo-identity*)
+        :files (:files files-data)
+        :file_snapshots (build-file-snapshots root-path (:files files-data))
+        :diagnostics (:diagnostics files-data)
+        :units units-by-id
+        :unit_order (mapv :unit_id units)
+        :symbol_index (build-symbol-index units)
+        :path_index (index-by :path units)
+        :module_index (index-by :module units)
+        :callers_index callers-index
+        :callees_index callees-index
+        :relations (:relations relation-indexes)
+        :relation_forward_index (:relation_forward_index relation-indexes)
+        :relation_reverse_index (:relation_reverse_index relation-indexes)
+        :relation_diagnostics (:relation_diagnostics relation-indexes)
+        :module_dependents (build-module-dependents (:files files-data))
+        :test_target_index (build-test-target-index (:files files-data))
+        :detected_languages (:detected_languages activation-metadata)
+        :active_languages (:active_languages activation-metadata)
+        :language_fingerprint (:language_fingerprint activation-metadata)
+        :activation_state (:activation_state activation-metadata)
+        :supported_languages (:supported_languages activation-metadata)
+        :selection_hint (:selection_hint activation-metadata)
+        :manual_language_selection (:manual_language_selection activation-metadata)
+        :workspace_state (:workspace_state lifecycle-opts)}
+        ;; plans/018 Stage 6a. Conditional rather than nil-valued: a snapshot is
+        ;; serialized, diffed, and round-tripped, so an always-present key would
+        ;; change the shape of every default build.
+        (:provider_summary files-data)
+        (assoc :provider_summary (:provider_summary files-data)))
       lifecycle-opts))))
 
 (defn- shadow-reuse-mode? [mode]
@@ -632,8 +711,13 @@
                          (filtered-paths (normalize-paths (:paths opts)) (:active_languages activation-state))
                          (activation/active-source-paths discovery activation-state))
             files-data (parse-files root_path discovered parser_opts)
+            provider-summary (when (= :shadow (provider-pipeline-mode parser_opts))
+                               (provider-shadow-summary
+                                (mapv #(provider-shadow-for-file root_path % parser_opts)
+                                      (provider-eligible-paths discovered))))
             index (build-index-state root_path
-                                     files-data
+                                     (cond-> files-data
+                                       provider-summary (assoc :provider_summary provider-summary))
                                      {:provenance_source "fresh_build"
                                       :requested_snapshot_id pinned_snapshot_id
                                       :max_snapshot_age_seconds max_snapshot_age_seconds

@@ -81,9 +81,14 @@
                    :root_path_hash (usage/hash-root-path (:root_path index*))
                    :file_count (count (:files index*))
                    :unit_count (count (:units index*))
-                   :payload {:load_latest (boolean (:load_latest opts))
-                             :paths_count (count (:paths opts))
-                             :snapshot_id (:snapshot_id index*)}})))
+                   :payload (cond-> {:load_latest (boolean (:load_latest opts))
+                                     :paths_count (count (:paths opts))
+                                     :snapshot_id (:snapshot_id index*)}
+                              ;; plans/018 Stage 6a: present only when the
+                              ;; provider pipeline actually ran, so a default
+                              ;; build records exactly what it recorded before.
+                              (:provider_summary index*)
+                              (assoc :provider_summary (:provider_summary index*)))})))
         index*)
       (catch Exception e
         (when (should-record-usage? sink opts)

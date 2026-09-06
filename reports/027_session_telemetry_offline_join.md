@@ -82,11 +82,37 @@ at which value produces a flattering distribution is exactly the failure
 `ideas/016` warned about — rules invented after seeing the data fit it instead
 of testing it.
 
-## The volume is far below what a rule needs
+## The volume, corrected (2026-09-06)
 
-Ten retrievals across four sessions. `ideas/016` measured 72 across 15 sessions
-in August; the older transcripts have since rotated away. Either number is a
-sample of behaviour, not a dataset, and this stage does not treat it as one.
+An earlier version of this report said "ten retrievals across four sessions" and
+explained the gap against `ideas/016` by transcripts having rotated away. **Both
+claims were wrong.** Nothing had rotated — transcripts from 27 August are still
+present — and the count was low because it looked only at this repository.
+
+Measured across every project:
+
+```
+144 semidx calls in 35 sessions, 5 projects
+  46 / 13 sessions  UniPlan
+  46 / 13 sessions  ReaderLens          (used again on 2026-09-06)
+  22 /  4 sessions  semidx, this repository
+  22 /  4 sessions  JobApplicationTracker
+   8 /  1 session   Zig-aegis
+```
+
+Two consequences.
+
+**The volume blocker is smaller than stated.** Not a dataset yet, but a hundred
+and forty-four calls is a different starting point from ten, and it grows on its
+own now that recording is on. One global MCP server serves every project, so the
+telemetry already covers all of them, and `root_path_hash` separates them
+without exposing paths.
+
+**This repository is the biased sample.** Its own `CLAUDE.md` instructs an agent
+to use semidx first, so behaviour here is partly prescribed rather than chosen.
+The other four projects carry six sevenths of the usage and no such instruction,
+which makes them the more honest evidence — and it means any future verdict rule
+should be tested there rather than on self-observation.
 
 ## Re-query stays unresolved, as the plan required
 
@@ -125,9 +151,10 @@ MCP server with the variable set; everything else is ready for it.
 ## What this stage does not claim
 
 That semidx helped, or did not. Stage 2 produces a working join and a
-distribution; the verdict policy is a separate decision that now has two named
-prerequisites: an attribution window with a basis, and enough sessions to test
-it on.
+distribution; the verdict policy is a separate decision. Of its two prerequisites
+at the time of writing, the attribution window is now answered (see the
+follow-up below) and the volume is larger than this report first claimed (see the
+correction above).
 
 ## Recommended next step
 
