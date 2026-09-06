@@ -294,25 +294,48 @@ prompt text or source code by default is a finding, not a feature.
 
 ## Blockers before `trace_verdict_policy_v1`
 
-Five, all owner decisions rather than implementation. None may be settled by
+Five questions. Three are now answered (2026-09-06) by taking observable
+boundaries instead of inventing them; two remain open. None may be settled by
 picking whichever answer makes the numbers look better; that is the failure the
-[High] risk above already names. Until all five are answered, this track keeps
-accumulating raw events and computes no task-level metric.
+[High] risk above already names. Until the remaining two are answered, this
+track keeps accumulating raw events and computes no task-level metric.
 
-### 1. What one task is
+### 1. What one task is — answered operationally (2026-09-06)
 
-Undefined today. One user intent, one ticket, one conversational turn? The
-choice sets the denominator of every later metric, and finer slicing flatters
-it: at one retrieval per task, almost every task looks like a direct hit.
+**The unit of attribution is the user turn**: one real user prompt to the next.
 
-### 2. Who may declare a task boundary
+Not chosen for convenience. Automatic segmentation of a query stream into tasks
+is still an open research problem in information retrieval, where the data is
+orders of magnitude larger than ours; on ten retrievals it is hopeless. So the
+boundary is taken rather than inferred, and the turn is the only boundary in the
+stream that is both observable and **not drawn by the agent**. It is separable
+in practice: one real session had 37 user prompts against 481 tool-result
+records and 6 meta records.
 
-Stage 1b settled *how* a boundary is declared — explicitly, never inferred — but
-not *who* is entitled to. Today the agent declares its own, which means **the
-measured party defines the denominator of its own metric**. Re-declaring after
-each successful retrieval would improve the statistic with no bad intent at all,
-only carelessness. If the agent stays the author, that must be recorded as a
-self-reported measure rather than presented as independent.
+`task_id` is kept as the **declared semantic label** on top, because one task
+often spans several turns of clarification and only the agent knows that. The
+two are not alternatives:
+
+| level | boundary | source | agent controls it |
+| --- | --- | --- | --- |
+| session | MCP session | server | no |
+| turn | user prompt to user prompt | transcript | **no** |
+| task | declaration | `set_task_context` | yes |
+| retrieval episode | `selection_id` | reference | no |
+| request | tool call | `request_id` | no |
+
+Divergence between the observed turn and the declared task is itself a signal —
+three declared tasks inside one turn, or one task spanning ten turns, both say
+something — rather than a reason to distrust the data.
+
+### 2. Who may declare a task boundary — resolved by not depending on it
+
+The denominator is now the turn, which the agent does not draw, so the conflict
+of interest is out of the metric. `task_id` remains agent-declared and remains
+useful, but nothing is counted on it alone.
+
+If a future metric does depend on the declared label, it is a self-reported
+measure and must be presented as one.
 
 ### 3. Who authors the verdict
 
@@ -322,11 +345,31 @@ it" or "started double-checking", and the transcript cannot tell them apart. A
 human judgement after the fact, a wrapper, and the agent itself are three
 different measurements, not three implementations of one.
 
-### 4. The attribution window
+### 4. The attribution window — answered (2026-09-06)
 
-Measured in Stage 2 and unresolved: between consecutive retrievals there are 0
-to 429 tool calls, and the distribution moves with the bound. See
-[`reports/027`](../reports/027_session_telemetry_offline_join.md).
+Split in two, because it was one question standing for two different things.
+
+**Staged continuation needs no window at all.** `expand_context` and
+`fetch_context_detail` carry the `selection_id` the retrieval returned, so they
+link to it by reference the way a span links to its parent. Stage 2 originally
+swept them into the same heuristic window as everything else, which over-counted
+them: a fixed window of 5 reported two staged continuations in a session that
+had one, because the window reached into a neighbouring retrieval.
+
+**Everything else is attributed to the end of the turn.** Not another arbitrary
+number: the retrieval was made in service of that request, and work after the
+next user prompt answers a different one.
+
+Measured effect on the four real sessions — calls attributed per retrieval:
+
+| | unbounded (to next retrieval) | turn boundary |
+| --- | --- | --- |
+| range | 0 to 453 | 4 to 81 |
+
+`boundary-comparison` keeps the fixed-window figures alongside as evidence for
+the choice, not as a knob: at window 1 a session shows no out-of-selection read
+at all, at window 10 it shows two, and that sensitivity is exactly why an
+arbitrary number could not be used.
 
 ### 5. Volume
 

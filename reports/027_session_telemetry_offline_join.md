@@ -26,7 +26,7 @@ No verdict is emitted here, by design.
 
 - `parse-transcript` / `timeline` / `session-calls` know the Claude Code
   `.jsonl` shape;
-- `classify-followup`, `window-sensitivity`, `follow-up-summary`, and
+- `classify-followup`, `boundary-comparison`, `follow-up-summary`, and
   `join-events` know only the neutral shape those produce.
 
 ## The join holds
@@ -46,6 +46,10 @@ Every input it needs exists on real data.
   fallback, `clojure -M:test` is ordinary work.
 
 ## The join breaks: attribution has no boundary
+
+> Superseded by the follow-up at the end of this report: the boundary was found
+> rather than invented. The measurement below is why an arbitrary window was
+> rejected, and is kept for that reason.
 
 `ideas/016` says to read "what the agent did next" and never says where *next*
 ends. Measured over the four sessions in this repository that used semidx, the
@@ -136,3 +140,59 @@ Owner decision, not implementation:
    advance rather than chosen once the numbers are visible.
 3. Only then decide the attribution window and write
    `trace_verdict_policy_v1` against data that exists.
+
+---
+
+# Stage 2 Follow-up: The Turn Boundary (2026-09-06)
+
+The original Stage 2 reported that attribution had no boundary and left it open.
+It is now answered by taking an observed boundary instead of inventing one, and
+by noticing that one question was standing for two.
+
+## Staged continuation is linked, not windowed
+
+`expand_context` and `fetch_context_detail` carry the `selection_id` the
+retrieval returned. That is a reference, like a span to its parent, so the
+staged flow needs no window at all — and the original heuristic was actively
+wrong about it: a fixed window of 5 reported **two** staged continuations in a
+session that had **one**, because the window reached into a neighbouring
+retrieval.
+
+## Everything else stops at the next user turn
+
+The retrieval was made in service of one request; work after the next user
+prompt answers a different one. The turn is separable in the transcript — one
+session had 37 real user prompts against 481 tool-result records and 6 meta
+records — and, unlike a declared task, it is not drawn by the agent.
+
+Effect on the four real sessions, calls attributed per retrieval:
+
+| session | unbounded (to next retrieval) | turn boundary |
+| --- | --- | --- |
+| 07ab4279 | 3, 72, 90 | 52, 48, 11 |
+| 241fd815 | 28, 90, 62 | 81, 52, 37 |
+| 80ede42c | 9, 64 | 74, 64 |
+| b87a418c | 0, 453, 20 | 26, 25, 4 |
+
+Range narrows from 0–453 to 4–81. The turn is not always smaller — a short gap
+between two retrievals can sit inside a long turn — but it is always *the same
+question*, which the unbounded count was not.
+
+## Why the fixed windows are still computed
+
+`boundary-comparison` keeps them as evidence for the choice, not as a knob. At
+window 1 a session shows no out-of-selection read; at window 10 it shows two.
+That sensitivity is the argument against any arbitrary number, so it stays
+visible rather than being replaced by the new default.
+
+## What this does not settle
+
+The turn is a boundary, not a judgement. Who authors the verdict remains open,
+and so does volume. A turn still holds 4–81 calls, so attribution inside it is
+coarse — narrowing further (for example to the first edit) would be another
+heuristic and is deliberately not done.
+
+## Verification
+
+- `clojure -M:test`: 638 tests, 3418 assertions, 0 failures.
+- Figures above measured over the four real transcripts, read only.

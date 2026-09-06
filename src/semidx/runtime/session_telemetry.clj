@@ -78,25 +78,50 @@
     (subs (str name*) (count semidx-tool-prefix))
     (str name*)))
 
+(defn user-turn?
+  "True for a record that is a real user prompt.
+
+  The overwhelming majority of `user` records are tool results being fed back to
+  the model; meta and sidechain records are machinery. What remains is the one
+  boundary in the whole stream that the agent does not draw itself, which is why
+  it is the unit of attribution."
+  [record]
+  (and (= "user" (:type record))
+       (not (:isMeta record))
+       (not (:isSidechain record))
+       (not (some #(= "tool_result" (:type %)) (content-items record)))))
+
 (defn timeline
-  "Flat, ordered timeline of tool calls with their results and the host usage
-  recorded on the message that issued them."
+  "Flat, ordered timeline of tool calls with their results, the host usage
+  recorded on the message that issued them, and the user turn they belong to.
+
+  `:turn` counts real user prompts, so every call carries an independently
+  observed boundary rather than one the agent declared."
   [records]
   (let [results (into {}
                       (for [record records
                             item (tool-results record)]
                         [(:tool_use_id item) (parse-result item)]))]
     (vec
-     (for [record records
-           item (tool-uses record)]
-       {:tool_use_id (:id item)
-        :tool (str (:name item))
-        :semidx? (str/starts-with? (str (:name item)) semidx-tool-prefix)
-        :operation (short-tool-name (:name item))
-        :input (:input item)
-        :timestamp (:timestamp record)
-        :usage (usage-of record)
-        :result (get results (:id item))}))))
+     (:calls
+      (reduce
+       (fn [{:keys [turn calls]} record]
+         (if (user-turn? record)
+           {:turn (inc turn) :calls calls}
+           {:turn turn
+            :calls (into calls
+                         (for [item (tool-uses record)]
+                           {:tool_use_id (:id item)
+                            :tool (str (:name item))
+                            :semidx? (str/starts-with? (str (:name item)) semidx-tool-prefix)
+                            :operation (short-tool-name (:name item))
+                            :input (:input item)
+                            :turn turn
+                            :timestamp (:timestamp record)
+                            :usage (usage-of record)
+                            :result (get results (:id item))}))}))
+       {:turn 0 :calls []}
+       records)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Neutral rules
@@ -156,26 +181,33 @@
       (contains? #{"Grep" "Glob"} tool) :lexical_search
       :else :other_tool)))
 
-(def default-attribution-window
-  "How many following tool calls are attributed to a retrieval.
+(defn- staged-continuation?
+  "True when a call continues the given retrieval by reference.
 
-  `ideas/016` says to read \"what the agent did next\", but never says where next
-  ends. Without a bound the window runs to the next retrieval, which in a long
-  session is hours of unrelated work: measured on this repository, one retrieval
-  absorbed 174 `Bash` calls and 90 edits. Any distribution computed that way
-  describes the session, not the retrieval.
-
-  Five is a starting bound, not a finding. `window-sensitivity` exists because
-  the choice changes the answer and must stay visible."
-  5)
+  `expand_context` and `fetch_context_detail` carry the `selection_id` the
+  retrieval returned, so the staged flow is linked exactly — the way a span
+  links to its parent — and needs no heuristic window at all. Stage 2 originally
+  swept these into the same window as everything else, which was the wrong tool
+  for a relationship the data states outright."
+  [call selection-id]
+  (and (:semidx? call)
+       (some? selection-id)
+       (= selection-id (get-in call [:input :selection_id]))))
 
 (defn session-calls
-  "One entry per semidx retrieval in a session, with what it returned and what
-  the agent did next.
+  "One entry per semidx retrieval, with what it returned and what followed.
 
-  `:window` bounds attribution; follow-ups stop at the next retrieval regardless."
+  Two kinds of following work, deliberately separated:
+
+  - `:staged` — calls linked to this retrieval by `selection_id`. Exact, and
+    counted regardless of how far away they are.
+  - `:followups` — everything else the agent did **within the same user turn**.
+    The turn is the boundary because the retrieval was made in service of that
+    turn, and because the agent does not draw it. Attribution stops at the next
+    user prompt even if the agent keeps working, since later work answers a
+    different request."
   ([records] (session-calls records {}))
-  ([records {:keys [window] :or {window default-attribution-window}}]
+  ([records _opts]
    (let [calls (timeline records)
          retrievals (keep-indexed (fn [i call]
                                     (when (and (:semidx? call)
@@ -185,43 +217,68 @@
      (vec
       (for [[index call] retrievals]
         (let [selection (selected-paths (:result call))
-              until-next (->> (drop (inc index) calls)
-                              (take-while (fn [next-call]
-                                            (not (and (:semidx? next-call)
-                                                      (= "resolve_context" (:operation next-call)))))))
-              following (take window until-next)
-              next-retrieval (first (drop (count until-next) (drop (inc index) calls)))]
+              selection-id (get-in call [:result :selection_id])
+              turn (:turn call)
+              after (drop (inc index) calls)
+              in-turn (take-while #(= turn (:turn %)) after)
+              staged (filterv #(staged-continuation? % selection-id) in-turn)
+              staged-ids (set (map :tool_use_id staged))
+              followups (remove #(contains? staged-ids (:tool_use_id %)) in-turn)]
           {:tool_use_id (:tool_use_id call)
            :timestamp (:timestamp call)
+           :turn turn
            :confidence_level (get-in call [:result :confidence_level])
            :result_status (get-in call [:result :result_status])
            :selection_size (count selection)
            :selection selection
-           :selection_id (get-in call [:result :selection_id])
+           :selection_id selection-id
            :snapshot_id (get-in call [:result :snapshot_id])
-           :window window
-           :calls_until_next_retrieval (count until-next)
+           :staged (mapv (fn [c] {:tool (:tool c) :operation (:operation c)}) staged)
+           :calls_in_turn (count in-turn)
+           :calls_until_next_retrieval
+           (count (take-while (fn [next-call]
+                                (not (and (:semidx? next-call)
+                                          (= "resolve_context" (:operation next-call)))))
+                              after))
            :followups (mapv (fn [next-call]
                               {:tool (:tool next-call)
                                :kind (classify-followup next-call selection)})
-                            following)
-           :requeried? (some? next-retrieval)}))))))
+                            followups)
+           :requeried_in_turn? (boolean
+                                (some #(and (:semidx? %)
+                                            (= "resolve_context" (:operation %)))
+                                      in-turn))}))))))
 
-(defn window-sensitivity
-  "The same session read through several attribution windows.
+(defn boundary-comparison
+  "The same session read through the turn boundary and through fixed windows.
 
-  Reported because the window is a choice with no empirical basis yet: if the
-  distribution moves with it, no verdict rule can be written on top until the
-  window itself is decided."
-  [records windows]
-  (into (sorted-map)
-        (map (fn [window]
-               [window (->> (session-calls records {:window window})
-                            (mapcat :followups)
-                            (map :kind)
-                            frequencies
-                            (into (sorted-map)))]))
-        windows))
+  Kept as evidence for the choice rather than as an option. `ideas/016` never
+  bounded \"what the agent did next\", and an arbitrary window made a session read
+  as a miss or not depending on the number: measured here, `out_of_selection_read`
+  appeared only once the window widened. The turn is not another arbitrary
+  number — it is the request the retrieval was serving, and the agent does not
+  draw it — so this function exists to show the difference, not to let a caller
+  tune it."
+  [records fixed-windows]
+  (let [calls (session-calls records)
+        by-kind (fn [followups] (->> followups (map :kind) frequencies (into (sorted-map))))
+        timeline* (timeline records)]
+    {:turn_boundary (by-kind (mapcat :followups calls))
+     :fixed_windows
+     (into (sorted-map)
+           (map (fn [window]
+                  [window
+                   (by-kind
+                    (for [[index call] (keep-indexed
+                                        (fn [i c]
+                                          (when (and (:semidx? c)
+                                                     (= "resolve_context" (:operation c)))
+                                            [i c]))
+                                        timeline*)
+                          next-call (take window (drop (inc index) timeline*))]
+                      {:kind (classify-followup next-call
+                                                (selected-paths (:result call)))}))]))
+           fixed-windows)}))
 
 (defn follow-up-summary
   "Distribution of follow-up kinds across a set of calls. A distribution, not a
@@ -283,9 +340,11 @@
   [records]
   (let [calls (session-calls records)]
     {:retrievals (count calls)
+     :turns (count (filter user-turn? records))
      :host_usage (host-usage-totals records)
      :followup_distribution (follow-up-summary calls)
-     :requeried (count (filter :requeried? calls))
+     :staged_continuations (reduce + 0 (map (comp count :staged) calls))
+     :requeried_in_turn (count (filter :requeried_in_turn? calls))
      :confidence_levels (->> calls (map :confidence_level) frequencies (into (sorted-map)))
      :selection_sizes (mapv :selection_size calls)
      :calls calls}))
