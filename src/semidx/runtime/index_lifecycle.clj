@@ -185,6 +185,20 @@
                                        :message "pinned snapshot not found"
                                        :details {:pinned_snapshot_id pinned-id}})))
 
+                  ;; plans/018 Stage 6.3. The authority model a build runs under
+                  ;; is part of workspace identity: the same files indexed under
+                  ;; a different model produce different units and different
+                  ;; labels. Resolved lazily, like every other provider entry
+                  ;; point here, so the lifecycle load path stays free of the
+                  ;; provider namespaces when nobody asks for them.
+                  authority-model (let [parser-opts (or (get-opt opts :parser_opts) {})
+                                        mode ((requiring-resolve
+                                               'semidx.runtime.index/provider-pipeline-mode)
+                                              parser-opts)]
+                                    ((requiring-resolve
+                                      'semidx.runtime.provider-authority/authority-model)
+                                     mode))
+
                   ;; 1. Capture current workspace state (skipped for pinned reuse).
                   current-workspace-state (when-not (seq pinned-id)
                                             (ws/capture-workspace-state
@@ -192,7 +206,8 @@
                                              discovery-profile
                                              "1"
                                              (some-> prior-snapshot :workspace_state)
-                                             active-paths))
+                                             active-paths
+                                             authority-model))
 
                   ;; 3. Decide freshness. Pinned requests short-circuit to reuse and
                   ;; never run rebuild/update, per the runtime API contract.
@@ -274,7 +289,16 @@
                                                 (if (some? (get-opt opts :max_snapshot_age_seconds))
                                                   "max_age_stale"
                                                   "staleness_rule_stale")
-                                                
+
+                                                ;; plans/018 Stage 6.3. Carried through
+                                                ;; rather than folded into the fallback:
+                                                ;; a rebuild caused by a changed authority
+                                                ;; model reported as `initial_build` would
+                                                ;; make the switch invisible in telemetry.
+                                                (= reason "authority_model_changed")
+                                                "authority_model_changed"
+
+
                                                 (:manual_language_selection activation-state) "manual_language_selection"
                                                 (seq paths) "paths_subset_requested"
                                                 :else "initial_build")

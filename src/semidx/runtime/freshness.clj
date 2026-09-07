@@ -76,6 +76,19 @@
        :deleted_paths []
        :diagnostics ["Provider or semantic pipeline version changed."]}
 
+      ;; plans/018 Stage 6.3. A changed authority model invalidates every file,
+      ;; not a delta: the units, their authorities, and their parser_mode labels
+      ;; are all produced under it. An incremental update would leave the
+      ;; untouched files carrying labels from the model that no longer applies.
+      (let [prev-ws (:workspace_state previous-snapshot)]
+        (not= (:authority_model prev-ws) (:authority_model current-workspace-state)))
+      {:action :full_rebuild
+       :reason "authority_model_changed"
+       :added_paths []
+       :changed_paths []
+       :deleted_paths []
+       :diagnostics ["Provider authority model changed; every unit is rebuilt under it."]}
+
       (let [max-age (or (:max_snapshot_age_seconds opts) (:max-snapshot-age-seconds opts))
             age (age-seconds (:indexed_at previous-snapshot))]
         (and (stale? age max-age)

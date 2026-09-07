@@ -1259,7 +1259,7 @@ implies lands in 6.2.
 - **6.2 Truthful degradation and confidence (complete, 2026-09-07).** Decision 1 above, plus capability
   and retrieval-confidence recalibration driven by the authority actually
   selected rather than by the descriptor's static claim.
-- **6.3 Fingerprint and snapshot reuse.** Provider plan, provider versions,
+- **6.3 Fingerprint and snapshot reuse (complete, 2026-09-07).** Provider plan, provider versions,
   relevant source identities, and the authority-policy version enter the
   workspace fingerprint, so a snapshot built under one authority model is never
   silently reused under another.
@@ -1344,6 +1344,51 @@ conservative rule working; a wholly exact selection reaches `high`, asserted
 directly against `capability-summary`. The row that matters is the old one: a
 regex-only index used to report coverage `full`, and now it says what it
 actually is.
+
+##### 6.3 as delivered (2026-09-07)
+
+The hole this closes was real and silent: `capture-workspace-state` knew nothing
+about the pipeline mode, so an `:authority` build and an `:off` build of the same
+files produced the same fingerprint, and whichever ran second was served the
+other's snapshot. Units labelled by a model the caller had switched off, or an
+unlabelled snapshot answering a caller who asked for the model — both, depending
+on the order.
+
+`provider-authority/authority-model` is now the identity of the model a build
+runs under, and it travels in the workspace manifest and the fingerprint.
+`freshness/decide-freshness` compares it directly and forces a **full** rebuild
+when it differs, ahead of the delta rule: an incremental update would leave every
+untouched file carrying labels from a model that no longer applies.
+
+Two decisions worth keeping:
+
+- **The model is nil for `:off`**, and the key is omitted rather than set to nil,
+  so a build that runs no pipeline hashes exactly what it hashed before this
+  stage existed and every snapshot taken before it stays reusable. `:shadow` and
+  `:authority` each get their own model, because shadow adds a summary to the
+  snapshot and authority changes the units themselves.
+- **Provider versions come from the catalog, not from the plan.** The question
+  the fingerprint answers is whether two builds *could* have produced the same
+  snapshot, and a provider present on one machine and absent on another is
+  exactly what a plan would hide.
+
+Verified end to end against in-memory storage on the Java corpus: a repeated
+`:authority` build reuses (same snapshot id, caching intact), switching to `:off`
+rebuilds and returns units with no authority, and switching back rebuilds again.
+
+One defect found on the way and fixed only for this stage's reason:
+`coordinate-index-lifecycle` resolves the rebuild reason through a whitelist that
+sends everything unrecognised to `initial_build`, so the switch was invisible in
+telemetry. `authority_model_changed` is now carried through. The four
+pre-existing reasons the same whitelist swallows —
+`no_prior_manifest`, `manifest_schema_incompatible`,
+`provider_or_pipeline_version_changed`, `delta_exceeds_threshold` — are recorded
+in [`bugs/002`](../bugs/002_rebuild_reason_whitelist_reports_initial_build.md)
+rather than fixed opportunistically here.
+
+The default flip is **not** part of this stage. The owner asked for it after 6.5,
+so that it lands as a one-line change against a surface that already reports
+degradation consistently and gates that have already run.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision

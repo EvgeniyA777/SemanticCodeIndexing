@@ -1,6 +1,7 @@
 (ns semidx.runtime.workspace-state-test
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
+            [semidx.runtime.provider-authority :as authority]
             [semidx.runtime.workspace-state :as ws]))
 
 (defn- write-file! [root rel-path content]
@@ -79,3 +80,44 @@
       (is (= "source" (:classification info)))
       (is (seq (:provider_id info)))
       (is (seq (:provider_version info))))))
+
+(deftest the-authority-model-is-part-of-workspace-identity-test
+  ;; plans/018 Stage 6.3.
+  (let [files [{:path "src/a.ts" :content_digest "sha256:1" :provider_id "p" :provider_version "1"}]
+        legacy (ws/compute-workspace-fingerprint "dp" "4" "1" files)
+        explicit-nil (ws/compute-workspace-fingerprint "dp" "4" "1" files nil)
+        shadow (ws/compute-workspace-fingerprint "dp" "4" "1" files
+                                                 (authority/authority-model :shadow))
+        authority (ws/compute-workspace-fingerprint "dp" "4" "1" files
+                                                    (authority/authority-model :authority))]
+
+    (testing "a build that runs no provider pipeline hashes exactly what it hashed
+              before this stage existed, so snapshots taken before it stay valid"
+      (is (= legacy explicit-nil))
+      (is (nil? (authority/authority-model :off))))
+
+    (testing "each observing mode is its own workspace identity"
+      (is (not= legacy shadow))
+      (is (not= legacy authority))
+      (is (not= shadow authority)))
+
+    (testing "the model carries what would make two builds disagree"
+      (let [model (authority/authority-model :authority)]
+        (is (= "authority" (:mode model)))
+        (is (= authority/authority-policy-version (:policy_version model)))
+        (is (= ["java" "typescript"] (:languages model)))
+        (is (contains? (:provider_versions model) "scip-typescript"))
+        (is (contains? (:provider_versions model) "java-regex"))))))
+
+(deftest a-captured-manifest-carries-the-model-only-when-there-is-one-test
+  (let [dir (str (java.nio.file.Files/createTempDirectory
+                  "semidx-ws" (into-array java.nio.file.attribute.FileAttribute [])))]
+    (spit (clojure.java.io/file dir "a.ts") "export function f() { return 1; }\n")
+    (let [plain (ws/capture-workspace-state dir {} "1")
+          with-model (ws/capture-workspace-state dir {} "1" nil nil
+                                                 (authority/authority-model :authority))]
+      (is (not (contains? plain :authority_model))
+          "an absent model is an absent key, not a nil one: a nil would change the
+           shape of every manifest ever written")
+      (is (some? (:authority_model with-model)))
+      (is (not= (:workspace_fingerprint plain) (:workspace_fingerprint with-model))))))

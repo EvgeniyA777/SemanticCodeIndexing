@@ -30,7 +30,7 @@
             (recur)))))
     (let [hash-bytes (.digest digest)]
       (letfn [(byte-to-hex [b]
-                (format "%02x" b)) ]
+                (format "%02x" b))]
         (apply str (map byte-to-hex hash-bytes))))))
 
 (defn- file-modified-at [^java.io.File file]
@@ -38,20 +38,41 @@
     (str instant)))
 
 (defn compute-workspace-fingerprint
-  [discovery-profile-hash provider-registry-version* semantic-pipeline-version* files]
-  (let [sorted-files (sort-by :path files)
-        fingerprint-data {:discovery_profile_hash discovery-profile-hash
-                          :provider_registry_version provider-registry-version*
-                          :semantic_pipeline_version semantic-pipeline-version*
-                          :files (mapv #(select-keys % [:path :content_digest :provider_id :provider_version]) sorted-files)}
-        serialized (pr-str fingerprint-data)]
-    (str "sha256:" (sha256-hex serialized))))
+  "The identity of a workspace as an indexer sees it.
+
+  plans/018 Stage 6.3 added `authority-model`: the same files indexed under a
+  different authority model are a different snapshot, because the units carry
+  different authorities, different `parser_mode` labels, and — where a semantic
+  provider resolved symbols the parser missed — different units.
+
+  The key is conditional rather than nil-valued, for the same reason
+  `:provider_summary` is: a build that runs no provider pipeline must hash
+  exactly what it hashed before this stage existed, so every snapshot taken
+  before it stays valid instead of forcing a rebuild for everyone."
+  ([discovery-profile-hash provider-registry-version* semantic-pipeline-version* files]
+   (compute-workspace-fingerprint discovery-profile-hash provider-registry-version*
+                                  semantic-pipeline-version* files nil))
+  ([discovery-profile-hash provider-registry-version* semantic-pipeline-version* files
+    authority-model]
+   (let [sorted-files (sort-by :path files)
+         fingerprint-data (cond-> {:discovery_profile_hash discovery-profile-hash
+                                   :provider_registry_version provider-registry-version*
+                                   :semantic_pipeline_version semantic-pipeline-version*
+                                   :files (mapv #(select-keys % [:path :content_digest :provider_id :provider_version]) sorted-files)}
+                            authority-model (assoc :authority_model authority-model))
+         serialized (pr-str fingerprint-data)]
+     (str "sha256:" (sha256-hex serialized)))))
 
 (defn capture-workspace-state
-  [root-path discovery-profile provider-catalog-version & [prior-workspace-state allowed-paths]]
+  [root-path discovery-profile provider-catalog-version
+   & [prior-workspace-state allowed-paths authority-model]]
   ;; `allowed-paths`, when supplied, restricts the manifest to the exact set of
   ;; paths the indexer will actually index (i.e. the active language set). This
   ;; keeps freshness deltas from including files excluded by `:language_policy`.
+  ;;
+  ;; `authority-model` (plans/018 Stage 6.3) is the provider authority model the
+  ;; build runs under, or nil when it runs none. It travels into the fingerprint
+  ;; and is compared directly by `freshness/decide-freshness`.
   (let [discovery-profile-hash (sha256-hex (pr-str discovery-profile))
         allowed (when (seq allowed-paths) (set allowed-paths))
         paths (cond->> (activation/source-files root-path)
@@ -83,42 +104,44 @@
                      discovery-profile-hash
                      provider-registry-version
                      semantic-pipeline-version
-                     sorted-files)]
-    {:schema_version            "1"
-     :root_path                 root-path
-     :discovery_profile_hash    discovery-profile-hash
-     :provider_registry_version provider-registry-version
-     :semantic_pipeline_version semantic-pipeline-version
-     :files                     sorted-files
-     :workspace_fingerprint     fingerprint}))
+                     sorted-files
+                     authority-model)]
+    (cond-> {:schema_version "1"
+             :root_path root-path
+             :discovery_profile_hash discovery-profile-hash
+             :provider_registry_version provider-registry-version
+             :semantic_pipeline_version semantic-pipeline-version
+             :files sorted-files
+             :workspace_fingerprint fingerprint}
+      authority-model (assoc :authority_model authority-model))))
 
 (defn diff-workspace-state
   [previous current]
   (let [prev-files (into {} (map (juxt :path identity) (:files previous)))
         curr-files (into {} (map (juxt :path identity) (:files current)))
-        
+
         prev-paths (set (keys prev-files))
         curr-paths (set (keys curr-files))
-        
+
         added (sort (vec (set/difference curr-paths prev-paths)))
         deleted (sort (vec (set/difference prev-paths curr-paths)))
-        
+
         common (set/intersection prev-paths curr-paths)
-        
+
         changed (->> common
                      (filter (fn [path]
                                (not= (get-in prev-files [path :content_digest])
                                      (get-in curr-files [path :content_digest]))))
                      sort
                      vec)
-        
+
         unchanged (->> common
                        (filter (fn [path]
                                  (= (get-in prev-files [path :content_digest])
                                     (get-in curr-files [path :content_digest]))))
                        sort
                        vec)
-        
+
         compatibility-changes (cond-> []
                                 (not= (:discovery_profile_hash previous) (:discovery_profile_hash current))
                                 (conj :discovery_profile_hash_changed)

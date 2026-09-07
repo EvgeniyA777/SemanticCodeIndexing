@@ -36,6 +36,43 @@
   committed to."
   #{"java" "typescript"})
 
+(def authority-policy-version
+  "Version of the rules that turn provider evidence into a snapshot: which tiers
+  are admitted, how a fact upgrades a unit, and which authority earns which
+  `parser_mode`.
+
+  Bump it whenever those rules change in a way that would make two snapshots of
+  the same files disagree. It travels in the workspace fingerprint, so a bump
+  invalidates prior snapshots rather than letting one built under the old rules
+  be reused under the new ones."
+  "1")
+
+(defn authority-model
+  "The identity of the authority model a build runs under, or nil when it runs
+  no provider pipeline at all (plans/018 Stage 6.3).
+
+  Nil for `:off` on purpose: that mode produces exactly the pre-Stage-6 snapshot,
+  so its fingerprint must stay exactly the pre-Stage-6 fingerprint and every
+  snapshot taken before this stage must stay reusable. `:shadow` and `:authority`
+  each get their own model — shadow adds a provider summary to the snapshot and
+  authority changes the units themselves, and neither should be served from a
+  snapshot built under the other.
+
+  Provider versions come from the catalog rather than from a plan, because the
+  question this answers is whether two builds *could* have produced the same
+  snapshot, and a provider that was absent on one machine and present on another
+  is exactly the case a plan would hide."
+  [mode]
+  (when (contains? #{:shadow :authority} mode)
+    {:mode (name mode)
+     :policy_version authority-policy-version
+     :catalog_version providers/catalog-version
+     :languages (vec (sort authority-languages))
+     :provider_versions (into (sorted-map)
+                              (map (juxt :provider_id :provider_version))
+                              (concat providers/descriptors
+                                      providers/project-descriptors))}))
+
 (defn- authority-paths [paths]
   (filterv #(contains? authority-languages (adapters/language-by-path %)) paths))
 

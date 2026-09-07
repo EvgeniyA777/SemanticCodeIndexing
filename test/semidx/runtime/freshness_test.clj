@@ -80,3 +80,59 @@
         (is (= :incremental_update (:action res)))
         (is (= "workspace_changed" (:reason res)))
         (is (= ["src/foo.clj"] (:changed_paths res)))))))
+
+(deftest an-authority-model-change-forces-a-full-rebuild-test
+  ;; plans/018 Stage 6.3. The same files under a different authority model are a
+  ;; different snapshot: the units carry different authorities, different
+  ;; parser_mode labels, and possibly different units entirely.
+  (let [ws {:schema_version "1"
+            :discovery_profile_hash "hash1"
+            :provider_registry_version "1"
+            :semantic_pipeline_version "1"
+            :files [{:path "src/foo.ts" :content_digest "d1"}
+                    {:path "src/bar.ts" :content_digest "d2"}]
+            :workspace_fingerprint "fp1"}
+        model {:mode "authority" :policy_version "1"}]
+
+    (testing "a snapshot built with no provider pipeline is not served to a build
+              that asked for one, even when every file is byte-identical"
+      (let [res (freshness/decide-freshness {:workspace_state ws}
+                                            (assoc ws :authority_model model)
+                                            {})]
+        (is (= :full_rebuild (:action res)))
+        (is (= "authority_model_changed" (:reason res)))))
+
+    (testing "and the reverse, which is the direction that would silently serve
+              authority-labelled units to a caller who switched the pipeline off"
+      (let [res (freshness/decide-freshness {:workspace_state (assoc ws :authority_model model)}
+                                            ws
+                                            {})]
+        (is (= :full_rebuild (:action res)))
+        (is (= "authority_model_changed" (:reason res)))))
+
+    (testing "a different model is as invalidating as no model"
+      (let [res (freshness/decide-freshness
+                 {:workspace_state (assoc ws :authority_model model)}
+                 (assoc ws :authority_model (assoc model :policy_version "2"))
+                 {})]
+        (is (= "authority_model_changed" (:reason res)))))
+
+    (testing "the rebuild is total rather than a delta, because an incremental
+              update would leave every untouched file labelled under a model that
+              no longer applies"
+      (let [prev (assoc ws :files [{:path "src/foo.ts" :content_digest "old"}
+                                   {:path "src/bar.ts" :content_digest "d2"}])
+            res (freshness/decide-freshness {:workspace_state prev}
+                                            (assoc ws :authority_model model)
+                                            {:freshness_delta_rebuild_ratio 0.5})]
+        (is (= :full_rebuild (:action res)))
+        (is (= "authority_model_changed" (:reason res)))
+        (is (empty? (:changed_paths res))
+            "the model rule answers before the delta rule, so no partial path list
+             is reported for a rebuild that is not driven by paths")))
+
+    (testing "an unchanged model reuses exactly as before"
+      (let [both (assoc ws :authority_model model)
+            res (freshness/decide-freshness {:workspace_state both} both {})]
+        (is (= :reuse (:action res)))
+        (is (= "workspace_unchanged" (:reason res)))))))

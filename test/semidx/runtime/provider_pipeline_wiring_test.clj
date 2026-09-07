@@ -12,6 +12,7 @@
             [semidx.runtime.index :as idx]
             [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.provider-execution :as provider-execution]
+            [semidx.runtime.storage :as storage]
             [semidx.runtime.usage-metrics :as usage]
             [semidx.test-support.scip-toolchain :as toolchain]))
 
@@ -149,3 +150,43 @@
       (testing "latency is measured around the run rather than beside it"
         (is (pos? (:total_elapsed_ms summary)))))
     (toolchain/unresolved! "scip-java toolchain" "provider pipeline comparison test")))
+
+;; --- Stage 6.3: the authority model is part of workspace identity -------------
+
+(deftest a-snapshot-is-never-served-across-authority-models-test
+  (testing "the failure this prevents is silent: identical files under a
+            different authority model produce different units and different
+            labels, so reusing across models hands back a snapshot the caller
+            did not ask for"
+    (let [store (storage/in-memory-storage)
+          build (fn [mode]
+                  (sci/create-index {:root_path java-corpus
+                                     :storage store
+                                     :load_latest true
+                                     :parser_opts {:provider_pipeline mode}}))
+          first-authority (build "authority")
+          repeat-authority (build "authority")
+          switched-off (build "off")
+          back-again (build "authority")]
+
+      (testing "an unchanged model still reuses, so caching is not the casualty"
+        (is (= "reuse" (get-in repeat-authority [:index_lifecycle :lifecycle_action])))
+        (is (true? (get-in repeat-authority [:index_lifecycle :reused_snapshot])))
+        (is (= (:snapshot_id first-authority) (:snapshot_id repeat-authority))))
+
+      (testing "switching the pipeline off rebuilds instead of returning the
+                authority-labelled snapshot"
+        (is (= "full_rebuild" (get-in switched-off [:index_lifecycle :lifecycle_action])))
+        (is (false? (get-in switched-off [:index_lifecycle :reused_snapshot])))
+        (is (empty? (keep :authority (vals (:units switched-off))))
+            "and the units it returns carry no authority, as an off build must"))
+
+      (testing "and switching back rebuilds again rather than serving the off snapshot"
+        (is (= "full_rebuild" (get-in back-again [:index_lifecycle :lifecycle_action]))))
+
+      (testing "the rebuild says why it happened, rather than reporting the
+                fallback reason a whitelist would have given it"
+        (is (= "authority_model_changed"
+               (get-in switched-off [:index_lifecycle :rebuild_reason])))
+        (is (= "authority_model_changed"
+               (get-in back-again [:index_lifecycle :rebuild_reason])))))))
