@@ -155,10 +155,54 @@
           parsed (authority/parse-file (root) path {} ctx)]
       (is (= (mapv :unit_id (:units baseline)) (mapv :unit_id (:units parsed)))
           "no unit is added, dropped, or reidentified when only the lexical tier ran")
-      (is (= (mapv :parser_mode (:units baseline)) (mapv :parser_mode (:units parsed)))
-          "and none is relabelled: degradation labelling is Stage 6.2, and 6.1 must
-           not smuggle it in")
+      (is (= #{"full"} (set (mapv :parser_mode (:units baseline))))
+          "the parser calls its own output full whatever tier produced it")
       (is (= #{"heuristic"} (set (map :authority (:units parsed))))
           "the lexical tier is heuristic and says so")
       (is (= #{["typescript-regex"]} (set (map :evidence_providers (:units parsed))))
           "with no second tier there is nothing else on the evidence"))))
+
+;; --- Stage 6.2: truthful degradation -----------------------------------------
+
+(deftest a-heuristic-only-file-is-labelled-degraded-test
+  (testing "the owner's decision: a file with neither a semantic provider nor a
+            structural parse says so, including in the common case where no
+            toolchain is installed at all"
+    (let [path "src/orders.ts"
+          ctx (ctx-serving (assoc (project-result [] []) :result "unavailable"
+                                  :reason_codes ["scip_cli_missing"]))
+          parsed (authority/parse-file (root) path {} ctx)
+          degradation (first (filter #(= "provider_authority_degraded" (str (:code %)))
+                                     (:diagnostics parsed)))]
+      (is (= #{"fallback"} (set (map :parser_mode (:units parsed))))
+          "every unit is heuristic, so every unit is labelled fallback")
+      (is (= "fallback" (:parser_mode parsed)))
+      (is (= "fallback" (get-in parsed [:semantic_pipeline :parser_mode]))
+          "the file's pipeline record must not disagree with the file")
+      (is (some? degradation) "the degradation is stated, not left to be inferred")
+      (is (re-find #"heuristic" (:summary degradation))))))
+
+(deftest exact-evidence-keeps-a-file-out-of-degradation-test
+  (let [scip-result (scip-typescript/facts-from-index (scip/read-index fixture-scip)
+                                                      {:project-root corpus-root})
+        parsed (authority/parse-file (root) "src/orders.ts" {} (ctx-serving scip-result))
+        by-authority (group-by :authority (:units parsed))]
+    (is (seq (get by-authority "exact")))
+    (is (= #{"full"} (set (map :parser_mode (get by-authority "exact"))))
+        "a symbol a semantic provider resolved is not a fallback")
+    (is (every? #(= "fallback" (:parser_mode %)) (get by-authority "heuristic" []))
+        "and a symbol only the regex tier saw is a fallback, whether or not this
+         particular file happens to contain one")
+    (is (= "full" (:parser_mode parsed))
+        "the file is degraded only when nothing in it has strong evidence")
+    (is (empty? (filter #(= "provider_authority_degraded" (str (:code %)))
+                        (:diagnostics parsed))))))
+
+(deftest degradation-labelling-is-confined-to-authority-mode-test
+  (testing "an :off or :shadow build must be unchanged, which is what makes the
+            switch reversible until the fingerprint separates the two models"
+    (let [baseline (adapters/parse-file (root) "src/orders.ts" {})]
+      (is (= #{"full"} (set (map :parser_mode (:units baseline)))))
+      (is (= "full" (:parser_mode baseline)))
+      (is (empty? (filter #(= "provider_authority_degraded" (str (:code %)))
+                          (:diagnostics baseline)))))))

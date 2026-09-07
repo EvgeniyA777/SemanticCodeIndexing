@@ -345,6 +345,31 @@
 (defn- language-strength [language]
   (registry/strength-for-language language))
 
+(defn max-confidence-level
+  ([levels] (reduce max-confidence-level "low" levels))
+  ([left right]
+   (if (confidence-level<=? left right)
+     (str right)
+     (str left))))
+
+(defn- evidence-strength
+  "The ceiling a language's selected units earn from the evidence behind them,
+  or nil when no provider evidence was recorded.
+
+  plans/018 Stage 6.2. The per-language strength is a static claim about how good
+  the lane's parser is; it was the only signal available while every unit came
+  from that parser. Once a semantic provider has resolved the symbols, the claim
+  is out of date in the direction that matters: TypeScript is `low` because a
+  regular expression is guessing, not because a SCIP index is.
+
+  Only a wholly exact selection lifts the ceiling. A mixed one is as good as its
+  weakest member, which is the rule `confidence-ceiling` already applies across
+  languages."
+  [units]
+  (when (some :authority units)
+    (when (every? #(= "exact" (:authority %)) units)
+      "high")))
+
 (defn- selected-language-strengths [index units]
   (let [by-language (->> units
                          (group-by #(unit-language index %))
@@ -355,7 +380,8 @@
                  [language
                   (if (every? #(= "fallback" (:parser_mode %)) grouped-units)
                     "low"
-                    (language-strength language))]))
+                    (max-confidence-level (language-strength language)
+                                          (or (evidence-strength grouped-units) "low")))]))
           by-language)))
 
 (defn- confidence-ceiling [coverage-level selected-language-strengths]

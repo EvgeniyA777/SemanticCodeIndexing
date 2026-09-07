@@ -1256,7 +1256,7 @@ implies lands in 6.2.
   parsed counterpart becomes a unit — that last part is where SCIP adds what
   regex missed. Java and TypeScript only; every other language keeps the
   single-parser path untouched.
-- **6.2 Truthful degradation and confidence.** Decision 1 above, plus capability
+- **6.2 Truthful degradation and confidence (complete, 2026-09-07).** Decision 1 above, plus capability
   and retrieval-confidence recalibration driven by the authority actually
   selected rather than by the descriptor's static claim.
 - **6.3 Fingerprint and snapshot reuse.** Provider plan, provider versions,
@@ -1310,6 +1310,40 @@ Not in 6.1, and deliberately: no unit is relabelled `fallback`, no confidence is
 recalibrated, and `:authority` is not the default mode — the fingerprint does not
 yet separate the two models, so a snapshot built under one could be reused under
 the other. That is 6.2 and 6.3.
+
+##### 6.2 as delivered (2026-09-07)
+
+Owner decision 1, implemented where it costs least: `parser_mode` already drives
+confidence, so labelling honestly was most of the work. `retrieval-policy`
+counts `fallback` units to pick a coverage level and caps a fallback-only
+selection at `low`; a unit whose only evidence is heuristic is now labelled
+`fallback`, a file whose every unit is heuristic is labelled `fallback` and
+carries a `provider_authority_degraded` diagnostic naming the excluded
+providers, and the file's `:semantic_pipeline` record is kept in step so the two
+cannot disagree.
+
+The confidence recalibration is the other half, and it goes the other way. The
+per-language strength — TypeScript `low`, Java `medium` — is a static claim about
+how good the lane's parser is, and it was the only signal available while every
+unit came from that parser. `evidence-strength` lets a selection whose units are
+*wholly* exact raise the ceiling to `high`, because TypeScript is rated `low` on
+account of a regular expression guessing, not on account of a SCIP index. A
+partly exact selection keeps the static strength: mixed evidence is as good as
+its weakest member, which is the rule the ceiling already applied across
+languages. Structural evidence lifts nothing — it is not exact.
+
+Measured on the committed TypeScript corpus, `:off` against `:authority`:
+
+| | units | parser modes | coverage | ceiling | degraded files |
+| --- | --- | --- | --- | --- | --- |
+| `:off` | 6 | 6 full | full | low | 0 |
+| `:authority` | 6 | 4 full, 2 fallback | mixed | low | 1 |
+
+The ceiling stays `low` because two units remain heuristic, which is the
+conservative rule working; a wholly exact selection reaches `high`, asserted
+directly against `capability-summary`. The row that matters is the old one: a
+regex-only index used to report coverage `full`, and now it says what it
+actually is.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision

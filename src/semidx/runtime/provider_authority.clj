@@ -22,7 +22,8 @@
   TypeScript, decide confidence, relabel degraded parses — that is Stage 6.2 —
   or run the project tier per file. The project tier runs once per build in
   `build-context`, exactly as it does in shadow mode."
-  (:require [semidx.runtime.adapters :as adapters]
+  (:require [clojure.string :as str]
+            [semidx.runtime.adapters :as adapters]
             [semidx.runtime.fact-arbitration :as fact-arbitration]
             [semidx.runtime.provider-batch :as provider-batch]
             [semidx.runtime.provider-execution :as provider-execution]
@@ -163,13 +164,67 @@
           {}
           (mapcat :facts raw-batches)))
 
+(def strong-authorities
+  "Authorities that justify the `full` parser mode: a semantic provider resolved
+  the symbol, or a structural parser saw its syntax. Heuristic evidence — a
+  regular expression over source text — does not, which is the whole content of
+  ADR-046's tiering and of the owner's Stage 6 decision to label degradation
+  unconditionally."
+  #{"exact" "structural"})
+
+(defn- unit-parser-mode [unit]
+  (if (contains? strong-authorities (:authority unit)) "full" "fallback"))
+
+(defn- degradation-reasons
+  "Why no strong tier reached this file, in the planner's own words.
+
+  A degradation that does not say what was missing is a complaint, not a
+  diagnostic: the reader needs to know whether a toolchain is absent, a status
+  was never observed, or a provider was denied."
+  [plan]
+  (->> (vals (:operations plan))
+       (mapcat :excluded)
+       (map (fn [entry]
+              (str (:provider_id entry) ": " (:reason entry))))
+       distinct
+       sort
+       vec))
+
+(defn- relabel-degradation
+  "Stage 6.2. Give every unit the parser mode its evidence earns, and say so at
+  the file level.
+
+  `parser_mode` is not cosmetic: `retrieval-policy/coverage-level` counts
+  fallback units to pick a coverage level, and `confidence-ceiling` caps a
+  fallback-only selection at `low`. Labelling honestly here is what makes the
+  confidence recalibration happen at all."
+  [parsed plan]
+  (let [units (mapv #(assoc % :parser_mode (unit-parser-mode %)) (:units parsed))
+        degraded? (and (seq units)
+                       (every? #(= "fallback" (:parser_mode %)) units))
+        file-mode (if degraded? "fallback" (:parser_mode parsed))
+        reasons (when degraded? (degradation-reasons plan))]
+    (cond-> (assoc parsed
+                   :units units
+                   :parser_mode file-mode
+                   :semantic_pipeline (assoc (:semantic_pipeline parsed)
+                                             :parser_mode file-mode))
+      degraded?
+      (update :diagnostics conj
+              {:code "provider_authority_degraded"
+               :summary (str "no exact or structural evidence for this file, so every"
+                             " unit is heuristic and confidence is capped"
+                             (when (seq reasons)
+                               (str "; excluded: " (str/join ", " reasons))))}))))
+
 (defn merge-facts
   "Merge arbitrated facts into one parsed file.
 
-  Returns the parsed map with units upgraded and extended, and with the
-  arbitration diagnostics carried over so a conflict is visible in the snapshot
-  rather than only in a shadow report."
-  [parsed {:keys [facts diagnostics raw_batches]} language evidence-ctx]
+  Returns the parsed map with units upgraded and extended, relabelled by the
+  evidence they actually carry, and with the arbitration diagnostics carried
+  over so a conflict is visible in the snapshot rather than only in a shadow
+  report."
+  [parsed {:keys [facts diagnostics raw_batches plan]} language evidence-ctx]
   (let [unit-facts (filterv unit-fact? facts)
         by-key (into {} (map (juxt :canonical_fact_key_id identity)) unit-facts)
         values (values-by-key raw_batches)
@@ -195,13 +250,14 @@
                         {:code (str (name (or (:code d) "provider_diagnostic")))
                          :summary (or (:message d) (:summary d) "")})
                       diagnostics)]
-    (cond-> (assoc parsed :units (into units added))
-      (seq carried) (update :diagnostics into carried)
-      (seq added) (update :diagnostics conj
-                          {:code "provider_authority_units_added"
-                           :summary (str (count added)
-                                         " unit(s) supplied by a semantic provider that the"
-                                         " file parser did not produce")}))))
+    (-> (cond-> (assoc parsed :units (into units added))
+          (seq carried) (update :diagnostics into carried)
+          (seq added) (update :diagnostics conj
+                              {:code "provider_authority_units_added"
+                               :summary (str (count added)
+                                             " unit(s) supplied by a semantic provider that the"
+                                             " file parser did not produce")}))
+        (relabel-degradation plan))))
 
 (defn parse-file
   "Default extraction for one file, with the provider plan authoritative for
