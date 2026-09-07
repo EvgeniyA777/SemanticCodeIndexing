@@ -2,6 +2,8 @@
 
 `RULES.md` is the single source of truth for AI-agent project rules in this repository.
 
+SPECIFICALLY FOR ANTIGRAVITY: On the first start, restart, or any initial turn, re-read `RULES.md` first before replying or doing anything else!
+
 Before doing task work:
 
 1. Read `RULES.md`.
