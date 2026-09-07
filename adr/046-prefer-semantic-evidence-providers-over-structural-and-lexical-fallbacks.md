@@ -205,6 +205,40 @@ operation capability, freshness, authority tier, and project overrides.
 The migration runs in shadow mode before changing default selection, confidence
 ceilings, or observable retrieval behavior.
 
+## Amendments
+
+### 2026-09-06: two policy questions the migration could not default
+
+Both were decided by the project owner while executing `plans/018` Stage 6, and
+both are policy rather than delivery, so they belong here. The staged delivery
+record stays in the plan.
+
+**An equal-authority contradiction annotates; it does not block.** The decision
+above requires that a contradiction between two equally authoritative, fresh
+sources produce "explicit ambiguity" and that registration order must not pick a
+winner. It did not say what the default indexing path should then hand back. It
+keeps the fact, attaches the conflict diagnostic, and lowers confidence: the unit
+stays findable and its uncertainty is visible. Withholding it would remove a
+symbol from the index because two tiers disagreed about one of its values, which
+is a larger loss than the disagreement.
+
+The existing exception stands, because it is a different failure: same-arity
+overloads that no tier can tell apart are still withheld. There the risk is a
+false exact identity — one fact claiming to be two distinct methods — rather than
+a disagreement about a value.
+
+**Degradation is labelled unconditionally.** A Java or TypeScript file with
+neither semantic nor structural evidence projects `parser_mode: fallback`,
+heuristic evidence, an explicit degradation diagnostic, and reduced confidence,
+including the common case where no external toolchain is installed at all. This
+is the intentional confidence reduction the migration required approval for, and
+it is approved. It makes the pre-existing behaviour honest rather than changing
+what is indexed: a regex-only index previously reported full coverage.
+
+The complement, added with it: a selection whose units all carry exact evidence
+rises above its language's static strength. The per-language number describes
+what that lane's own parser earns, and it is no longer the only signal available.
+
 ## Consequences
 
 ### Positive

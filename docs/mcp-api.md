@@ -252,8 +252,13 @@ Returns:
 - `server`
 - `languages`
 - `language_policy_options`
+- `provider_authority` - what the server can do with provider evidence: `policy_version`, the `languages` the authority model covers, the available `modes` (`off`, `shadow`, `authority`), and `evidence_raises_confidence_ceiling`
 
 Use this as the preferred cold-client preflight when the client needs the complete supported-language and strength/ceiling table. The lightweight `health` tool is still useful for liveness checks and includes a capability summary.
+
+Read the per-language `confidence_ceiling` together with `provider_authority`. The ceiling is what a language earns from its own parser; when `evidence_raises_confidence_ceiling` is true, a selection whose units all carry exact provider evidence rises above it, so a client should not treat the per-language number as a permanent limit.
+
+`create_index` returns an additive `provider_summary` when the build ran the provider pipeline (`parser_opts.provider_pipeline` set to `shadow` or `authority`). The key is absent, not null, for a build that ran no pipeline. A `shadow` summary reports what the pipeline would have produced beside the snapshot and carries the tier `comparison`; an `authority` summary reports what the snapshot is made of and carries `units_supplied`, `units_conflicted`, and `files_degraded` instead.
 
 ### `create_index`
 

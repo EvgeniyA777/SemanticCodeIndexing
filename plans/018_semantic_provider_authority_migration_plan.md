@@ -1265,7 +1265,7 @@ implies lands in 6.2.
   silently reused under another.
 - **6.4 Surface parity (complete with one recorded gap, 2026-09-07).** The same provider summary, degradation, and capability
   payload across library, MCP, HTTP, and gRPC.
-- **6.5 Gates.** Contract, retrieval, relation, impact, snapshot-diff, storage,
+- **6.5 Gates (complete, 2026-09-07).** Contract, retrieval, relation, impact, snapshot-diff, storage,
   replay comparison, and the semantic-quality report, plus ADR-036/046/047,
   runtime docs, and MEMORY.
 
@@ -1427,6 +1427,59 @@ installed in this environment. The gap is documented in `docs/runtime-api.md`
 next to the endpoint rather than papered over; gRPC clients read the summary from
 usage metrics or use the HTTP edge. Adding the field is a candidate for 6.5 on a
 machine with the toolchain.
+
+##### 6.5 as delivered (2026-09-07)
+
+Gate results, run against this working tree:
+
+| Gate | Result |
+| --- | --- |
+| `clojure -M:test` | pass |
+| `./scripts/validate-contracts.sh` | pass, 72 files |
+| `./scripts/run-mvp-gates.sh` | pass |
+| `./scripts/run-semantic-quality-report.sh` | `advisory_failure`, unchanged from before Stage 6 |
+| `clojure -M:ccc check` | was stale; refreshed |
+| `./scripts/validate-language-onboarding.sh typescript` | pass, gates included |
+| `./scripts/validate-language-onboarding.sh java` | **fail, 10 errors, pre-existing** |
+
+Two of those need reading rather than ticking.
+
+**The semantic-quality advisory failure is not this stage's.** Rather than assert
+that from the shape of the change, the same report was run at `4fa9107` — the
+commit before the first Stage 6 change — in a scratch worktree. The two summaries
+are identical field for field: `expected_change_match_rate` 0.833,
+`implementation_vs_meaning_accuracy` 0.667, `gate_eligible` false. The dataset is
+advisory and was already below its thresholds.
+
+**The Java lane fails its own onboarding checklist, and has always failed it.**
+Four required artifacts have never existed in the repository's history — the
+onboarding doc, two named retrieval fixtures, and the mirrored integration test —
+while the fixtures Java does have use different names. TypeScript passes the same
+checklist including its gates. Recorded as
+[`bugs/003`](../bugs/003_java_lane_missing_onboarding_artifacts.md). It does not
+block this stage, because it is a checklist gap rather than an authority-path
+failure, but it should be settled before the flip: a gate that already fails
+cannot fail usefully at the moment it matters.
+
+New gates owned by this stage, in
+`test/semidx/integration/provider_authority_gates_test.clj`, because the standing
+gates all run the default path and say nothing about the mode being prepared:
+
+- the switch loses no unit the default path produced, and touches no file set;
+- retrieval still answers under it;
+- the confidence ceiling follows the evidence rather than the lane, whichever
+  toolchain the machine running the gate happens to have.
+
+Documentation: ADR-046 gained an **Amendments** section recording the two owner
+decisions as policy — annotate-not-block for equal-authority contradictions, with
+the same-arity overload guard kept as the one exception, and unconditional
+degradation labelling with the complement that exact evidence raises the ceiling.
+ADR-036's historical marker and the ADR-046/047 cross-links were already in
+place. `docs/mcp-api.md` and `docs/runtime-api.md` now describe
+`provider_authority` and `provider_summary` on their surfaces.
+
+What remains before the flip: the owner's decision on `bugs/003`, and the flip
+itself — one line in `index/provider-pipeline-mode`, deliberately left for last.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision
