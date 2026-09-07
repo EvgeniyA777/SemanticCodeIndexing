@@ -1247,7 +1247,7 @@ Sub-stages. Each ends with the suite green and its own commit; none is a
 rollback point on its own, because the switch lands in 6.1 and the labelling it
 implies lands in 6.2.
 
-- **6.1 Authority mode in the default path.** `index/provider-pipeline-mode`
+- **6.1 Authority mode in the default path (complete, 2026-09-07).** `index/provider-pipeline-mode`
   gains `:authority`. The project tier runs once per build before parsing, and
   its coverage and statuses reach per-file work, so the file plan sees the exact
   tier. A new boundary merges arbitrated facts with the language parse: parsed
@@ -1268,6 +1268,48 @@ implies lands in 6.2.
 - **6.5 Gates.** Contract, retrieval, relation, impact, snapshot-diff, storage,
   replay comparison, and the semantic-quality report, plus ADR-036/046/047,
   runtime docs, and MEMORY.
+
+##### 6.1 as delivered (2026-09-07)
+
+`semidx.runtime.provider-authority` is the merge boundary and
+`index/provider-pipeline-mode` gained `:authority`. The merge is asymmetric
+because the two vocabularies are: the parse stays the source of unit shape
+(module, imports, calls, signature, the spans relations are built from) and the
+arbitrated facts decide what that shape is worth. A fact matching a parsed unit
+raises its `:authority` and records `:evidence_providers`; a fact with no parsed
+counterpart becomes a unit; a contradicted unit is annotated with
+`:evidence_conflict` and kept, per the owner decision above.
+
+Three things worth recording because they were not obvious from the plan:
+
+- **A defect blocked the stage before it started.** `tree-sitter-fallback-diagnostic`
+  classified every `tree_sitter_*` code except the CLI probe as a degradation,
+  and a successful structural parse emits `tree_sitter_active`. So the
+  tree-sitter tier refused itself on every machine with a working grammar, the
+  pipeline could only ever observe heuristic evidence, and Stage 6 would have
+  labelled every Java and TypeScript file degraded no matter what was installed.
+  Fixed in `7fde363`; the existing test asserted the probe case and never the
+  success case, which is how it survived.
+- **The file is not parsed twice.** The tier that produced the parse answers the
+  pipeline from those units through the injected `run-provider` role, so the
+  legacy tier costs nothing extra and the other file tier is not run at all.
+  Which tier that is comes from the parse result, never from the request: a
+  tree-sitter parse that fell back to regex must not be labelled structural.
+- **Arbitration drops `:value`.** An arbitrated fact carries `:core_key` and
+  merged evidence but no value, so a unit built from one alone would have no
+  kind and no signature. The values are recovered from the pre-arbitration
+  batches the same call already returns.
+
+Measured on the committed TypeScript corpus, `:off` against `:authority`: same
+six units, of which four become `exact` carrying evidence from both
+`scip-typescript` and `typescript-regex`, and two stay `heuristic` where the
+exact tier did not cover them. Build time 0.38 s against 4.7 s, which is the
+SCIP index run for the corpus.
+
+Not in 6.1, and deliberately: no unit is relabelled `fallback`, no confidence is
+recalibrated, and `:authority` is not the default mode — the fingerprint does not
+yet separate the two models, so a snapshot built under one could be reused under
+the other. That is 6.2 and 6.3.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision

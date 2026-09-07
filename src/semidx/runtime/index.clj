@@ -54,12 +54,16 @@
   `:off` is the default and costs nothing: not a single provider is planned or
   executed, and the build is byte-identical to one from before this seam
   existed. `:shadow` runs the pipeline alongside the real parse and records what
-  it would have produced, changing no unit and no snapshot.
+  it would have produced, changing no unit and no snapshot. `:authority`
+  (Stage 6.1) makes the provider plan the default extraction path for Java and
+  TypeScript: arbitrated facts upgrade the units the parse produced and supply
+  the ones it missed.
 
-  Stage 6 adds the third mode that makes it authoritative. Until then the point
-  is only that the pipeline runs where real indexing happens, so it can be
-  compared against the path in use rather than against fixtures."
-  #{:off :shadow})
+  `:authority` is not yet the default for a build that asks for nothing. The
+  workspace fingerprint does not yet distinguish the two models (Stage 6.3), so
+  flipping it here would let a snapshot built under one be reused under the
+  other."
+  #{:off :shadow :authority})
 
 (defn provider-pipeline-mode [parser-opts]
   (let [mode (or (:provider_pipeline parser-opts)
@@ -169,65 +173,73 @@
   (let [descriptors-for (requiring-resolve 'semidx.runtime.providers/descriptors-for)]
     (filterv #(seq (descriptors-for %)) paths)))
 
-(defn- parse-files [root-path paths parser-opts]
-  (letfn [(distinct-vec [xs]
-            (->> xs (remove nil?) distinct vec))
-          (enrich-elixir-use-imports [{:keys [files units diagnostics relations]}]
-            (let [module->use-imports (->> (vals files)
-                                           (filter #(= "elixir" (:language %)))
-                                           (keep (fn [{:keys [module use_expansion_imports]}]
-                                                   (when (and (seq module) (seq use_expansion_imports))
-                                                     [module use_expansion_imports])))
-                                           (into {}))
-                  files* (reduce-kv (fn [acc path {:keys [language imports use_modules] :as file-rec}]
-                                      (if (and (= "elixir" language) (seq use_modules))
-                                        (let [implicit-imports (->> use_modules
-                                                                    (mapcat #(get module->use-imports % []))
-                                                                    distinct-vec)]
-                                          (assoc acc path
-                                                 (assoc file-rec
-                                                        :imports (distinct-vec (concat imports implicit-imports)))))
-                                        (assoc acc path file-rec)))
-                                    {}
-                                    files)
-                  units* (mapv (fn [unit]
-                                 (let [imports* (get-in files* [(:path unit) :imports])]
-                                   (if (and (= "elixir" (get-in files* [(:path unit) :language]))
-                                            (seq imports*))
-                                     (assoc unit :imports imports*)
-                                     unit)))
-                               units)]
-              {:files files*
-               :units units*
-               :diagnostics diagnostics
-               :relations relations}))]
-    (adapters/with-parser-context
-     root-path
-     paths
-     parser-opts
-     (fn [context-parser-opts]
-       (->> paths
-            (reduce
-             (fn [acc path]
-               (let [parsed (adapters/parse-file root-path path context-parser-opts)
-                     file-rec {:path path
-                               :language (:language parsed)
-                               :module (:module parsed)
-                               :imports (:imports parsed)
-                               :use_modules (:use_modules parsed)
-                               :use_expansion_imports (:use_expansion_imports parsed)
-                               :test_target_modules (:test_target_modules parsed)
-                               :semantic_pipeline (:semantic_pipeline parsed)
-                               :parser_mode (:parser_mode parsed)
-                               :diagnostics (:diagnostics parsed)}]
-                 (-> acc
-                     (update :files assoc path file-rec)
-                     (update :units into (:units parsed))
-                     (update :relations into (:relations parsed))
-                     (update :diagnostics into
-                             (map (fn [d] (assoc d :path path)) (:diagnostics parsed))))))
-             {:files {} :units [] :diagnostics [] :relations []})
-            enrich-elixir-use-imports)))))
+(defn- parse-files
+  ([root-path paths parser-opts]
+   (parse-files root-path paths parser-opts nil))
+  ([root-path paths parser-opts authority-ctx]
+   (letfn [(parse-one [path opts]
+             (if authority-ctx
+               ((requiring-resolve 'semidx.runtime.provider-authority/parse-file)
+                root-path path opts authority-ctx)
+               (adapters/parse-file root-path path opts)))
+           (distinct-vec [xs]
+             (->> xs (remove nil?) distinct vec))
+           (enrich-elixir-use-imports [{:keys [files units diagnostics relations]}]
+             (let [module->use-imports (->> (vals files)
+                                            (filter #(= "elixir" (:language %)))
+                                            (keep (fn [{:keys [module use_expansion_imports]}]
+                                                    (when (and (seq module) (seq use_expansion_imports))
+                                                      [module use_expansion_imports])))
+                                            (into {}))
+                   files* (reduce-kv (fn [acc path {:keys [language imports use_modules] :as file-rec}]
+                                       (if (and (= "elixir" language) (seq use_modules))
+                                         (let [implicit-imports (->> use_modules
+                                                                     (mapcat #(get module->use-imports % []))
+                                                                     distinct-vec)]
+                                           (assoc acc path
+                                                  (assoc file-rec
+                                                         :imports (distinct-vec (concat imports implicit-imports)))))
+                                         (assoc acc path file-rec)))
+                                     {}
+                                     files)
+                   units* (mapv (fn [unit]
+                                  (let [imports* (get-in files* [(:path unit) :imports])]
+                                    (if (and (= "elixir" (get-in files* [(:path unit) :language]))
+                                             (seq imports*))
+                                      (assoc unit :imports imports*)
+                                      unit)))
+                                units)]
+               {:files files*
+                :units units*
+                :diagnostics diagnostics
+                :relations relations}))]
+     (adapters/with-parser-context
+       root-path
+       paths
+       parser-opts
+       (fn [context-parser-opts]
+         (->> paths
+              (reduce
+               (fn [acc path]
+                 (let [parsed (parse-one path context-parser-opts)
+                       file-rec {:path path
+                                 :language (:language parsed)
+                                 :module (:module parsed)
+                                 :imports (:imports parsed)
+                                 :use_modules (:use_modules parsed)
+                                 :use_expansion_imports (:use_expansion_imports parsed)
+                                 :test_target_modules (:test_target_modules parsed)
+                                 :semantic_pipeline (:semantic_pipeline parsed)
+                                 :parser_mode (:parser_mode parsed)
+                                 :diagnostics (:diagnostics parsed)}]
+                   (-> acc
+                       (update :files assoc path file-rec)
+                       (update :units into (:units parsed))
+                       (update :relations into (:relations parsed))
+                       (update :diagnostics into
+                               (map (fn [d] (assoc d :path path)) (:diagnostics parsed))))))
+               {:files {} :units [] :diagnostics [] :relations []})
+              enrich-elixir-use-imports))))))
 
 (defn- snapshot-file-lines [root-path path]
   (let [f (io/file root-path path)]
@@ -758,7 +770,13 @@
       (let [discovered (if (seq (:paths opts))
                          (filtered-paths (normalize-paths (:paths opts)) (:active_languages activation-state))
                          (activation/active-source-paths discovery activation-state))
-            files-data (parse-files root_path discovered parser_opts)
+            ;; plans/018 Stage 6.1. The project tier runs once per build, before
+            ;; parsing, because a SCIP provider indexes a repository in one run;
+            ;; planning it per file would reindex the project once per document.
+            authority-ctx (when (= :authority (provider-pipeline-mode parser_opts))
+                            ((requiring-resolve 'semidx.runtime.provider-authority/build-context)
+                             root_path discovered parser_opts))
+            files-data (parse-files root_path discovered parser_opts authority-ctx)
             provider-summary (when (= :shadow (provider-pipeline-mode parser_opts))
                                (let [eligible (provider-eligible-paths discovered)]
                                  (when (seq eligible)
