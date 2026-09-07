@@ -335,7 +335,14 @@
      :signature_precision "arity_only"
      :signature_key nil}))
 
-(defn- unit->fact
+(defn unit->fact
+  "The `FactEvidence`-bearing fact one parsed unit carries for a provider tier.
+
+  Public because it is the single owner of the unit-to-fact mapping, and Stage 6
+  needs the same mapping in the other direction: to decide whether an arbitrated
+  fact and a parsed unit are the same thing, the default path computes the key a
+  unit would have had and compares it against the arbitrated key. Two spellings
+  of that mapping would be two identities."
   [{:keys [provider_id provider_version authority language source_identity]} unit]
   {:key {:fact_kind "unit"
          :language language
@@ -380,18 +387,29 @@
                        :language language
                        :provider_id (:provider_id descriptor)})))))
 
+(def tree-sitter-success-codes
+  "The `tree_sitter_*` diagnostics that report a working structural parse rather
+  than a degradation.
+
+  `tree_sitter_probe` says the CLI was found; `tree_sitter_active` says the CST
+  extraction actually produced the units. Everything else under the prefix —
+  `tree_sitter_unavailable`, `tree_sitter_missing_grammar`,
+  `tree_sitter_parse_failed`, `tree_sitter_no_units` — is a degradation, and an
+  unknown future code is treated as one."
+  #{"tree_sitter_probe" "tree_sitter_active"})
+
 (defn tree-sitter-fallback-diagnostic
   "The diagnostic showing a tree-sitter parse silently degraded to the lexical
   parser, if there is one.
 
-  Any `tree_sitter_*` diagnostic other than the positive CLI probe means the
-  structural parse did not happen: unknown future codes fail closed rather than
-  passing as structural."
+  Any `tree_sitter_*` diagnostic that is not one of `tree-sitter-success-codes`
+  means the structural parse did not happen: unknown future codes fail closed
+  rather than passing as structural."
   [parsed]
   (first (filter (fn [d]
                    (let [code (str (:code d))]
                      (and (str/starts-with? code "tree_sitter_")
-                          (not= "tree_sitter_probe" code))))
+                          (not (contains? tree-sitter-success-codes code)))))
                  (:diagnostics parsed))))
 
 (defn- refuse-silent-fallback!

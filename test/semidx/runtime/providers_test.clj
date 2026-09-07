@@ -136,6 +136,13 @@
     (is (nil? (providers/tree-sitter-fallback-diagnostic
                {:diagnostics [{:code "tree_sitter_probe"}]}))
         "the positive CLI probe is not a fallback")
+    (is (nil? (providers/tree-sitter-fallback-diagnostic
+               {:diagnostics [{:code "tree_sitter_active"}
+                              {:code "tree_sitter_probe"}]}))
+        "nor is a successful CST extraction, which is what a working structural
+         parse emits: reading tree_sitter_active as a fallback made the tree-sitter
+         tier refuse itself on every machine whose grammar actually worked, so the
+         provider pipeline could only ever observe heuristic evidence")
     (is (some? (providers/tree-sitter-fallback-diagnostic
                 {:diagnostics [{:code "tree_sitter_some_future_failure"}]}))
         "an unknown tree_sitter_* code must fail closed, not pass as structural"))
