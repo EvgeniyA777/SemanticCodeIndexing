@@ -777,11 +777,20 @@
                             ((requiring-resolve 'semidx.runtime.provider-authority/build-context)
                              root_path discovered parser_opts))
             files-data (parse-files root_path discovered parser_opts authority-ctx)
-            provider-summary (when (= :shadow (provider-pipeline-mode parser_opts))
-                               (let [eligible (provider-eligible-paths discovered)]
-                                 (when (seq eligible)
-                                   (provider-shadow-summary
-                                    (provider-shadow-observation root_path eligible parser_opts)))))
+            ;; plans/018 Stage 6.4. Both observing modes report on the same key,
+            ;; and `:mode` tells them apart. The authority summary is built from
+            ;; what the build produced rather than by running the pipeline again,
+            ;; which is what borrowing the shadow path here would have cost.
+            provider-summary (case (provider-pipeline-mode parser_opts)
+                               :shadow (let [eligible (provider-eligible-paths discovered)]
+                                         (when (seq eligible)
+                                           (provider-shadow-summary
+                                            (provider-shadow-observation root_path eligible parser_opts))))
+                               :authority (when authority-ctx
+                                            ((requiring-resolve
+                                              'semidx.runtime.provider-authority/build-summary)
+                                             authority-ctx files-data))
+                               nil)
             index (build-index-state root_path
                                      (cond-> files-data
                                        provider-summary (assoc :provider_summary provider-summary))

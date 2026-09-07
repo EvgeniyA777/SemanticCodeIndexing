@@ -1478,6 +1478,22 @@ Endpoints:
 
 HTTP create/retrieval responses now also include additive `project_context` metadata summarizing the current canonical per-root activation state. If activation is already in progress, HTTP returns `409 language_activation_in_progress` and a `Retry-After` header.
 
+`POST /v1/index/create` also returns an additive `provider_summary` when the
+build ran the plans/018 provider pipeline — `parser_opts.provider_pipeline` set
+to `shadow` or `authority`. The key is absent, not null, for a build that ran no
+pipeline, so a client that never asks for one sees exactly the response it saw
+before. `mode` distinguishes the two: a `shadow` summary reports what the
+pipeline would have produced beside the snapshot and carries the tier
+`comparison`; an `authority` summary reports what the snapshot is made of and
+carries `units_supplied`, `units_conflicted`, and `files_degraded` instead. The
+library surface exposes the same map under `:provider_summary` on the index, and
+the MCP `create_index` result carries it under the same name.
+
+The gRPC `CreateIndexResponse` does **not** carry it yet: the message has no
+field for it and adding one requires regenerating the committed protobuf sources
+with `protoc`. Until then, gRPC clients that need the summary should read it from
+the usage metrics stream or use the HTTP edge.
+
 ## Minimal gRPC Edge
 
 Run a minimal gRPC wrapper over the same library runtime semantics:

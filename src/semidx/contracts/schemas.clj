@@ -137,12 +137,22 @@
 (def language-policy-option
   [:enum "clojure" "java" "elixir" "python" "typescript" "javascript" "lua" "zig" "html" "css"])
 
+(def provider-authority-capability
+  ;; plans/018 Stage 6.4. Optional so a payload produced before this stage still
+  ;; validates; closed so a surface cannot quietly add a field the others lack.
+  [:map {:closed true}
+   [:policy_version bounded-string]
+   [:languages string-array]
+   [:modes string-array]
+   [:evidence_raises_confidence_ceiling boolean?]])
+
 (def capabilities
   [:map {:closed true}
    [:capability_version bounded-string]
    [:server server-info]
    [:languages [:vector {:min 1} language-capability]]
-   [:language_policy_options [:vector language-policy-option]]])
+   [:language_policy_options [:vector language-policy-option]]
+   [:provider_authority {:optional true} provider-authority-capability]])
 
 (def capability-summary
   [:map {:closed true}

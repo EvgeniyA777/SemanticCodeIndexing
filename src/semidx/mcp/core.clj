@@ -382,25 +382,31 @@
         action (or (:lifecycle_action lifecycle) (if cache-hit? "reuse" "full_rebuild"))
         reason (or (:lifecycle_reason lifecycle) (if cache-hit? "cached_entry" "initial_build"))
         diagnostics (or (:lifecycle_diagnostics lifecycle) [])]
-    {:index_id (:index_id entry)
-     :snapshot_id (:snapshot_id index)
-     :indexed_at (:indexed_at index)
-     :index_lifecycle lifecycle
-     :root_path (:root_path entry)
-     :file_count (count (:files index))
-     :unit_count (count (:units index))
-     :detected_languages (:detected_languages index)
-     :active_languages (:active_languages index)
-     :language_fingerprint (:language_fingerprint index)
-     :activation_state (:activation_state index)
-     :selection_hint (:selection_hint index)
-     :recommended_next_step "repo_map"
-     :recommended_flow canonical-mcp-flow
-     :usage_hint mcp-first-usage-hint
-     :cache_hit (= action "reuse")
-     :lifecycle_action action
-     :lifecycle_reason reason
-     :lifecycle_diagnostics diagnostics}))
+    (cond-> {:index_id (:index_id entry)
+             :snapshot_id (:snapshot_id index)
+             :indexed_at (:indexed_at index)
+             :index_lifecycle lifecycle
+             :root_path (:root_path entry)
+             :file_count (count (:files index))
+             :unit_count (count (:units index))
+             :detected_languages (:detected_languages index)
+             :active_languages (:active_languages index)
+             :language_fingerprint (:language_fingerprint index)
+             :activation_state (:activation_state index)
+             :selection_hint (:selection_hint index)
+             :recommended_next_step "repo_map"
+             :recommended_flow canonical-mcp-flow
+             :usage_hint mcp-first-usage-hint
+             :cache_hit (= action "reuse")
+             :lifecycle_action action
+             :lifecycle_reason reason
+             :lifecycle_diagnostics diagnostics}
+      ;; plans/018 Stage 6.4. Conditional, like everywhere else this key
+      ;; appears: a build that ran no provider pipeline must answer exactly what
+      ;; it answered before. Telemetry already carried it; a caller reading the
+      ;; response had no way to see the same thing.
+      (:provider_summary index)
+      (assoc :provider_summary (:provider_summary index)))))
 
 (defn- entry-root-consistent? [entry]
   (= (:root_path entry)

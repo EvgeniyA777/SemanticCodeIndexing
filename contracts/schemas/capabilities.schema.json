@@ -77,6 +77,31 @@
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/languagePolicyOption" },
       "uniqueItems": true
+    },
+    "provider_authority": {
+      "type": "object",
+      "description": "What the server can do with provider evidence. The per-language confidence_ceiling above is the ceiling a language earns from its own parser; a selection whose units all carry exact provider evidence rises above it.",
+      "required": [
+        "policy_version",
+        "languages",
+        "modes",
+        "evidence_raises_confidence_ceiling"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "policy_version": {
+          "$ref": "common.schema.json#/$defs/boundedString"
+        },
+        "languages": {
+          "$ref": "common.schema.json#/$defs/stringArray"
+        },
+        "modes": {
+          "$ref": "common.schema.json#/$defs/stringArray"
+        },
+        "evidence_raises_confidence_ceiling": {
+          "type": "boolean"
+        }
+      }
     }
   }
 }

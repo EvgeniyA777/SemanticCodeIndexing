@@ -317,13 +317,19 @@
                                                 correlation
                                                 language-policy)
                   index (:index entry)]
-              (write-json! exchange 200 {:snapshot_id (:snapshot_id index)
-                                         :indexed_at (:indexed_at index)
-                                         :index_lifecycle (:index_lifecycle index)
-                                         :file_count (count (:files index))
-                                         :unit_count (count (:units index))
-                                         :repo_map (sci/repo-map index)
-                                         :project_context (project-context-summary entry)}
+              (write-json! exchange 200
+                           (cond-> {:snapshot_id (:snapshot_id index)
+                                    :indexed_at (:indexed_at index)
+                                    :index_lifecycle (:index_lifecycle index)
+                                    :file_count (count (:files index))
+                                    :unit_count (count (:units index))
+                                    :repo_map (sci/repo-map index)
+                                    :project_context (project-context-summary entry)}
+                             ;; plans/018 Stage 6.4. Additive and conditional: a
+                             ;; build that ran no provider pipeline answers
+                             ;; exactly what it answered before this stage.
+                             (:provider_summary index)
+                             (assoc :provider_summary (:provider_summary index)))
                            (response-correlation-header-map exchange)))))))))
 
 (defn- handle-resolve-context [auth-config ^HttpExchange exchange]

@@ -31,6 +31,15 @@
         (is (= "low" (:strength zig)))
         (is (= "low" (:confidence_ceiling zig))))
       
+      (testing "the provider authority capability describes what evidence can do"
+        (let [authority (:provider_authority payload)]
+          (is (= ["java" "typescript"] (:languages authority)))
+          (is (= ["authority" "off" "shadow"] (:modes authority)))
+          (is (true? (:evidence_raises_confidence_ceiling authority))
+              "the per-language confidence_ceiling above is what a lane's own
+               parser earns; a wholly exact selection rises above it")
+          (is (string? (:policy_version authority)))))
+
       (let [schema (get schemas/contracts :example/capabilities)
             explain (m/explain schema payload)]
         (is (nil? explain) (pr-str (when explain (me/humanize explain))))))))
@@ -73,6 +82,17 @@
         ;; Assert core structural equality (servers might have different names/versions)
         (is (= (:languages library-payload) (:languages mcp-payload) (:languages http-payload) (:languages grpc-payload)))
         (is (= (:language_policy_options library-payload) (:language_policy_options mcp-payload) (:language_policy_options http-payload) (:language_policy_options grpc-payload)))
+
+        ;; plans/018 Stage 6.4. Without this, a client reading capabilities plans
+        ;; around a per-language ceiling that exact provider evidence can now
+        ;; beat, and every surface must say so identically or the parity is only
+        ;; on the fields that were already there.
+        (is (some? (:provider_authority library-payload)))
+        (is (= (:provider_authority library-payload)
+               (:provider_authority mcp-payload)
+               (:provider_authority http-payload)
+               (:provider_authority grpc-payload)))
+
         
         ;; Check schema validity for all payloads
         (let [schema (get schemas/contracts :example/capabilities)]

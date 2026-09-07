@@ -1263,7 +1263,7 @@ implies lands in 6.2.
   relevant source identities, and the authority-policy version enter the
   workspace fingerprint, so a snapshot built under one authority model is never
   silently reused under another.
-- **6.4 Surface parity.** The same provider summary, degradation, and capability
+- **6.4 Surface parity (complete with one recorded gap, 2026-09-07).** The same provider summary, degradation, and capability
   payload across library, MCP, HTTP, and gRPC.
 - **6.5 Gates.** Contract, retrieval, relation, impact, snapshot-diff, storage,
   replay comparison, and the semantic-quality report, plus ADR-036/046/047,
@@ -1389,6 +1389,44 @@ rather than fixed opportunistically here.
 The default flip is **not** part of this stage. The owner asked for it after 6.5,
 so that it lands as a one-line change against a surface that already reports
 degradation consistently and gates that have already run.
+
+##### 6.4 as delivered (2026-09-07)
+
+Two gaps, both of the same kind: the information existed and the surfaces did
+not carry it.
+
+**An authority build reported nothing.** `provider_summary` was emitted only in
+shadow mode, so switching the pipeline on cost the operator the observation.
+`provider-authority/build-summary` now produces it from what the build actually
+made — not by running the pipeline a second time, which is what borrowing the
+shadow path would have meant. It is deliberately not the shadow summary with a
+different `:mode`: `:comparison` is absent, because shadow compares two tiers
+neither of which is the snapshot while here one of them *is* the snapshot, and
+`:units_supplied`, `:units_conflicted` and `:files_degraded` exist only in this
+mode. `:project_elapsed_ms` covers the project tier alone — per-file provider
+work is interleaved with parsing and is not honestly separable, so no total is
+reported rather than an invented one.
+
+**Capabilities described a ceiling the server can now beat.** Since 6.2 a wholly
+exact selection rises above its language's static `confidence_ceiling`, and a
+client reading capabilities had no way to know that. The payload gained
+`provider_authority` — policy version, covered languages, available modes, and
+`evidence_raises_confidence_ceiling` — with the JSON Schema, the malli mirror,
+and the committed example updated together. It is static by design: it says what
+the server can do, not which mode the last build ran in, so a capability response
+never depends on an index.
+
+Carrying the summary: library (`:provider_summary` on the index), MCP (both the
+usage event and, new here, the tool response), HTTP (`POST /v1/index/create`).
+Every one of them is conditional, so a build that runs no pipeline answers
+exactly what it answered before.
+
+**Recorded gap — gRPC.** `CreateIndexResponse` has no field for it, and adding
+one means regenerating the committed protobuf sources with `protoc`, which is not
+installed in this environment. The gap is documented in `docs/runtime-api.md`
+next to the endpoint rather than papered over; gRPC clients read the summary from
+usage metrics or use the HTTP edge. Adding the field is a candidate for 6.5 on a
+machine with the toolchain.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision

@@ -85,7 +85,12 @@
   Project providers index a repository in one run; running them per file would
   reindex the project once per document. This mirrors what shadow mode already
   does, and returns nil when no path in the build belongs to an authority
-  language, so a build with no Java or TypeScript pays nothing."
+  language, so a build with no Java or TypeScript pays nothing.
+
+  The project run is timed here because it is the only part of an authority
+  build whose cost is separable: per-file provider work is interleaved with
+  parsing and cannot be honestly attributed by a wall clock around the whole
+  build."
   [root-path paths parser-opts]
   (let [languages (languages-for paths)]
     (when (seq languages)
@@ -95,11 +100,14 @@
                                                    :languages languages
                                                    :mode "default"
                                                    :statuses statuses})
-            execution (provider-batch/execute-project-plan plan provider-opts)]
+            started (System/nanoTime)
+            execution (provider-batch/execute-project-plan plan provider-opts)
+            elapsed-ms (Math/round (/ (double (- (System/nanoTime) started)) 1e6))]
         {:languages languages
          :statuses statuses
          :project_plan plan
          :project_execution execution
+         :project_elapsed_ms elapsed-ms
          :coverage (provider-batch/batch-coverage execution)
          :parser_opts parser-opts}))))
 
@@ -177,7 +185,11 @@
      :parser_mode "full"
      :authority (:authority fact)
      :evidence_providers (evidence-providers fact)
-     :canonical_fact_key_id key-id}))
+     :canonical_fact_key_id key-id
+     ;; Marks a unit no parser produced. The build summary counts these, and a
+     ;; reader looking at a unit with no calls and no docstring deserves to know
+     ;; it came from a provider rather than from a parse that lost them.
+     :provider_supplied true}))
 
 (defn- conflicted-key-ids [diagnostics]
   (into #{}
@@ -331,3 +343,53 @@
                          :observed_statuses (:statuses ctx)
                          :run-provider runner})]
         (merge-facts parsed arbitrated language evidence-ctx)))))
+
+(defn build-summary
+  "The provider summary for an authority build (plans/018 Stage 6.4).
+
+  Shadow mode already reported what the pipeline would have done; an authority
+  build reported nothing at all, so switching the pipeline on cost the operator
+  the observation. This produces the same key from what the build actually
+  produced rather than by running the pipeline a second time — which is what
+  reusing the shadow path here would have meant, at double the cost.
+
+  It is not the shadow summary with a different `:mode`, and two fields make the
+  difference explicit:
+
+  - `:comparison` is absent. Shadow compares two tiers, neither of which is the
+    snapshot. Here one of them *is* the snapshot, so the same key would name a
+    different thing.
+  - `:units_supplied` counts the units no parser produced, which only an
+    authority build can have.
+
+  `:project_elapsed_ms` is the project tier alone. Per-file provider work is
+  interleaved with parsing in this mode and is not honestly separable, so no
+  total is reported rather than a made-up one."
+  [ctx files-data]
+  (let [units (vec (:units files-data))
+        authority-units (filterv #(contains? authority-languages (:language %)) units)
+        files (vals (:files files-data))
+        authority-files (filterv #(contains? authority-languages (:language %)) files)
+        execution (:project_execution ctx)]
+    {:mode "authority"
+     :languages (vec (:languages ctx))
+     :files_observed (count authority-files)
+     :files_degraded (count (filterv #(= "fallback" (:parser_mode %)) authority-files))
+     :units_observed (count authority-units)
+     :units_supplied (count (filterv :provider_supplied authority-units))
+     :units_conflicted (count (filterv :evidence_conflict authority-units))
+     :authorities (into (sorted-map) (frequencies (keep :authority authority-units)))
+     :providers (into (sorted-map)
+                      (map (fn [[provider-id state]]
+                             [provider-id (-> state
+                                              (update :fresh count)
+                                              (update :stale count)
+                                              (update :invalid count)
+                                              (update :uncovered count))]))
+                      (provider-batch/document-states execution (mapv :path authority-files)))
+     :diagnostic_codes (->> authority-files
+                            (mapcat :diagnostics)
+                            (map (comp str :code))
+                            frequencies
+                            (into (sorted-map)))
+     :project_elapsed_ms (:project_elapsed_ms ctx)}))

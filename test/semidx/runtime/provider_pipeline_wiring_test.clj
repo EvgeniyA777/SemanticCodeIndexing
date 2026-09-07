@@ -5,16 +5,20 @@
   shadow entry points, so nothing could compare it against the path actually in
   use. It stays default-off: the value of the seam is that it can be switched
   on, not that it is."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.test :refer [deftest testing is]]
             [semidx.core :as sci]
             [semidx.mcp.core :as mcp]
+            [semidx.runtime.http :as runtime-http]
             [semidx.runtime.index :as idx]
             [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.storage :as storage]
             [semidx.runtime.usage-metrics :as usage]
-            [semidx.test-support.scip-toolchain :as toolchain]))
+            [semidx.test-support.scip-toolchain :as toolchain])
+  (:import [java.net URI]
+           [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]))
 
 (def ^:private java-corpus "fixtures/provider-authority/corpus/java")
 
@@ -190,3 +194,77 @@
                (get-in switched-off [:index_lifecycle :rebuild_reason])))
         (is (= "authority_model_changed"
                (get-in back-again [:index_lifecycle :rebuild_reason])))))))
+
+;; --- Stage 6.4: the authority build reports on the same key ------------------
+
+(deftest an-authority-build-reports-what-it-produced-test
+  (let [index (sci/create-index {:root_path java-corpus
+                                 :parser_opts {:provider_pipeline "authority"}})
+        summary (:provider_summary index)]
+    (testing "switching the pipeline on must not cost the operator the observation:
+              shadow reported, authority reported nothing at all before this"
+      (is (some? summary))
+      (is (= "authority" (:mode summary)))
+      (is (= ["java"] (:languages summary)))
+      (is (= 2 (:files_observed summary))))
+
+    (testing "the counts describe the snapshot rather than a shadow run"
+      (is (= (count (filter #(= "java" (:language %)) (vals (:units index))))
+             (:units_observed summary)))
+      (is (= (:units_observed summary)
+             (reduce + 0 (vals (:authorities summary))))
+          "every observed unit carries an authority, because the merge assigns one")
+      (is (contains? summary :units_supplied))
+      (is (contains? summary :files_degraded)))
+
+    (testing "and it does not borrow the shadow comparison, which names two tiers
+              neither of which is the snapshot"
+      (is (not (contains? summary :comparison))))))
+
+(deftest the-authority-summary-reaches-a-real-mcp-session-test
+  (testing "the same defect Stage 6a hit: the MCP transport emits its own event
+            from a literal map, so a summary that rides only the library event
+            never reaches the only surface that produces sessions"
+    (let [event (mcp-create-index-event {:provider_pipeline "authority"})]
+      (is (= "authority" (get-in event [:payload :provider_summary :mode])))
+      (is (some? (get-in event [:payload :provider_summary :authorities]))))))
+
+(deftest every-surface-that-can-carry-the-summary-does-test
+  ;; plans/018 Stage 6.4. Telemetry already carried the summary; a caller reading
+  ;; a response could not see the same thing, which is a strange kind of
+  ;; observability — visible to the operator's database and not to the client
+  ;; whose build it describes.
+  (let [parser-opts {:provider_pipeline "authority"}
+        abs-root (.getAbsolutePath (io/file java-corpus))]
+
+    (testing "library"
+      (let [index (sci/create-index {:root_path java-corpus :parser_opts parser-opts})]
+        (is (= "authority" (get-in index [:provider_summary :mode])))))
+
+    (testing "MCP tool response, not only the usage event"
+      (with-redefs [mcp/deployment-parser-opts (constantly {})]
+        (let [state (mcp/new-session-state {})
+              result (mcp/tool-create-index state {:root_path abs-root
+                                                   :parser_opts parser-opts})]
+          (is (= "authority" (get-in result [:provider_summary :mode]))))))
+
+    (testing "HTTP"
+      (let [server (runtime-http/start-server {:host "127.0.0.1" :port 0})
+            port (-> server .getAddress .getPort)]
+        (try
+          (let [body (json/write-str {:root_path abs-root :parser_opts parser-opts})
+                request (-> (HttpRequest/newBuilder
+                             (URI/create (str "http://127.0.0.1:" port "/v1/index/create")))
+                            (.header "Content-Type" "application/json")
+                            (.POST (HttpRequest$BodyPublishers/ofString body))
+                            (.build))
+                response (.send (HttpClient/newHttpClient) request
+                                (HttpResponse$BodyHandlers/ofString))
+                payload (json/read-str (.body response) :key-fn keyword)]
+            (is (= 200 (.statusCode response)))
+            (is (= "authority" (get-in payload [:provider_summary :mode]))))
+          (finally (.stop server 0)))))
+
+    (testing "and a build with no pipeline answers exactly what it answered before"
+      (let [index (sci/create-index {:root_path java-corpus})]
+        (is (not (contains? index :provider_summary)))))))

@@ -7,7 +7,11 @@
   "languages": [
     {
       "language": "clojure",
-      "extensions": [".clj", ".cljc", ".cljs"],
+      "extensions": [
+        ".clj",
+        ".cljc",
+        ".cljs"
+      ],
       "provider": {
         "provider_id": "clojure-native",
         "provider_version": "1",
@@ -17,5 +21,29 @@
       "confidence_ceiling": "high"
     }
   ],
-  "language_policy_options": ["clojure", "java", "elixir", "python", "typescript", "javascript", "lua", "zig", "html", "css"]
+  "language_policy_options": [
+    "clojure",
+    "java",
+    "elixir",
+    "python",
+    "typescript",
+    "javascript",
+    "lua",
+    "zig",
+    "html",
+    "css"
+  ],
+  "provider_authority": {
+    "policy_version": "1",
+    "languages": [
+      "java",
+      "typescript"
+    ],
+    "modes": [
+      "authority",
+      "off",
+      "shadow"
+    ],
+    "evidence_raises_confidence_ceiling": true
+  }
 }
