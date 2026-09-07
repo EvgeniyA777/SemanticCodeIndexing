@@ -1547,7 +1547,9 @@ clojure -T:build compile-java
 
 Ordinary `clojure -M:test` and `clojure -M:runtime-grpc` runs never invoke
 `protoc` or require network access. They compile the committed Java sources with
-the local JDK only when `target/classes` is missing or stale.
+the local JDK only when `target/classes` is missing or stale. CI and local
+development should use JDK 21 where possible, but the generated sources remain
+compiled with `--release 17` to preserve Java 17 bytecode compatibility.
 
 `HealthResponse` carries `capabilities_json`, a JSON-encoded copy of the same versioned capability payload returned by `semidx.core/capabilities`, MCP `capabilities`, and HTTP `GET /capabilities`. gRPC clients should call `Health` as capability preflight before selecting `language_policy_json` for indexing.
 
