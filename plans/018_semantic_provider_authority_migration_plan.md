@@ -1217,6 +1217,59 @@ Exit criteria:
 
 Commit boundary: default switch and public additive contract changes.
 
+#### Execution decomposition and owner decisions (2026-09-06)
+
+**The `plans/020` gate was waived by the owner on 2026-09-06.** It is recorded
+here rather than deleted from the exit criteria above, because the criterion was
+not met and a later reader must not read the switch as evidence-backed on task
+value. What stands in its place as admission evidence: the Stage 6b comparison
+on the protected Java corpus (5 agreed, 5 authority upgrades, 1 exact-only, 0
+legacy-only), the protected replay and fixture gates, and no regression in the
+existing retrieval fixtures. What is still unanswered: whether the switch helps
+an agent finish a task. Nothing in this stage may be reported as answering it.
+
+Two policy questions the stage could not default. Both were decided by the owner
+on 2026-09-06:
+
+1. **Degradation is labelled unconditionally.** A Java or TypeScript file with
+   neither a semantic provider nor tree-sitter projects `parser_mode: fallback`,
+   heuristic evidence, an explicit degradation diagnostic, and reduced
+   confidence — including the common local case where no toolchain is installed
+   at all. This is the intentional confidence reduction the exit criteria
+   require approval for, and it is approved.
+2. **An `equal_authority_value_conflict` annotates, it does not block.** The
+   contradicted fact stays in the index, carries the conflict diagnostic, and
+   loses confidence. The one existing exception stands: same-arity arity-only
+   overloads remain withheld, because there the risk is a false exact identity
+   rather than a disagreement about a value.
+
+Sub-stages. Each ends with the suite green and its own commit; none is a
+rollback point on its own, because the switch lands in 6.1 and the labelling it
+implies lands in 6.2.
+
+- **6.1 Authority mode in the default path.** `index/provider-pipeline-mode`
+  gains `:authority`. The project tier runs once per build before parsing, and
+  its coverage and statuses reach per-file work, so the file plan sees the exact
+  tier. A new boundary merges arbitrated facts with the language parse: parsed
+  units keep what only the parser has (module, imports, calls, signature), a
+  fact matching a unit raises its authority and evidence, and a fact with no
+  parsed counterpart becomes a unit — that last part is where SCIP adds what
+  regex missed. Java and TypeScript only; every other language keeps the
+  single-parser path untouched.
+- **6.2 Truthful degradation and confidence.** Decision 1 above, plus capability
+  and retrieval-confidence recalibration driven by the authority actually
+  selected rather than by the descriptor's static claim.
+- **6.3 Fingerprint and snapshot reuse.** Provider plan, provider versions,
+  relevant source identities, and the authority-policy version enter the
+  workspace fingerprint, so a snapshot built under one authority model is never
+  silently reused under another.
+- **6.4 Surface parity.** The same provider summary, degradation, and capability
+  payload across library, MCP, HTTP, and gRPC.
+- **6.5 Gates.** Contract, retrieval, relation, impact, snapshot-diff, storage,
+  replay comparison, and the semantic-quality report, plus ADR-036/046/047,
+  runtime docs, and MEMORY.
+
+
 ### Stage 7. Compatibility Cleanup And Expansion Decision
 
 Goal: remove temporary duplication only after the new path is stable.
