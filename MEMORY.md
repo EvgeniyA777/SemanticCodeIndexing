@@ -285,6 +285,15 @@ after this memory file.
   prove retrieval value first (`plans/020`), then raise provider authority
   (`plans/018`), then add one-shot delivery (`plans/019`), then choose workflow
   and documentation graph surfaces.
+- MCP stdio startup is a host-integration gap, filed as
+  `bugs/001_mcp_stdio_startup_exceeds_host_handshake_timeout.md`. Measured
+  `initialize` latency is 16.68 s cold and 20.38 s warm because
+  `scripts/start-mcp-server.sh` runs `clojure -M:mcp` from source on every host
+  session. Codex CLI enforces a 10 s handshake timeout and aborts session
+  bootstrap when the server is marked required. The runtime-reuse work in
+  `reports/025` covered `runtime-http` only and explicitly deferred MCP reuse,
+  so no warm path exists for this entry point. `bugs/` is the new home for
+  defect reports and follows the standard `NNN_slug.md` and frontmatter rules.
 
 ## Next Execution Priorities
 
