@@ -4,7 +4,7 @@ doc_type: "architecture_plan"
 lifecycle: "active"
 status: "in_progress"
 agent_action: "reference_for_context"
-updated: "2026-09-05"
+updated: "2026-09-06"
 ---
 
 # Architecture Plan: Semantic Provider Authority Migration
@@ -1114,6 +1114,78 @@ Exit criteria, all met:
   and never reaches the build.
 - Verified against a live MCP server and the telemetry database, not only in
   tests.
+
+#### Stage 6c. Negative Cache For Project Providers (complete, 2026-09-06)
+
+Goal: stop paying for a project provider run that the same workspace already
+proved pointless.
+
+Why: Stage 6b measured it. On this repository both SCIP providers fail with
+`scip_index_failed`, and the failed attempts accounted for about 5.3 s of the
+6.1 s that shadow mode added to a 14 s build. The failure is a property of the
+workspace — no `package.json`, no `pom.xml` — and it was rediscovered on every
+build.
+
+The risk this stage is designed around is the opposite of the cost: a
+remembered failure that is wrong silently switches a semantic tier off, which is
+worse than paying for the run. Three guards, all owned by
+`semidx.runtime.provider-negative-cache`:
+
+- **Default deny.** `cacheable-negative-result?` answers false for anything it
+  cannot classify: a throw, a contract violation, an unbuilt classpath, an
+  unnamed failure, or a result whose codes are not all on the allow-list. The
+  generic `:scip_index_failed` — the only code either adapter emits today, for
+  every failure mode including a caught exception — is admitted only with
+  eligibility evidence behind it: the provider declares `:project_manifests` in
+  the catalog and none of them is present in the workspace. A TypeScript project
+  whose compile broke this morning is therefore retried, not suppressed.
+- **A short TTL**, five minutes by default, so even a correct negative expires
+  and an `npm install` costs one stale build at most.
+- **The provider never disappears.** A hit returns a `skipped` result in the
+  shape a run returns, carrying `cached_negative_result` with the original
+  failure code, the fingerprint, and the expiry. `result-states` gained
+  `skipped` for it: nothing failed in that run, the run was not attempted, and a
+  reader of `provider_summary` should be able to tell a toolchain problem from a
+  policy decision.
+
+Where it sits: inside `run-one-project-provider`, not in `project-statuses`. A
+status probe answers whether the provider *could* run; a remembered negative
+answers whether running it again *can produce anything*. Keeping them apart is
+what lets the status stay a truthful observation.
+
+What invalidates an entry: the manifest signals (presence, size, mtime), the
+observed status minus `:observed_at` — which carries the resolved toolchain
+identity, so installing a toolchain invalidates without this namespace
+duplicating any resolution logic — the forwarded provider options minus
+`:expected_document_digests` (per-file content, which changes on every edit and
+says nothing about project eligibility), and the provider version. Anything else
+expires by TTL.
+
+In memory only, and injectable: `:provider_negative_cache` takes an atom or
+`false`, and `:provider_negative_cache_ttl_ms` / `_now_fn` override the TTL and
+the clock. A disk-backed tier would need schema versioning, cleanup, corrupted
+files, and cross-branch behaviour, none of which the measured problem calls for;
+it is a later slice to be justified by measurement.
+
+Measured on this repository, three consecutive shadow builds in one process:
+provider time 11.1 s, then 3.9 s, then 4.1 s, with both providers reporting
+`skipped` and `cached_negative_result` from the second build on. The absolute
+numbers are higher than Stage 6b's because that run went through a warm MCP
+server and this one through a cold `-M:test-direct` JVM; what is comparable is
+the provider-attributable share, which drops by about two thirds. The
+file-scoped observation is untouched: the same 99
+`equal_authority_value_conflict` diagnostics before and after.
+
+Exit criteria, all met:
+
+- A default build is still unchanged and carries no `provider_summary`.
+- A skipped provider stays in the execution, the summary, and the document
+  states, contributing no coverage — exactly like the failure it stands for.
+- An unclassified failure is retried; verified by disabling the classifier and
+  watching the eligibility tests fail, not only by watching them pass.
+- TTL expiry, a new manifest, a changed toolchain identity, and a provider
+  version bump each produce a real run again.
+- `clojure -M:test`: 655 tests, 3496 assertions, 0 failures.
 
 ### Stage 6. Default Authority Switch And Truthful Degradation
 

@@ -128,6 +128,13 @@
   that must keep loading without them. `semidx.runtime.provider-batch` owns the
   roles and is the only namespace that requires both adapters.
 
+  `:project_manifests` (Stage 6c) names the files whose presence decides whether
+  a workspace is a project of this provider's kind at all. It is a claim about
+  the provider, so it belongs to the catalog rather than to the cache that reads
+  it: `semidx.runtime.provider-negative-cache` uses it as the eligibility
+  evidence that lets a generic index failure be remembered instead of retried on
+  every build.
+
   Both providers remain default-off: nothing plans them unless a caller supplies
   an observed status and batch coverage."
   [{:provider_id "scip-typescript"
@@ -137,6 +144,7 @@
     :engine :scip
     :scope :project
     :selectors {:extensions [".ts" ".tsx"]}
+    :project_manifests ["package.json" "tsconfig.json" "jsconfig.json"]
     :operation_capabilities {:definitions "exact"
                              :references "exact"}}
    {:provider_id "scip-java"
@@ -146,6 +154,8 @@
     :engine :scip
     :scope :project
     :selectors {:extensions [".java"]}
+    :project_manifests ["pom.xml" "build.gradle" "build.gradle.kts"
+                        "settings.gradle" "settings.gradle.kts"]
     :operation_capabilities {:definitions "exact"
                              :references "exact"}}])
 

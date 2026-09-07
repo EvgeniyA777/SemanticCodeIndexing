@@ -20,7 +20,9 @@
   1. observes project provider status through each adapter's own probe;
   2. plans admitted providers with `provider-selection/project-plan`, which uses
      the same admission and exclusion rules as the per-file plan;
-  3. runs each admitted provider exactly once, isolating failures;
+  3. runs each admitted provider exactly once, isolating failures, and skips a
+     run whose negative result is still fresh (Stage 6c,
+     `semidx.runtime.provider-negative-cache`);
   4. reports coverage in one document-state vocabulary for every language;
   5. hands the resulting facts to per-file execution through the injected
      `run-provider` role, so a project provider's evidence reaches arbitration
@@ -30,6 +32,7 @@
   authority, or branch on a language. Nothing here runs unless a caller asks for
   it, and a provider is planned only when its status was actually observed."
   (:require [semidx.runtime.provider-execution :as provider-execution]
+            [semidx.runtime.provider-negative-cache :as negative-cache]
             [semidx.runtime.provider-selection :as provider-selection]
             [semidx.runtime.providers :as providers])
   (:import [java.time Instant]))
@@ -65,10 +68,16 @@
                 :run-fn (adapter-fn "scip-java" 'shadow-facts-for-project)}})
 
 (def result-states
-  "The `:result` values a project provider may report. `unavailable` means the
+  "The `:result` values a project run may carry. `unavailable` means the
   toolchain is absent and the caller degrades; `failed` means it ran and
-  errored. Neither is an exception."
-  #{"ready" "unavailable" "failed"})
+  errored; `skipped` means it was not attempted, because a still-fresh negative
+  result for this workspace made the attempt pointless (Stage 6c). None of the
+  three is an exception.
+
+  `skipped` is produced by this boundary rather than by a provider — a provider
+  reporting it would be claiming a decision it does not make — but it is listed
+  here because it is one of the values a reader of a result will meet."
+  #{"ready" "unavailable" "failed" "skipped"})
 
 (defn- now-iso [] (str (Instant/now)))
 
@@ -156,33 +165,65 @@
   A provider that throws, or returns something outside the result contract, must
   not take the run down and must not disappear either. Substitution happens on
   `roles`, never on this wrapper, so an injected role is isolated exactly like a
-  registered one."
-  [roles provider-id opts]
+  registered one.
+
+  Stage 6c wraps the run in the negative cache. This is the right place for it
+  and `project-statuses` is not: a status probe answers whether the provider
+  could run, while a remembered negative answers whether running it again on
+  this workspace can produce anything. A hit returns a `skipped` result rather
+  than nothing, so the provider still appears in the execution and in
+  `provider_summary`. `cache-ctx` nil disables the whole mechanism."
+  [roles provider-id opts cache-ctx]
   (let [run-fn (get-in roles [provider-id :run-fn])]
     (if-not run-fn
       (failure-result provider-id :no_project_role_registered
                       (str provider-id " has no registered project run role"))
-      (try
-        (let [result (run-fn opts)]
-          (if (contains? result-states (:result result))
-            result
-            (failure-result provider-id :project_provider_contract_violation
-                            (str provider-id " returned :result "
-                                 (pr-str (:result result))
-                                 ", which is not one of " (pr-str (sort result-states))))))
-        (catch Throwable t
-          (failure-result provider-id :project_provider_failed
-                          (str provider-id " threw during its project run: "
-                               (or (.getMessage t) (str (class t))))))))))
+      (let [fingerprint (when cache-ctx
+                          (negative-cache/fingerprint
+                           provider-id
+                           {:root-path (:root_path opts)
+                            :provider-opts opts
+                            :status (get-in cache-ctx [:statuses provider-id])}))
+            key (when cache-ctx (negative-cache/cache-key provider-id (:root_path opts)))
+            hit (when cache-ctx (negative-cache/lookup cache-ctx key fingerprint))]
+        (if hit
+          (negative-cache/skipped-result hit)
+          (let [result (try
+                         (let [result (run-fn opts)]
+                           (if (contains? result-states (:result result))
+                             result
+                             (failure-result provider-id :project_provider_contract_violation
+                                             (str provider-id " returned :result "
+                                                  (pr-str (:result result))
+                                                  ", which is not one of " (pr-str (sort result-states))))))
+                         (catch Throwable t
+                           (failure-result provider-id :project_provider_failed
+                                           (str provider-id " threw during its project run: "
+                                                (or (.getMessage t) (str (class t)))))))]
+            (when (and cache-ctx
+                       (negative-cache/cacheable-negative-result? result fingerprint))
+              (negative-cache/remember!
+               cache-ctx key
+               (negative-cache/entry {:provider-id provider-id
+                                      :root-path (:root_path opts)
+                                      :fingerprint fingerprint
+                                      :result result
+                                      :now-ms ((:now-fn cache-ctx))
+                                      :ttl-ms (:ttl-ms cache-ctx)})))
+            result))))))
 
 (defn- provider-opts
   "Options forwarded to a provider's run function: the project root, the stale
   gate expectations, and the toolchain-resolution keys each adapter reads.
-  Orchestration keys stay here."
+  Orchestration keys stay here, the Stage 6c cache controls among them: they
+  configure this boundary, and an adapter that received them would have to know
+  about a cache it never consults."
   [opts]
   (dissoc opts
           :run-provider :project_roles :paths :languages :parser_opts
-          :mode :denied_providers :execution_policy :project_statuses))
+          :mode :denied_providers :execution_policy :project_statuses
+          :provider_negative_cache :provider_negative_cache_ttl_ms
+          :provider_negative_cache_now_fn))
 
 (defn execute-project-plan
   "Run every provider the project plan admits, once each, in plan order.
@@ -190,14 +231,21 @@
   Returns the per-provider results plus their diagnostics. Order is the plan's
   deterministic provider order, and each provider is independent: one
   unavailable or failing toolchain leaves the others untouched. `:project_roles`
-  substitutes the role registry."
+  substitutes the role registry.
+
+  The plan's observed statuses travel into the Stage 6c cache context because
+  they carry the resolved toolchain identity, which is part of what makes a
+  remembered negative result still true."
   [plan {:keys [project_roles] :as opts}]
   (let [roles (or project_roles project-roles)
         provider-ids (provider-selection/planned-provider-ids plan)
         forwarded (provider-opts opts)
+        cache-ctx (some-> (negative-cache/context opts)
+                          (assoc :statuses (:statuses plan)))
         results (into (sorted-map)
                       (map (fn [provider-id]
-                             [provider-id (run-one-project-provider roles provider-id forwarded)]))
+                             [provider-id (run-one-project-provider roles provider-id
+                                                                    forwarded cache-ctx)]))
                       provider-ids)]
     {:root_path (:root_path plan)
      :mode (:mode plan)
@@ -234,9 +282,9 @@
   `:batch_coverage`.
 
   Only a `ready` run contributes coverage, and only for documents that passed
-  the freshness gate. An unavailable, failed, stale, or path-invalid document
-  therefore produces no exact contribution at all: the per-file plan never sees
-  the provider and degrades to the file-scoped tiers on its own."
+  the freshness gate. An unavailable, failed, skipped, stale, or path-invalid
+  document therefore produces no exact contribution at all: the per-file plan
+  never sees the provider and degrades to the file-scoped tiers on its own."
   [execution]
   (into (sorted-map)
         (keep (fn [[provider-id result]]
@@ -328,6 +376,9 @@
   - `:project_statuses` — pre-observed statuses, mostly for tests;
   - `:project_roles` — role registry override, the substitution seam;
   - `:run-provider` — file-scoped execution role, forwarded to per-file runs;
+  - `:provider_negative_cache` — Stage 6c cache atom, or `false` to run every
+    admitted provider unconditionally; `:provider_negative_cache_ttl_ms` and
+    `:provider_negative_cache_now_fn` override the TTL and the clock;
   - toolchain and stale-gate keys are forwarded to each adapter unchanged."
   [{:keys [root_path paths languages parser_opts mode denied_providers
            execution_policy project_statuses project_roles run-provider]
