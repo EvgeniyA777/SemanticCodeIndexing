@@ -10,8 +10,10 @@
             [semidx.core :as sci]
             [semidx.mcp.core :as mcp]
             [semidx.runtime.index :as idx]
+            [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.provider-execution :as provider-execution]
-            [semidx.runtime.usage-metrics :as usage]))
+            [semidx.runtime.usage-metrics :as usage]
+            [semidx.test-support.scip-toolchain :as toolchain]))
 
 (def ^:private java-corpus "fixtures/provider-authority/corpus/java")
 
@@ -124,3 +126,26 @@
   (testing "and a default build records exactly what it recorded before"
     (let [event (mcp-create-index-event nil)]
       (is (not (contains? (:payload event) :provider_summary))))))
+
+(deftest the-summary-carries-the-tier-comparison-test
+  (if (= "ready" (:state (get (batch/project-statuses ["java"] {}) "scip-java")))
+    (let [summary (:provider_summary (sci/create-index {:root_path java-corpus
+                                                        :parser_opts {:provider_pipeline "shadow"}}))]
+      (testing "the project tier runs during a real build, which is what makes a
+                comparison possible at all: file-scoped planning alone can only
+                ever reach tree-sitter and regex"
+        (is (= "ready" (get-in summary [:providers "scip-java" :result])))
+        (is (= 2 (get-in summary [:providers "scip-java" :fresh])))
+        (is (zero? (get-in summary [:providers "scip-java" :uncovered]))))
+
+      (testing "and the observation reports how the two tiers relate, which the
+                counts alone never said"
+        (is (pos? (get-in summary [:comparison :agreed])))
+        (is (pos? (get-in summary [:comparison :authority_upgrades]))
+            "a symbol both tiers found is raised from heuristic to exact")
+        (is (pos? (get-in summary [:comparison :multi_provider_symbols]))
+            "and it collapses to one canonical fact carrying both providers"))
+
+      (testing "latency is measured around the run rather than beside it"
+        (is (pos? (:total_elapsed_ms summary)))))
+    (toolchain/unresolved! "scip-java toolchain" "provider pipeline comparison test")))

@@ -16,10 +16,16 @@
   {:main-opts ["-m" "semidx.runtime.cli"]}
   :ccc
   {:main-opts ["-m" "semidx.runtime.compression-cli"]}
+  ;; `target/classes` carries the generated SCIP protobuf classes. Without it the
+  ;; project-scoped providers report `scip_runtime_classes_unavailable` and the
+  ;; provider pipeline can only ever observe the file-scoped tiers. The path is
+  ;; a build output and may be empty, which is harmless: the seam degrades.
   :mcp
-  {:main-opts ["-m" "semidx.mcp.server"]}
+  {:extra-paths ["target/classes"]
+   :main-opts ["-m" "semidx.mcp.server"]}
   :mcp-http
-  {:main-opts ["-m" "semidx.mcp.http-server"]}
+  {:extra-paths ["target/classes"]
+   :main-opts ["-m" "semidx.mcp.http-server"]}
   :runtime-http
   {:main-opts ["-m" "semidx.runtime.http"]}
   :launcher

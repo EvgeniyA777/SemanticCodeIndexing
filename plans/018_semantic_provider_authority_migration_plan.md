@@ -1055,6 +1055,66 @@ The third point is a limit on the stage rather than a defect in it — 6a wired
 the seam it said it would — but it means the exact-versus-legacy evidence Stage 6
 needs cannot come from this wiring as it stands.
 
+#### Stage 6b. Comparative Observation (complete, 2026-09-06)
+
+Goal: make the shadow observation say how the exact tier and the legacy tier
+*relate*, not just how much each produced.
+
+Why separately from Stage 6: this answers the first of the two questions Stage 6
+bundles — *does the switch change facts, and in which direction* — and it
+answers it locally, on real repositories, without `plans/020`. The second
+question, whether the switch helps an agent finish a task, still needs a
+comparative arm or accumulated telemetry and stays with Stage 6.
+
+Delivered:
+
+- The build's shadow run goes through
+  `provider-batch/shadow-facts-for-project` instead of per-file
+  `shadow-facts-for-file`, so the project providers run once and their coverage
+  reaches per-file planning. This is the seam Stage 4.5 built and 6a did not
+  use.
+- `provider_summary` gains `:providers` — per provider `result` plus fresh /
+  stale / invalid / uncovered document counts — and `:comparison`: `agreed`,
+  `exact_only`, `legacy_only`, `authority_upgrades`, `multi_provider_symbols`.
+  Counts only. `scip-shadow-compare/project-report` stays the single owner of
+  what the comparison means; the symbol lists it also returns are facts and do
+  not belong on an event.
+- The SCIP adapters are resolved on first use rather than required at the top of
+  `provider-batch`, and `target/classes` is on the `:mcp` and `:mcp-http`
+  classpaths. Before this the deployed server could not load the project seam at
+  all: the generated protobuf classes are a build output that only the test
+  aliases carried, so `requiring-resolve` threw `ClassNotFoundException
+  scip.Scip$Diagnostic`. A deployment that has not built them now reports
+  `scip_runtime_classes_unavailable` — its own reason code, because an unbuilt
+  classpath and a broken probe are different operator problems and the class
+  loader's message names neither.
+
+Measured on the protected Java corpus, where the exact tier is `ready`: 5 agreed
+symbols, 5 authority upgrades from heuristic to exact, 1 exact-only, 0
+legacy-only, and 5 symbols collapsing to one canonical fact carrying both
+providers. That is the Stage 6 admission evidence in its intended shape, now
+produced by an ordinary build rather than by a harness.
+
+Measured on this repository, which is not a TypeScript or Java project: both
+providers `failed` with `scip_index_failed`, 39 and 7 documents uncovered, and
+the comparison reads `legacy_only 1404`. Correct and readable — but the failed
+attempts cost about 5.3 s of the 6.1 s that shadow mode adds to a 14 s build
+(20.1 s against 14.0 s, measured through a real MCP server). **A provider that
+cannot index a workspace is retried on every build.** Not fixed here; recorded
+as the next cheap improvement, since a per-workspace negative result would
+remove nearly all of the cost.
+
+Exit criteria, all met:
+
+- A default build is still unchanged and carries no `provider_summary`.
+- A shadow build produces the same units and unit identities as a default one.
+- A provider whose toolchain is absent, whose classes were never built, or whose
+  index run fails degrades with a named reason and contributes nothing.
+- The whole observation is contained: a throw marks every eligible path failed
+  and never reaches the build.
+- Verified against a live MCP server and the telemetry database, not only in
+  tests.
+
 ### Stage 6. Default Authority Switch And Truthful Degradation
 
 Goal: make the reviewed provider plan authoritative for Java and TypeScript.

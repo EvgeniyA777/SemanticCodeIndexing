@@ -29,8 +29,7 @@
             [semidx.runtime.fact-arbitration :as fact-arbitration]
             [semidx.runtime.provider-batch :as provider-batch]
             [semidx.runtime.provider-execution :as provider-execution]
-            [semidx.runtime.providers :as providers]
-            [semidx.runtime.providers.scip-typescript :as scip-typescript]))
+            [semidx.runtime.providers :as providers]))
 
 (defn measure
   "Run `thunk` and return `{:value <result> :elapsed_ms <double>}`."
@@ -156,7 +155,7 @@
   report carries the reason and skips the comparison."
   [{:keys [root_path] :as opts}]
   (let [scip-run (measure
-                  #(scip-typescript/shadow-facts-for-project
+                  #((requiring-resolve 'semidx.runtime.providers.scip-typescript/shadow-facts-for-project)
                     (merge (select-keys opts [:scip_typescript_cli_path
                                               :scip_toolchain_dir
                                               :expected_document_digests])

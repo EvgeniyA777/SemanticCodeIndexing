@@ -245,3 +245,32 @@
       (is (empty? (filter #(= "failed" (:result %))
                           (vals (get-in result [:project_execution :results]))))))
     (toolchain/unresolved! "scip-typescript CLI" "provider-batch end-to-end test")))
+
+(deftest an-unbuilt-protobuf-runtime-is-named-not-guessed-test
+  (testing "the adapters are resolved on first use, so a deployment that never
+            built the generated SCIP classes gets an unavailable provider rather
+            than a load error — and the reason says which of the two problems it
+            is, because the class loader's own message names neither"
+    (let [statuses (batch/project-statuses
+                    ["typescript"] {}
+                    {"scip-typescript"
+                     {:status-fn (fn [_] (throw (ClassNotFoundException. "scip.Scip$Diagnostic")))}})
+          status (get statuses "scip-typescript")]
+      (is (= "unavailable" (:state status)))
+      (is (= ["scip_runtime_classes_unavailable"] (:reason_codes status)))))
+
+  (testing "a cause buried under a require's own exception counts too"
+    (let [statuses (batch/project-statuses
+                    ["typescript"] {}
+                    {"scip-typescript"
+                     {:status-fn (fn [_] (throw (ex-info "Syntax error macroexpanding" {}
+                                                         (NoClassDefFoundError. "scip.Scip"))))}})]
+      (is (= ["scip_runtime_classes_unavailable"]
+             (:reason_codes (get statuses "scip-typescript"))))))
+
+  (testing "and an ordinary broken probe keeps its own reason"
+    (let [statuses (batch/project-statuses
+                    ["typescript"] {}
+                    {"scip-typescript" {:status-fn (fn [_] (throw (ex-info "probe bug" {})))}})]
+      (is (= ["provider_status_probe_failed"]
+             (:reason_codes (get statuses "scip-typescript")))))))

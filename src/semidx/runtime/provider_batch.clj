@@ -7,11 +7,13 @@
   `semidx.runtime.provider-execution`, which runs one provider against one file,
   so it gets its own boundary rather than a mode flag on the per-file one.
 
-  This namespace is also the only place that requires both SCIP adapters. They
-  load generated protobuf classes through `semidx.runtime.scip`, and keeping
-  that dependency here is what lets `semidx.runtime.providers` and
+  This namespace is also the only place that reaches for both SCIP adapters.
+  They read indexer output through generated protobuf classes, and keeping that
+  dependency here is what lets `semidx.runtime.providers` and
   `semidx.runtime.provider-selection` — the per-file planning path — stay free
-  of it.
+  of it. The adapters are resolved on first use rather than required at the top,
+  so a deployment whose protobuf classes are not built reports an unavailable
+  provider instead of failing to load the seam.
 
   What it does:
 
@@ -29,10 +31,27 @@
   it, and a provider is planned only when its status was actually observed."
   (:require [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.provider-selection :as provider-selection]
-            [semidx.runtime.providers :as providers]
-            [semidx.runtime.providers.scip-java :as scip-java]
-            [semidx.runtime.providers.scip-typescript :as scip-typescript])
+            [semidx.runtime.providers :as providers])
   (:import [java.time Instant]))
+
+(def ^:private project-adapter-namespaces
+  {"scip-typescript" 'semidx.runtime.providers.scip-typescript
+   "scip-java" 'semidx.runtime.providers.scip-java})
+
+(defn- adapter-fn
+  "Resolve one adapter function, loading its namespace on first use.
+
+  Deferred on purpose: the adapters read protobuf output through generated
+  classes that live on a build output path, so a deployment that has not built
+  them can load this namespace but not those. Requiring them at the top would
+  turn that into a load error for every caller of the project seam; resolving
+  here lets it surface as an unavailable provider with a named reason, which is
+  what an absent toolchain is supposed to look like."
+  [provider-id fn-name]
+  (fn [opts]
+    ((requiring-resolve (symbol (str (get project-adapter-namespaces provider-id))
+                                (str fn-name)))
+     opts)))
 
 (def project-roles
   "Executable roles for the project-scoped providers, keyed by provider id.
@@ -40,10 +59,10 @@
   The catalog owns the descriptors; this map owns the two functions a project
   provider must supply: a status probe that never runs the indexer, and a run
   function returning the project result contract below."
-  {"scip-typescript" {:status-fn scip-typescript/provider-status
-                      :run-fn scip-typescript/shadow-facts-for-project}
-   "scip-java" {:status-fn scip-java/provider-status
-                :run-fn scip-java/shadow-facts-for-project}})
+  {"scip-typescript" {:status-fn (adapter-fn "scip-typescript" 'provider-status)
+                      :run-fn (adapter-fn "scip-typescript" 'shadow-facts-for-project)}
+   "scip-java" {:status-fn (adapter-fn "scip-java" 'provider-status)
+                :run-fn (adapter-fn "scip-java" 'shadow-facts-for-project)}})
 
 (def result-states
   "The `:result` values a project provider may report. `unavailable` means the
@@ -77,6 +96,20 @@
 ;; Status
 ;; ---------------------------------------------------------------------------
 
+(defn- missing-runtime-classes?
+  "True when a probe failed because the generated protobuf classes are absent.
+
+  Worth its own reason code: an unbuilt classpath and a broken probe are
+  different operator problems, and the message a class loader produces
+  (`scip.Scip$Diagnostic`) names neither."
+  [^Throwable throwable]
+  (loop [t throwable]
+    (cond
+      (nil? t) false
+      (or (instance? ClassNotFoundException t)
+          (instance? NoClassDefFoundError t)) true
+      :else (recur (.getCause t)))))
+
 (defn project-statuses
   "Observe every project provider for `languages`, keyed by provider id.
 
@@ -107,7 +140,9 @@
                          {:provider_id provider-id
                           :observed_at (now-iso)
                           :state "unavailable"
-                          :reason_codes ["provider_status_probe_failed"]
+                          :reason_codes [(if (missing-runtime-classes? t)
+                                           "scip_runtime_classes_unavailable"
+                                           "provider_status_probe_failed")]
                           :message (or (.getMessage t) (str (class t)))})))]))
               (providers/descriptors-for-project languages)))))
 

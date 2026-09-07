@@ -67,55 +67,103 @@
         mode (cond-> mode (string? mode) keyword)]
     (if (contains? provider-pipeline-modes mode) mode :off)))
 
-(defn- provider-shadow-for-file
-  "Run the provider pipeline for one file and reduce it to a summary.
+(defn- provider-shadow-observation
+  "Run the provider pipeline over one build's eligible paths, project tier first.
 
-  Failure is contained here on purpose: a shadow observation must never be able
-  to fail a real index build, so anything thrown becomes a recorded error rather
-  than an exception."
-  [root-path path parser-opts]
-  (let [started (System/nanoTime)]
+  Project-scoped providers index a repository once and then cover many of its
+  documents, so they have to run here rather than per file. Without their
+  coverage the per-file plan reaches only the locally probed tiers — tree-sitter
+  and regex — and the observation has nothing to compare itself against, which
+  was the state Stage 6a shipped in.
+
+  Failure is contained on purpose: a shadow observation must never fail a real
+  index build. A contained failure marks every eligible path failed rather than
+  quietly shrinking the count, so a broken seam cannot read as a small clean
+  run."
+  [root-path paths parser-opts]
+  (let [started (System/nanoTime)
+        elapsed-ms #(/ (double (- (System/nanoTime) started)) 1e6)]
     (try
-      (let [result ((requiring-resolve 'semidx.runtime.provider-execution/shadow-facts-for-file)
-                    {:root_path root-path :path path :parser_opts parser-opts})
-            elapsed (/ (double (- (System/nanoTime) started)) 1e6)]
-        {:path path
-         :elapsed_ms elapsed
-         :fact_count (count (:facts result))
-         :authorities (frequencies (map :authority (:facts result)))
-         :gap_count (count (get-in result [:execution :gaps]))
-         :diagnostic_codes (mapv :code (:diagnostics result))
-         :error_count (count (:errors result))})
+      (let [result ((requiring-resolve 'semidx.runtime.provider-batch/shadow-facts-for-project)
+                    {:root_path root-path
+                     :paths paths
+                     :parser_opts parser-opts})]
+        ;; measured after the run, not beside it: a map literal evaluates its
+        ;; values in order, so reading the clock in the same map reports zero
+        {:elapsed_ms (elapsed-ms)
+         :result result})
       (catch Throwable t
-        {:path path
-         :elapsed_ms (/ (double (- (System/nanoTime) started)) 1e6)
-         :failed true
+        {:elapsed_ms (elapsed-ms)
+         :failed_paths (vec paths)
          :error (or (.getMessage t) (str (class t)))}))))
 
-(defn provider-shadow-summary
-  "Aggregate provider-pipeline observations over the files of one build.
+(defn- provider-document-states
+  "Per-provider document coverage, as counts rather than path lists.
 
-  Additive and bounded: counts, authority distribution, diagnostic codes, and
-  latency — never the facts themselves, which would duplicate the snapshot."
-  [observations]
-  (when (seq observations)
-    (let [failed (filter :failed observations)]
+  A comparison is unreadable without it: a short `exact_only` list means one
+  thing when the exact tier covered every document and another when it covered
+  two."
+  [batch-result]
+  (into (sorted-map)
+        (map (fn [[provider-id state]]
+               [provider-id (-> state
+                                (update :fresh count)
+                                (update :stale count)
+                                (update :invalid count)
+                                (update :uncovered count))]))
+        (:documents batch-result)))
+
+(defn- provider-comparison-counts
+  "The exact-versus-legacy comparison reduced to counts.
+
+  `scip-shadow-compare/project-report` owns what the comparison means; only its
+  sizes travel on an event, because the symbol lists it also returns are the
+  facts themselves and belong in a snapshot rather than in telemetry."
+  [batch-result]
+  (let [report ((requiring-resolve 'semidx.runtime.providers.scip-shadow-compare/project-report)
+                batch-result)
+        comparison (:comparison report)]
+    {:agreed (count (:agreed comparison))
+     :exact_only (count (:exact_only comparison))
+     :legacy_only (count (:legacy_only comparison))
+     :authority_upgrades (count (:authority_upgrade comparison))
+     :multi_provider_symbols (count (get-in report [:co_arbitration :multi_provider_symbols]))}))
+
+(defn provider-shadow-summary
+  "Reduce one build's provider observation to a bounded summary.
+
+  Additive and bounded: counts, authority distribution, document coverage,
+  diagnostic codes, the tier comparison, and latency — never the facts
+  themselves, which would duplicate the snapshot."
+  [{:keys [elapsed_ms result failed_paths error]}]
+  (let [total-ms (Math/round (double (or elapsed_ms 0)))]
+    (if failed_paths
       {:mode "shadow"
-       :files_observed (count observations)
-       :files_failed (count failed)
-       :fact_count (reduce + 0 (keep :fact_count observations))
-       :gap_count (reduce + 0 (keep :gap_count observations))
-       :error_count (reduce + 0 (keep :error_count observations))
-       :authorities (->> observations
-                         (mapcat (comp seq :authorities))
-                         (reduce (fn [acc [authority n]] (update acc authority (fnil + 0) n)) {})
-                         (into (sorted-map)))
-       :diagnostic_codes (->> observations
-                              (mapcat :diagnostic_codes)
-                              (map str)
-                              frequencies
-                              (into (sorted-map)))
-       :total_elapsed_ms (Math/round (reduce + 0.0 (keep :elapsed_ms observations)))})))
+       :files_observed (count failed_paths)
+       :files_failed (count failed_paths)
+       :fact_count 0
+       :gap_count 0
+       :error_count 0
+       :authorities {}
+       :diagnostic_codes {}
+       :error error
+       :total_elapsed_ms total-ms}
+      (let [files (:files result)
+            facts (mapcat :facts files)]
+        {:mode "shadow"
+         :files_observed (count files)
+         :files_failed 0
+         :fact_count (count facts)
+         :gap_count (reduce + 0 (map #(count (get-in % [:execution :gaps])) files))
+         :error_count (reduce + 0 (map #(count (:errors %)) files))
+         :authorities (into (sorted-map) (frequencies (map :authority facts)))
+         :diagnostic_codes (->> (:diagnostics result)
+                                (map (comp str :code))
+                                frequencies
+                                (into (sorted-map)))
+         :providers (provider-document-states result)
+         :comparison (provider-comparison-counts result)
+         :total_elapsed_ms total-ms}))))
 
 (defn- provider-eligible-paths [paths]
   (let [descriptors-for (requiring-resolve 'semidx.runtime.providers/descriptors-for)]
@@ -712,9 +760,10 @@
                          (activation/active-source-paths discovery activation-state))
             files-data (parse-files root_path discovered parser_opts)
             provider-summary (when (= :shadow (provider-pipeline-mode parser_opts))
-                               (provider-shadow-summary
-                                (mapv #(provider-shadow-for-file root_path % parser_opts)
-                                      (provider-eligible-paths discovered))))
+                               (let [eligible (provider-eligible-paths discovered)]
+                                 (when (seq eligible)
+                                   (provider-shadow-summary
+                                    (provider-shadow-observation root_path eligible parser_opts)))))
             index (build-index-state root_path
                                      (cond-> files-data
                                        provider-summary (assoc :provider_summary provider-summary))
