@@ -1025,6 +1025,36 @@ Exit criteria, all met:
 Not in scope, and unchanged: authority, confidence, `parser_mode`, and the
 default extraction path. Stage 6 still owns all four.
 
+##### Live verification (2026-09-06), and one defect it found
+
+Checked against a real MCP server and the live telemetry database rather than
+against tests, because the exit criteria above are all about a path in use.
+
+- **Defect, fixed here: the summary never reached a real session.** Stage 6a
+  attached `provider_summary` to the usage event emitted by
+  `semidx.core/create-index`. The MCP surface passes `:suppress_usage_metrics
+  true` and emits its own event from `mcp/tool-create-index`, whose payload was
+  a literal map — so on the only surface that produces real sessions the key was
+  silently absent. The Stage 6a tests missed it because they exercised the
+  library surface. Now covered by a test that drives `handle-tools-call` and
+  fails without the fix.
+- **Cost is small, and smaller than previously stated.** Full rebuild of this
+  repository, 243 files: 13.9 s default against 15.1 s in shadow, of which the
+  pipeline itself accounts for 1.85 s — about 9%. An earlier note warning of a
+  noticeable slowdown on large repositories was not measured and overstated it.
+- **What shadow actually observes today is one tier, not two.**
+  `provider-shadow-for-file` calls `shadow-facts-for-file` without
+  `:batch_coverage` or `:observed_statuses`, so only file-scoped descriptors are
+  planned, and `locally-probed-engines` is `#{:tree-sitter :regex}`. Project
+  SCIP and the LSP overlay therefore never run in a real build. On a host with
+  no tree-sitter grammar that leaves regex alone: the live run recorded 1404
+  facts over 46 files, **all** `heuristic`, with 99
+  `equal_authority_value_conflict` diagnostics.
+
+The third point is a limit on the stage rather than a defect in it — 6a wired
+the seam it said it would — but it means the exact-versus-legacy evidence Stage 6
+needs cannot come from this wiring as it stands.
+
 ### Stage 6. Default Authority Switch And Truthful Degradation
 
 Goal: make the reviewed provider plan authoritative for Java and TypeScript.

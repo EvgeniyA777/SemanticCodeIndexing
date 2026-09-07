@@ -553,9 +553,16 @@
        :file_count (count (get-in entry [:index :files]))
        :unit_count (count (get-in entry [:index :units]))
        :cache_hit cache-hit?
-       :payload {:force_rebuild force-rebuild
-                 :paths_count (count paths)
-                 :snapshot_id (get-in entry [:index :snapshot_id])}})))
+       :payload (cond-> {:force_rebuild force-rebuild
+                         :paths_count (count paths)
+                         :snapshot_id (get-in entry [:index :snapshot_id])}
+                   ;; plans/018 Stage 6a: the library surface attaches this to
+                   ;; its own event, but the MCP surface suppresses that one and
+                   ;; emits this. Without the key here the summary never reaches
+                   ;; the telemetry of a real session, which is the only place
+                   ;; sessions actually happen.
+                  (get-in entry [:index :provider_summary])
+                  (assoc :provider_summary (get-in entry [:index :provider_summary])))})))
 
 (defn project-context-for-entry [entry]
   {:detected_languages (get-in entry [:index :detected_languages])

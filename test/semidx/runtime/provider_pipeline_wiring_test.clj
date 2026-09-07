@@ -5,7 +5,8 @@
   shadow entry points, so nothing could compare it against the path actually in
   use. It stays default-off: the value of the seam is that it can be switched
   on, not that it is."
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest testing is]]
             [semidx.core :as sci]
             [semidx.mcp.core :as mcp]
             [semidx.runtime.index :as idx]
@@ -92,3 +93,34 @@
     (with-redefs [mcp/deployment-parser-opts (constantly {})]
       (is (= :off (idx/provider-pipeline-mode (mcp/normalize-parser-opts nil))))
       (is (= mcp/default-parser-opts (mcp/normalize-parser-opts nil))))))
+
+(defn- mcp-create-index-event
+  "Drive the real MCP tool handler and return the usage event it emitted.
+
+  The deployment layer is neutralised so the assertion depends on the caller's
+  own parser opts rather than on whatever the developer's environment sets."
+  [parser-opts]
+  (with-redefs [mcp/deployment-parser-opts (constantly {})]
+    (let [sink (usage/in-memory-usage-metrics)
+          state (mcp/new-session-state {:usage-metrics sink
+                                        :session-id "server-session-1"})]
+      (mcp/handle-tools-call
+       state
+       {:name "create_index"
+        :arguments (cond-> {:root_path (.getAbsolutePath (io/file java-corpus))}
+                     parser-opts (assoc :parser_opts parser-opts))})
+      (->> (usage/emitted-events sink)
+           (filter #(= "create_index" (:operation %)))
+           first))))
+
+(deftest the-mcp-surface-records-the-summary-too-test
+  (testing "the MCP transport suppresses the library's own event and emits this
+            one instead, so a summary that rides only the library event never
+            reaches a real session — which is the only place sessions happen"
+    (let [event (mcp-create-index-event {:provider_pipeline "shadow"})]
+      (is (some? (get-in event [:payload :provider_summary])))
+      (is (= "shadow" (get-in event [:payload :provider_summary :mode])))))
+
+  (testing "and a default build records exactly what it recorded before"
+    (let [event (mcp-create-index-event nil)]
+      (is (not (contains? (:payload event) :provider_summary))))))
