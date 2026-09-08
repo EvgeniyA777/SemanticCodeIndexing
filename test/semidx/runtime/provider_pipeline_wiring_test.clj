@@ -12,6 +12,7 @@
             [semidx.mcp.core :as mcp]
             [semidx.runtime.http :as runtime-http]
             [semidx.runtime.index :as idx]
+            [semidx.runtime.provider-authority :as authority]
             [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.storage :as storage]
@@ -278,3 +279,36 @@
       (let [index (sci/create-index {:root_path java-corpus
                                      :parser_opts {:provider_pipeline "off"}})]
         (is (not (contains? index :provider_summary)))))))
+
+;; --- Stage 7: the deprecation signal, and a metric bugs/005 had silently retired
+
+(deftest a-deprecated-engine-option-is-reported-not-just-noted-test
+  (testing "the provider plan owns extraction for Java and TypeScript, so naming
+            an engine no longer decides what runs. The option keeps working
+            through its retention window, and the build says it was used — a
+            deprecation nobody can query is a note, not a schedule"
+    (let [used (:provider_summary
+                (sci/create-index {:root_path java-corpus
+                                   :parser_opts {:java_engine :regex}}))
+          untouched (:provider_summary (sci/create-index {:root_path java-corpus}))]
+      (is (= ["java_engine"] (:deprecated_options used)))
+      (is (not (contains? untouched :deprecated_options))
+          "and a build that passes none says nothing about them")))
+
+  (testing "lanes outside the migration are not deprecated: their engine option
+            is still the thing that chooses"
+    (is (empty? (authority/deprecated-options-used {:clojure_engine :clj-kondo
+                                                    :elixir_engine :regex})))))
+
+(deftest the-degraded-file-count-still-counts-test
+  (testing "bugs/005 took parser_mode back, so counting fallback units here would
+            report zero for every build and retire the metric without saying so.
+            It reads the file diagnostic instead"
+    (let [summary (:provider_summary
+                   (sci/create-index {:root_path "fixtures/provider-authority/corpus/typescript"}))]
+      (is (= 3 (:files_observed summary)))
+      (is (pos? (:files_degraded summary))
+          "this corpus has a file no exact tier covered")
+      (is (= (:files_degraded summary)
+             (get (:diagnostic_codes summary) "provider_authority_degraded"))
+          "the count and the diagnostic that produced it must agree"))))

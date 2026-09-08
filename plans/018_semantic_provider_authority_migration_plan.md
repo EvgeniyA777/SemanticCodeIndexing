@@ -1593,6 +1593,58 @@ Exit criteria:
 
 Commit boundary: cleanup only; do not combine with a new language migration.
 
+#### Stage 7 as delivered, part one (2026-09-08)
+
+Two of the four deliverables are decisions and land now; the third is scheduled
+and deliberately not taken; the fourth is documentation, done.
+
+**Deprecation schedule for engine-specific parser options.** Checked against
+current deprecation practice rather than invented: a policy names its scope,
+gives a machine-readable signal before it removes anything, keeps the deprecated
+thing working through an announced window, and states a date rather than letting
+one be discovered.
+
+- **Scope**: `:java_engine` and `:typescript_engine`. Not `:clojure_engine` and
+  not `:elixir_engine` — those lanes are outside the migration and their engine
+  option is still the thing that chooses. Not `:tree_sitter_enabled` either: it
+  still governs whether the structural tier is available at all, which the
+  provider plan reads rather than replaces.
+- **Why they are deprecated**: the provider plan admits tiers by observed status
+  and authority, so naming an engine can now only agree with the plan or be
+  ignored. An option that cannot change the outcome is a misleading control.
+- **Signal**: a build that passes one gets it back under
+  `provider_summary.deprecated_options`. Deliberately not a log line — the
+  summary is where every other provider observation already lands, and a
+  deprecation nobody can query is a note rather than a schedule.
+- **Window**: one week from 2026-09-08. Removal is **proposed** after
+  2026-09-15 and taken as its own decision (owner, 2026-09-08).
+- **Migration path**: `:provider_pipeline "off"` for the whole previous
+  behaviour, which is also the documented rollback.
+
+**Expansion decision: no further language migrates now.** The bar the plan set is
+evidence, not symmetry, and the evidence does not exist: `plans/020` is still
+paused, so there is no comparative task-value measurement for any lane, and the
+one thing Stage 6 did measure — the Java corpus gaining an exact tier and a unit
+the lexical tier missed — says the mechanism works, not that another language
+would benefit. What would meet the bar for a candidate lane: a semantic provider
+that can be run reproducibly for it, a corpus where the exact tier disagrees with
+the lexical one often enough to matter, and a measured retrieval difference on
+that corpus. Python and Elixir are the obvious candidates by size; neither has
+the first of those three today.
+
+**Retention and rollback.** `:off` restores the pre-Stage-6 path exactly and is
+tested as such. Shadow-only legacy branches stay until the window closes; their
+removal is the second half of this stage.
+
+**A stale metric found while writing the schedule.** `files_degraded` in the
+authority summary still counted units with `parser_mode "fallback"`. bugs/005
+took that field back, so the count had been silently zero for every build since.
+It reads the file diagnostic now, and the test asserts the count and the
+diagnostic that produced it agree.
+
+Not done, by the owner's instruction: removal of the deprecated options and of
+the shadow-only branches, to be proposed after 2026-09-15.
+
 ## Verification Gates
 
 Every implementation stage must run the narrowest relevant tests first and then

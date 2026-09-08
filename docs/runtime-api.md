@@ -80,6 +80,23 @@ Example with parser options:
                 :tree_sitter_enabled false}})
 ```
 
+**Deprecated since 2026-09-08: `:java_engine` and `:typescript_engine`.** The
+provider plan owns default extraction for those two lanes, so naming an engine no
+longer decides what runs — the plan admits tiers by observed status and
+authority, and the option can only agree with it or be ignored. Both options are
+still accepted and still honoured wherever they mean something, and a build that
+passes one has it reported back under `provider_summary.deprecated_options`, so
+the usage is queryable rather than silent.
+
+Retention window: one week from 2026-09-08. Removal is **proposed** after
+2026-09-15 and taken as a separate decision, not automatically.
+
+To keep the previous behaviour wholesale, set `:provider_pipeline "off"` instead
+of reaching for an engine name; that is the documented rollback and it restores
+the pre-Stage-6 path exactly. `:clojure_engine` and `:elixir_engine` are **not**
+deprecated: those lanes are outside the provider migration and their engine
+option is still the thing that chooses.
+
 Legacy tree-sitter extraction path (current implementation):
 
 ```clojure

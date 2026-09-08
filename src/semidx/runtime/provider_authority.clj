@@ -354,6 +354,34 @@
                          :run-provider runner})]
         (merge-facts parsed arbitrated language evidence-ctx)))))
 
+(def deprecated-engine-options
+  "Parser options that chose an extraction engine for an authority language.
+
+  Stage 7. Since the provider plan owns default extraction for Java and
+  TypeScript, asking for an engine by name no longer decides what runs: the plan
+  admits tiers by status and authority, and an engine option can only agree with
+  it or be ignored. They remain accepted and honoured where they still mean
+  something — `provider_pipeline :off` restores the old path wholesale, and the
+  same options keep their full meaning for lanes outside the migration, which is
+  why `:clojure_engine` and `:elixir_engine` are not listed here.
+
+  Deprecated on 2026-09-08 with a one-week retention window; removal is proposed
+  after 2026-09-15, not taken automatically."
+  #{:java_engine :typescript_engine})
+
+(defn deprecated-options-used
+  "Which deprecated engine options this build passed, if any.
+
+  Reported rather than warned about in a log line, so the signal is
+  machine-readable and lands in the same place every other provider observation
+  does. A deprecation nobody can query is a note, not a schedule."
+  [parser-opts]
+  (->> deprecated-engine-options
+       (filter #(contains? parser-opts %))
+       (map name)
+       sort
+       vec))
+
 (defn build-summary
   "The provider summary for an authority build (plans/018 Stage 6.4).
 
@@ -380,29 +408,40 @@
   that wants it; the whole build's latency is already on the create_index usage
   event."
   [ctx files-data]
-  (let [units (vec (:units files-data))
+  (let [deprecated (deprecated-options-used (:parser_opts ctx))
+        units (vec (:units files-data))
         authority-units (filterv #(contains? authority-languages (:language %)) units)
         files (vals (:files files-data))
         authority-files (filterv #(contains? authority-languages (:language %)) files)
+        ;; Read off the diagnostic, not off `parser_mode`. bugs/005 took that
+        ;; field back, so counting `fallback` units here would report zero for
+        ;; every build and quietly retire the metric.
+        degraded (filterv (fn [file]
+                            (some #(= "provider_authority_degraded" (str (:code %)))
+                                  (:diagnostics file)))
+                          authority-files)
         execution (:project_execution ctx)]
-    {:mode "authority"
-     :languages (vec (:languages ctx))
-     :files_observed (count authority-files)
-     :files_degraded (count (filterv #(= "fallback" (:parser_mode %)) authority-files))
-     :units_observed (count authority-units)
-     :units_supplied (count (filterv :provider_supplied authority-units))
-     :units_conflicted (count (filterv :evidence_conflict authority-units))
-     :authorities (into (sorted-map) (frequencies (keep :authority authority-units)))
-     :providers (into (sorted-map)
-                      (map (fn [[provider-id state]]
-                             [provider-id (-> state
-                                              (update :fresh count)
-                                              (update :stale count)
-                                              (update :invalid count)
-                                              (update :uncovered count))]))
-                      (provider-batch/document-states execution (mapv :path authority-files)))
-     :diagnostic_codes (->> authority-files
-                            (mapcat :diagnostics)
-                            (map (comp str :code))
-                            frequencies
-                            (into (sorted-map)))}))
+    (cond-> {:mode "authority"
+             :languages (vec (:languages ctx))
+             :files_observed (count authority-files)
+             :files_degraded (count degraded)
+             :units_observed (count authority-units)
+             :units_supplied (count (filterv :provider_supplied authority-units))
+             :units_conflicted (count (filterv :evidence_conflict authority-units))
+             :authorities (into (sorted-map) (frequencies (keep :authority authority-units)))
+             :providers (into (sorted-map)
+                              (map (fn [[provider-id state]]
+                                     [provider-id (-> state
+                                                      (update :fresh count)
+                                                      (update :stale count)
+                                                      (update :invalid count)
+                                                      (update :uncovered count))]))
+                              (provider-batch/document-states execution (mapv :path authority-files)))
+             :diagnostic_codes (->> authority-files
+                                    (mapcat :diagnostics)
+                                    (map (comp str :code))
+                                    frequencies
+                                    (into (sorted-map)))}
+      ;; Stage 7. Conditional like every other key here: a build that passes no
+      ;; deprecated option says nothing about them.
+      (seq deprecated) (assoc :deprecated_options deprecated))))
