@@ -1,7 +1,7 @@
 {
   "fixture_id": "retrieval_java_ambiguity_001",
   "category": "java_onboarding",
-  "purpose": "Two same-name overloads in one class are both kept in the top authority band, distinguished by arity in their unit ids rather than merged into one identity.",
+  "purpose": "Two same-name overloads in one class are both kept in the top authority band, distinguished by arity in their unit ids rather than merged into one identity. Since the plans/018 authority default (2026-09-08), a Java selection backed only by heuristic evidence is capped a step below the lane's static strength, so the expected confidence here is low rather than medium: the regex tier is what produced these units and the number now says so. Low confidence carries the guardrail with it: the posture is autonomy_blocked, the same posture every other lane with a low ceiling already reports.",
   "adr_refs": [
     "ADR-022",
     "ADR-046"
@@ -57,7 +57,7 @@
       "exact_target_resolved",
       "target_path_match"
     ],
-    "confidence_level": "medium",
-    "autonomy_posture": "plan_safe"
+    "confidence_level": "low",
+    "autonomy_posture": "autonomy_blocked"
   }
 }

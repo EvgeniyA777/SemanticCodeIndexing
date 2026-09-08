@@ -113,13 +113,32 @@ and the whole build's latency is already on the create_index usage event. The
 shadow summary still carries `total_elapsed_ms` and has the same flaw, but
 shadow is opt-in and was left alone rather than changed in passing.
 
-**The confidence reduction from decision 1 is not implemented.** Lowering the
-ceiling for a heuristic-only selection was the exact mechanism that disabled
-impact analysis, because `impact-seed-degradations` reads a low-confidence
-selection as one it cannot reason about. Degradation is now explicit —
-`:authority` on every unit, a file diagnostic, and `files_degraded` in the
-summary — but a heuristic-only Java selection keeps the ceiling its language
-strength already gave it. Restoring a real reduction requires teaching that gate
-the difference between "the evidence is heuristic" and "there is no structure to
-reason about", which is a change to a shared gate and is left for the owner to
-decide.
+**The confidence reduction from decision 1 is restored (owner decision,
+2026-09-08: teach the shared gate the difference).**
+
+`impact-seed-degradations` no longer treats a low confidence level as an absence
+of structure. It asks the question it was always meant to ask — is there
+structure to reason about — and answers it from structural signals: no seed, a
+seed the parser could not extract (`parser_mode "fallback"`), an ambiguous seed,
+an unresolved requested symbol, a stale index. A low level over units the parser
+did extract, where every unit rests on heuristic evidence, no longer blocks
+blast-radius analysis: the callers, relations and state-invariant packet are all
+computed and sitting there, and weaker evidence is what the confidence level is
+for.
+
+With that separated, `selected-language-strengths` lowers a wholly heuristic
+selection one step below its lane's static strength — Java `medium` → `low`,
+TypeScript `low` → `low`. The static number describes a lane with its structural
+parser available; a selection that had only the lexical tier should not claim it.
+
+Verified: on the entity fixture, the state-invariant packet stays complete while
+the ceiling drops. The ladder now reads java heuristic-only `low`, java without
+recorded evidence `medium`, java mixed `medium`, java wholly exact `high`,
+clojure untouched at `high`.
+
+**One consequence to know about**: `low` carries the guardrail with it, so a Java
+retrieval on a machine with no semantic toolchain now reports
+`autonomy_blocked`. That is the same posture every other lane with a low ceiling
+already reported — Lua has always been there — and it reverses as soon as a
+semantic tier is available. Three Java retrieval fixtures were updated to expect
+it, with the reason recorded in each.

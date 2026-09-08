@@ -1,8 +1,12 @@
 {
   "fixture_id": "retrieval_java_overload_like_call_ambiguity_001",
   "category": "java_ambiguity",
-  "purpose": "Java normalize-call paths across similarly named utilities should stay explainable and ambiguity-aware.",
-  "adr_refs": ["ADR-005", "ADR-008", "ADR-014"],
+  "purpose": "Java normalize-call paths across similarly named utilities should stay explainable and ambiguity-aware. Since the plans/018 authority default (2026-09-08), a Java selection backed only by heuristic evidence is capped a step below the lane's static strength, so the expected confidence here is low rather than medium: the regex tier is what produced these units and the number now says so. Low confidence carries the guardrail with it: the posture is autonomy_blocked, the same posture every other lane with a low ceiling already reports.",
+  "adr_refs": [
+    "ADR-005",
+    "ADR-008",
+    "ADR-014"
+  ],
   "snapshot_ref": "seed-polyglot-app@rev-006",
   "input": {
     "query": {
@@ -13,20 +17,32 @@
         "details": "Review normalize behavior across com.acme.text and com.acme.audit utilities."
       },
       "targets": {
-        "paths": ["src/com/acme/text/Normalizer.java", "src/com/acme/audit/AuditNormalizer.java"],
+        "paths": [
+          "src/com/acme/text/Normalizer.java",
+          "src/com/acme/audit/AuditNormalizer.java"
+        ],
         "diff_summary": "Touched normalize-like paths used by checkout service."
       },
       "constraints": {
         "token_budget": 1800,
         "snapshot_id": "seed-polyglot-app@rev-006",
-        "language_allowlist": ["java"],
-        "allowed_path_prefixes": ["src/com/acme/"],
+        "language_allowlist": [
+          "java"
+        ],
+        "allowed_path_prefixes": [
+          "src/com/acme/"
+        ],
         "max_raw_code_level": "enclosing_unit",
         "freshness": "current_snapshot"
       },
       "hints": {
-        "preferred_paths": ["src/com/acme/CheckoutService.java"],
-        "preferred_modules": ["com.acme.text", "com.acme.audit"],
+        "preferred_paths": [
+          "src/com/acme/CheckoutService.java"
+        ],
+        "preferred_modules": [
+          "com.acme.text",
+          "com.acme.audit"
+        ],
         "prefer_definitions_over_callers": false,
         "prefer_breadth_over_depth": true
       },
@@ -42,8 +58,11 @@
     }
   },
   "expected": {
-    "must_include_paths": ["src/com/acme/text/Normalizer.java", "src/com/acme/audit/AuditNormalizer.java"],
-    "confidence_level": "medium",
-    "autonomy_posture": "plan_safe"
+    "must_include_paths": [
+      "src/com/acme/text/Normalizer.java",
+      "src/com/acme/audit/AuditNormalizer.java"
+    ],
+    "confidence_level": "low",
+    "autonomy_posture": "autonomy_blocked"
   }
 }

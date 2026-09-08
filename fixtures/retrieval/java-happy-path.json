@@ -1,7 +1,7 @@
 {
   "fixture_id": "retrieval_java_happy_path_001",
   "category": "java_onboarding",
-  "purpose": "Java exact symbol targeting keeps the package-and-class-qualified method in the top authority band. The expected unit id carries the arity and signature key on purpose: that identity is the lane's Variant C decision, and a change to it should break this fixture loudly.",
+  "purpose": "Java exact symbol targeting keeps the package-and-class-qualified method in the top authority band. The expected unit id carries the arity and signature key on purpose: that identity is the lane's Variant C decision, and a change to it should break this fixture loudly. Since the plans/018 authority default (2026-09-08), a Java selection backed only by heuristic evidence is capped a step below the lane's static strength, so the expected confidence here is low rather than medium: the regex tier is what produced these units and the number now says so. Low confidence carries the guardrail with it: the posture is autonomy_blocked, the same posture every other lane with a low ceiling already reports.",
   "adr_refs": [
     "ADR-022",
     "ADR-046"
@@ -59,7 +59,7 @@
     "must_include_warning_codes": [
       "capability_ceiling"
     ],
-    "confidence_level": "medium",
-    "autonomy_posture": "plan_safe"
+    "confidence_level": "low",
+    "autonomy_posture": "autonomy_blocked"
   }
 }

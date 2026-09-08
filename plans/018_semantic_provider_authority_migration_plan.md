@@ -1552,13 +1552,16 @@ Two things the flip changed that were not on the plan:
   would have reported as a change and which contradicts ADR-046's determinism
   driver. Removed. Shadow's `total_elapsed_ms` has the same flaw and was left
   alone because shadow is opt-in.
-- **The confidence reduction from owner decision 1 is not in effect.** It was the
-  precise mechanism that disabled impact analysis. Degradation is explicit on
-  `:authority`, in the file diagnostic and in `files_degraded`, but a
-  heuristic-only selection keeps the ceiling its language strength already gave
-  it. Restoring a reduction means teaching `impact-seed-degradations` the
-  difference between heuristic evidence and absent structure; recorded in
-  `bugs/005` for the owner.
+- **The confidence reduction from owner decision 1 is in effect after all.** The
+  owner chose the harder half on 2026-09-08: teach the shared gate the
+  difference. `impact-seed-degradations` now decides on structural signals — no
+  seed, a seed the parser could not extract, ambiguity, an unresolved symbol, a
+  stale index — instead of reading a low confidence level as an absence of
+  structure. A heuristic-only selection then falls a step below its lane's static
+  strength (Java `medium` → `low`) without taking impact analysis with it. The
+  visible consequence: Java with no semantic toolchain reports
+  `autonomy_blocked`, the posture every low-ceiling lane already reported, and it
+  reverses as soon as an exact tier is available.
 
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision

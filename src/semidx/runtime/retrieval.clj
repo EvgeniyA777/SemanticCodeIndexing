@@ -701,7 +701,22 @@
 (defn- evidence-codes [confidence section]
   (set (map :code (get confidence section))))
 
-(defn- impact-seed-degradations [selection]
+(defn- impact-seed-degradations
+  "Why this selection cannot seed a blast-radius answer, if it cannot.
+
+  The question is whether there is structure to reason about, not how good the
+  evidence behind it is. Those are different, and conflating them cost the
+  repository a feature: when `plans/018` began labelling heuristic units, low
+  confidence started meaning \"a regex parser produced these units\" as well as
+  \"there is nothing here to reason about\", and impact analysis stopped
+  answering for every Java workspace without a semantic toolchain — with the
+  callers, the relations and the state-invariant packet all sitting right there,
+  fully computed (bugs/005).
+
+  So low confidence degrades the seed only when something structural is also
+  wrong. Heuristic evidence over units the parser did extract is weaker evidence,
+  and the confidence level says so; it is not an absence of structure."
+  [selection]
   (let [selected (or (:focus selection) [])
         query (:query selection)
         confidence (:confidence selection)
@@ -716,13 +731,24 @@
         ambiguous? (contains? warning-codes "target_ambiguous")
         low-confidence? (= "low" level)
         capability-limited? (not= "high" capability-ceiling)
-        stale-index? (true? (:index_stale capabilities))]
+        stale-index? (true? (:index_stale capabilities))
+        ;; `parser_mode "fallback"` is the parser saying it could not extract
+        ;; structure; the unit is a generic section. That is a structural
+        ;; absence, and it is the thing this gate has always been about.
+        structureless-seed? (some #(= "fallback" (:parser_mode %)) selected)
+        ;; A selection whose units all rest on heuristic evidence is weaker, and
+        ;; the confidence level already reports that. It still has definitions,
+        ;; calls and relations to reason over.
+        heuristic-seed? (and (seq selected)
+                             (every? #(= "heuristic" (:authority %)) selected))
+        low-confidence-blocking? (and low-confidence?
+                                      (or structureless-seed? (not heuristic-seed?)))]
     (cond-> []
       (empty? selected)
       (conj (coded "impact_seed_missing"
                    "Impact analysis did not resolve a seed unit."))
 
-      low-confidence?
+      low-confidence-blocking?
       (conj (coded "impact_seed_confidence_low"
                    "Impact analysis requires a trustworthy seed; retrieval confidence is low."))
 
@@ -734,7 +760,7 @@
       (conj (coded "impact_seed_exact_target_missing"
                    "Impact analysis did not resolve the requested symbol to an exact seed."))
 
-      (and low-confidence? capability-limited?)
+      (and low-confidence-blocking? capability-limited?)
       (conj (coded "impact_seed_capability_limited"
                    "Selected language support does not justify semantic blast-radius confidence."))
 

@@ -370,6 +370,18 @@
     (when (every? #(= "exact" (:authority %)) units)
       "high")))
 
+(def ^:private confidence-level-below
+  {"high" "medium"
+   "medium" "low"
+   "low" "low"})
+
+(defn- heuristic-only?
+  "Every selected unit of this language rests on heuristic evidence — a regular
+  expression matched the source text and nothing stronger saw it."
+  [units]
+  (and (some :authority units)
+       (every? #(= "heuristic" (:authority %)) units)))
+
 (defn- selected-language-strengths [index units]
   (let [by-language (->> units
                          (group-by #(unit-language index %))
@@ -378,10 +390,31 @@
     (into {}
           (map (fn [[language grouped-units]]
                  [language
-                  (if (every? #(= "fallback" (:parser_mode %)) grouped-units)
+                  (cond
+                    ;; The parser could not extract structure at all.
+                    (every? #(= "fallback" (:parser_mode %)) grouped-units)
                     "low"
+
+                    ;; A wholly exact selection rises above the lane's static
+                    ;; claim: TypeScript is rated low because a regex is
+                    ;; guessing, not because a SCIP index is.
+                    (evidence-strength grouped-units)
                     (max-confidence-level (language-strength language)
-                                          (or (evidence-strength grouped-units) "low")))]))
+                                          (evidence-strength grouped-units))
+
+                    ;; And a wholly heuristic one falls a step below it. The
+                    ;; static strength describes a lane at its best — with its
+                    ;; structural parser available — so a selection that had only
+                    ;; the lexical tier should not claim the same number
+                    ;; (plans/018 owner decision, 2026-09-06).
+                    ;;
+                    ;; This is safe to say only because
+                    ;; `retrieval/impact-seed-degradations` no longer reads a low
+                    ;; level as an absence of structure; see bugs/005.
+                    (heuristic-only? grouped-units)
+                    (confidence-level-below (language-strength language))
+
+                    :else (language-strength language))]))
           by-language)))
 
 (defn- confidence-ceiling [coverage-level selected-language-strengths]

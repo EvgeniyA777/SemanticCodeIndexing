@@ -52,3 +52,19 @@
       (is (= "mixed" (:coverage_level summary)))
       (is (= 1 (:fallback_unit_count summary)))
       (is (= "low" (:confidence_ceiling summary))))))
+
+(deftest heuristic-only-evidence-falls-a-step-below-the-lane-test
+  ;; plans/018 owner decision, restored after bugs/005 made it safe to say.
+  (testing "the static strength describes a lane with its structural parser
+            available; a selection that had only the lexical tier should not
+            claim the same number"
+    (is (= "low" (ceiling [(unit "java" "full" "heuristic")])))
+    (is (= "low" (ceiling [(unit "typescript" "full" "heuristic")]))))
+
+  (testing "and nothing else moves"
+    (is (= "medium" (ceiling [(unit "java" "full")]))
+        "a unit with no recorded evidence keeps the lane's own number")
+    (is (= "medium" (ceiling [(unit "java" "full" "exact")
+                              (unit "java" "full" "heuristic")]))
+        "a mixed selection is the lane's number, neither lifted nor lowered")
+    (is (= "high" (ceiling [(unit "java" "full" "exact")])))))
