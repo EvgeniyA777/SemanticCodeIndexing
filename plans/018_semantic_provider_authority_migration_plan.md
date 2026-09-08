@@ -1421,12 +1421,19 @@ usage event and, new here, the tool response), HTTP (`POST /v1/index/create`).
 Every one of them is conditional, so a build that runs no pipeline answers
 exactly what it answered before.
 
-**Recorded gap — gRPC.** `CreateIndexResponse` has no field for it, and adding
-one means regenerating the committed protobuf sources with `protoc`, which is not
-installed in this environment. The gap is documented in `docs/runtime-api.md`
-next to the endpoint rather than papered over; gRPC clients read the summary from
-usage metrics or use the HTTP edge. Adding the field is a candidate for 6.5 on a
-machine with the toolchain.
+**Recorded gap — gRPC — closed 2026-09-08.** `CreateIndexResponse` had no field
+for the summary, and the gap was first recorded as blocked on a missing `protoc`.
+That was wrong, and the mistake is worth keeping: the check had been `which
+protoc` against the system PATH, while ADR-042 exists precisely so this
+repository does not depend on one — `clojure -T:build grpc-generate` fetches a
+pinned, sha256-verified `protoc` and `protoc-gen-grpc-java` into
+`.cache/semidx/protobuf`, and both were already there.
+
+The message now carries `provider_summary_json`, mirroring
+`HealthResponse.capabilities_json`. proto3 has no absent scalar, so an opted-out
+build sends an empty string and the reader turns it back into nil, which keeps
+the field additive. All four surfaces — library, MCP, HTTP, gRPC — now report the
+summary.
 
 ##### 6.5 as delivered (2026-09-07)
 

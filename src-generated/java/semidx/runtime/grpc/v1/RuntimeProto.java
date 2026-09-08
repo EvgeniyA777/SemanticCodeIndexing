@@ -110,74 +110,75 @@ public final class RuntimeProto {
       "vice\030\002 \001(\t\022\031\n\021capabilities_json\030\003 \001(\t\"n\n" +
       "\022CreateIndexRequest\022\021\n\troot_path\030\001 \001(\t\022\r" +
       "\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_json\030\003 \001(\t\022" +
-      "\034\n\024language_policy_json\030\004 \001(\t\"\233\001\n\023Create" +
+      "\034\n\024language_policy_json\030\004 \001(\t\"\272\001\n\023Create" +
       "IndexResponse\022\023\n\013snapshot_id\030\001 \001(\t\022\022\n\nin" +
       "dexed_at\030\002 \001(\t\022\022\n\nfile_count\030\003 \001(\005\022\022\n\nun" +
       "it_count\030\004 \001(\005\022\025\n\rrepo_map_json\030\005 \001(\t\022\034\n" +
-      "\024index_lifecycle_json\030\006 \001(\t\"\244\001\n\025ResolveC" +
-      "ontextRequest\022\021\n\troot_path\030\001 \001(\t\022\r\n\005path" +
-      "s\030\002 \003(\t\022\030\n\020parser_opts_json\030\003 \001(\t\022\022\n\nque" +
-      "ry_json\030\004 \001(\t\022\035\n\025retrieval_policy_json\030\005" +
-      " \001(\t\022\034\n\024language_policy_json\030\006 \001(\t\"7\n\026Re" +
-      "solveContextResponse\022\035\n\025selection_result" +
-      "_json\030\001 \001(\t\"\313\001\n\024ExpandContextRequest\022\021\n\t" +
-      "root_path\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser" +
-      "_opts_json\030\003 \001(\t\022\024\n\014selection_id\030\004 \001(\t\022\023" +
-      "\n\013snapshot_id\030\005 \001(\t\022\020\n\010unit_ids\030\006 \003(\t\022\034\n" +
-      "\024include_impact_hints\030\007 \001(\t\022\034\n\024language_" +
-      "policy_json\030\010 \001(\t\"6\n\025ExpandContextRespon" +
-      "se\022\035\n\025expansion_result_json\030\001 \001(\t\"\310\001\n\031Fe" +
-      "tchContextDetailRequest\022\021\n\troot_path\030\001 \001" +
-      "(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_json\030\003 " +
-      "\001(\t\022\024\n\014selection_id\030\004 \001(\t\022\023\n\013snapshot_id" +
-      "\030\005 \001(\t\022\020\n\010unit_ids\030\006 \003(\t\022\024\n\014detail_level" +
-      "\030\007 \001(\t\022\034\n\024language_policy_json\030\010 \001(\t\"8\n\032" +
-      "FetchContextDetailResponse\022\032\n\022detail_res" +
-      "ult_json\030\001 \001(\t\"\322\001\n\027LiteralFileSliceReque" +
-      "st\022\021\n\troot_path\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020" +
-      "parser_opts_json\030\003 \001(\t\022\024\n\014selection_id\030\004" +
-      " \001(\t\022\023\n\013snapshot_id\030\005 \001(\t\022\014\n\004path\030\006 \001(\t\022" +
-      "\022\n\nstart_line\030\007 \001(\005\022\020\n\010end_line\030\010 \001(\005\022\034\n" +
-      "\024language_policy_json\030\t \001(\t\"=\n\030LiteralFi" +
-      "leSliceResponse\022!\n\031literal_slice_result_" +
-      "json\030\001 \001(\t\"\250\001\n\023SnapshotDiffRequest\022\021\n\tro" +
-      "ot_path\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_o" +
-      "pts_json\030\003 \001(\t\022\034\n\024baseline_snapshot_id\030\004" +
-      " \001(\t\022\031\n\021include_unchanged\030\005 \001(\t\022\034\n\024langu" +
-      "age_policy_json\030\006 \001(\t\"9\n\024SnapshotDiffRes" +
-      "ponse\022!\n\031snapshot_diff_result_json\030\001 \001(\t" +
-      "\"\366\001\n\030TraverseRelationsRequest\022\021\n\troot_pa" +
-      "th\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_j" +
-      "son\030\003 \001(\t\022\021\n\tdirection\030\004 \001(\t\022\023\n\013start_no" +
-      "des\030\005 \003(\t\022\026\n\016relation_types\030\006 \003(\t\022\025\n\rres" +
-      "olved_only\030\007 \001(\t\022\024\n\014budgets_json\030\010 \001(\t\022\023" +
-      "\n\013snapshot_id\030\t \001(\t\022\034\n\024language_policy_j" +
-      "son\030\n \001(\t\"C\n\031TraverseRelationsResponse\022&" +
-      "\n\036traverse_relations_result_json\030\001 \001(\t2\211" +
-      "\007\n\016RuntimeService\022W\n\006Health\022%.semidx.run" +
-      "time.grpc.v1.HealthRequest\032&.semidx.runt" +
-      "ime.grpc.v1.HealthResponse\022f\n\013CreateInde" +
-      "x\022*.semidx.runtime.grpc.v1.CreateIndexRe" +
-      "quest\032+.semidx.runtime.grpc.v1.CreateInd" +
-      "exResponse\022o\n\016ResolveContext\022-.semidx.ru" +
-      "ntime.grpc.v1.ResolveContextRequest\032..se" +
-      "midx.runtime.grpc.v1.ResolveContextRespo" +
-      "nse\022l\n\rExpandContext\022,.semidx.runtime.gr" +
-      "pc.v1.ExpandContextRequest\032-.semidx.runt" +
-      "ime.grpc.v1.ExpandContextResponse\022{\n\022Fet" +
-      "chContextDetail\0221.semidx.runtime.grpc.v1" +
-      ".FetchContextDetailRequest\0322.semidx.runt" +
-      "ime.grpc.v1.FetchContextDetailResponse\022u" +
-      "\n\020LiteralFileSlice\022/.semidx.runtime.grpc" +
-      ".v1.LiteralFileSliceRequest\0320.semidx.run" +
-      "time.grpc.v1.LiteralFileSliceResponse\022i\n" +
-      "\014SnapshotDiff\022+.semidx.runtime.grpc.v1.S" +
-      "napshotDiffRequest\032,.semidx.runtime.grpc" +
-      ".v1.SnapshotDiffResponse\022x\n\021TraverseRela" +
-      "tions\0220.semidx.runtime.grpc.v1.TraverseR" +
-      "elationsRequest\0321.semidx.runtime.grpc.v1" +
-      ".TraverseRelationsResponseB(\n\026semidx.run" +
-      "time.grpc.v1B\014RuntimeProtoP\001b\006proto3"
+      "\024index_lifecycle_json\030\006 \001(\t\022\035\n\025provider_" +
+      "summary_json\030\007 \001(\t\"\244\001\n\025ResolveContextReq" +
+      "uest\022\021\n\troot_path\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030" +
+      "\n\020parser_opts_json\030\003 \001(\t\022\022\n\nquery_json\030\004" +
+      " \001(\t\022\035\n\025retrieval_policy_json\030\005 \001(\t\022\034\n\024l" +
+      "anguage_policy_json\030\006 \001(\t\"7\n\026ResolveCont" +
+      "extResponse\022\035\n\025selection_result_json\030\001 \001" +
+      "(\t\"\313\001\n\024ExpandContextRequest\022\021\n\troot_path" +
+      "\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_jso" +
+      "n\030\003 \001(\t\022\024\n\014selection_id\030\004 \001(\t\022\023\n\013snapsho" +
+      "t_id\030\005 \001(\t\022\020\n\010unit_ids\030\006 \003(\t\022\034\n\024include_" +
+      "impact_hints\030\007 \001(\t\022\034\n\024language_policy_js" +
+      "on\030\010 \001(\t\"6\n\025ExpandContextResponse\022\035\n\025exp" +
+      "ansion_result_json\030\001 \001(\t\"\310\001\n\031FetchContex" +
+      "tDetailRequest\022\021\n\troot_path\030\001 \001(\t\022\r\n\005pat" +
+      "hs\030\002 \003(\t\022\030\n\020parser_opts_json\030\003 \001(\t\022\024\n\014se" +
+      "lection_id\030\004 \001(\t\022\023\n\013snapshot_id\030\005 \001(\t\022\020\n" +
+      "\010unit_ids\030\006 \003(\t\022\024\n\014detail_level\030\007 \001(\t\022\034\n" +
+      "\024language_policy_json\030\010 \001(\t\"8\n\032FetchCont" +
+      "extDetailResponse\022\032\n\022detail_result_json\030" +
+      "\001 \001(\t\"\322\001\n\027LiteralFileSliceRequest\022\021\n\troo" +
+      "t_path\030\001 \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_op" +
+      "ts_json\030\003 \001(\t\022\024\n\014selection_id\030\004 \001(\t\022\023\n\013s" +
+      "napshot_id\030\005 \001(\t\022\014\n\004path\030\006 \001(\t\022\022\n\nstart_" +
+      "line\030\007 \001(\005\022\020\n\010end_line\030\010 \001(\005\022\034\n\024language" +
+      "_policy_json\030\t \001(\t\"=\n\030LiteralFileSliceRe" +
+      "sponse\022!\n\031literal_slice_result_json\030\001 \001(" +
+      "\t\"\250\001\n\023SnapshotDiffRequest\022\021\n\troot_path\030\001" +
+      " \001(\t\022\r\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_json\030" +
+      "\003 \001(\t\022\034\n\024baseline_snapshot_id\030\004 \001(\t\022\031\n\021i" +
+      "nclude_unchanged\030\005 \001(\t\022\034\n\024language_polic" +
+      "y_json\030\006 \001(\t\"9\n\024SnapshotDiffResponse\022!\n\031" +
+      "snapshot_diff_result_json\030\001 \001(\t\"\366\001\n\030Trav" +
+      "erseRelationsRequest\022\021\n\troot_path\030\001 \001(\t\022" +
+      "\r\n\005paths\030\002 \003(\t\022\030\n\020parser_opts_json\030\003 \001(\t" +
+      "\022\021\n\tdirection\030\004 \001(\t\022\023\n\013start_nodes\030\005 \003(\t" +
+      "\022\026\n\016relation_types\030\006 \003(\t\022\025\n\rresolved_onl" +
+      "y\030\007 \001(\t\022\024\n\014budgets_json\030\010 \001(\t\022\023\n\013snapsho" +
+      "t_id\030\t \001(\t\022\034\n\024language_policy_json\030\n \001(\t" +
+      "\"C\n\031TraverseRelationsResponse\022&\n\036travers" +
+      "e_relations_result_json\030\001 \001(\t2\211\007\n\016Runtim" +
+      "eService\022W\n\006Health\022%.semidx.runtime.grpc" +
+      ".v1.HealthRequest\032&.semidx.runtime.grpc." +
+      "v1.HealthResponse\022f\n\013CreateIndex\022*.semid" +
+      "x.runtime.grpc.v1.CreateIndexRequest\032+.s" +
+      "emidx.runtime.grpc.v1.CreateIndexRespons" +
+      "e\022o\n\016ResolveContext\022-.semidx.runtime.grp" +
+      "c.v1.ResolveContextRequest\032..semidx.runt" +
+      "ime.grpc.v1.ResolveContextResponse\022l\n\rEx" +
+      "pandContext\022,.semidx.runtime.grpc.v1.Exp" +
+      "andContextRequest\032-.semidx.runtime.grpc." +
+      "v1.ExpandContextResponse\022{\n\022FetchContext" +
+      "Detail\0221.semidx.runtime.grpc.v1.FetchCon" +
+      "textDetailRequest\0322.semidx.runtime.grpc." +
+      "v1.FetchContextDetailResponse\022u\n\020Literal" +
+      "FileSlice\022/.semidx.runtime.grpc.v1.Liter" +
+      "alFileSliceRequest\0320.semidx.runtime.grpc" +
+      ".v1.LiteralFileSliceResponse\022i\n\014Snapshot" +
+      "Diff\022+.semidx.runtime.grpc.v1.SnapshotDi" +
+      "ffRequest\032,.semidx.runtime.grpc.v1.Snaps" +
+      "hotDiffResponse\022x\n\021TraverseRelations\0220.s" +
+      "emidx.runtime.grpc.v1.TraverseRelationsR" +
+      "equest\0321.semidx.runtime.grpc.v1.Traverse" +
+      "RelationsResponseB(\n\026semidx.runtime.grpc" +
+      ".v1B\014RuntimeProtoP\001b\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -206,7 +207,7 @@ public final class RuntimeProto {
     internal_static_semidx_runtime_grpc_v1_CreateIndexResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessageV3.FieldAccessorTable(
         internal_static_semidx_runtime_grpc_v1_CreateIndexResponse_descriptor,
-        new java.lang.String[] { "SnapshotId", "IndexedAt", "FileCount", "UnitCount", "RepoMapJson", "IndexLifecycleJson", });
+        new java.lang.String[] { "SnapshotId", "IndexedAt", "FileCount", "UnitCount", "RepoMapJson", "IndexLifecycleJson", "ProviderSummaryJson", });
     internal_static_semidx_runtime_grpc_v1_ResolveContextRequest_descriptor =
       getDescriptor().getMessageTypes().get(4);
     internal_static_semidx_runtime_grpc_v1_ResolveContextRequest_fieldAccessorTable = new

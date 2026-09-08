@@ -931,3 +931,41 @@
       (finally
         (.shutdownNow channel)
         (.shutdownNow server)))))
+
+(deftest runtime-grpc-carries-the-provider-summary-test
+  ;; plans/018 Stage 6.4 left this edge behind because CreateIndexResponse had no
+  ;; field for the summary. It has one now, so the last surface catches up: the
+  ;; library, MCP and HTTP all reported it while gRPC clients had to read it from
+  ;; usage metrics.
+  (let [tmp-root (str (java.nio.file.Files/createTempDirectory
+                       "sci-grpc-provider-summary" (make-array java.nio.file.attribute.FileAttribute 0)))
+        _ (write-file! tmp-root "src/example/OrderService.java"
+                       "package example;\n\npublic class OrderService {\n  public String handle(String order) {\n    return order.trim();\n  }\n}\n")
+        {:keys [server port]} (runtime-grpc/start-server {:host "127.0.0.1" :port 0})
+        channel (-> (ManagedChannelBuilder/forAddress "127.0.0.1" (int port))
+                    (.usePlaintext)
+                    (.build))]
+    (try
+      (testing "a build that runs the pipeline carries the summary across the wire"
+        (let [resp (unary-call channel
+                               runtime-grpc/create-index-method
+                               (grpc-proto/create-index-request
+                                {:root_path tmp-root
+                                 :parser_opts {:provider_pipeline "authority"}})
+                               grpc-proto/create-index-response->map)]
+          (is (= "authority" (get-in resp [:provider_summary :mode])))
+          (is (some? (get-in resp [:provider_summary :authorities])))))
+
+      (testing "and a build that opts out carries nothing, not an empty object"
+        (let [resp (unary-call channel
+                               runtime-grpc/create-index-method
+                               (grpc-proto/create-index-request
+                                {:root_path tmp-root
+                                 :parser_opts {:provider_pipeline "off"}})
+                               grpc-proto/create-index-response->map)]
+          (is (nil? (:provider_summary resp))
+              "proto3 has no absent scalar, so the edge encodes absence as an empty
+               string and the reader turns it back into nil")))
+      (finally
+        (.shutdown channel)
+        (.shutdown server)))))

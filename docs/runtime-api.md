@@ -1494,10 +1494,13 @@ carries `units_supplied`, `units_conflicted`, and `files_degraded` instead. The
 library surface exposes the same map under `:provider_summary` on the index, and
 the MCP `create_index` result carries it under the same name.
 
-The gRPC `CreateIndexResponse` does **not** carry it yet: the message has no
-field for it and adding one requires regenerating the committed protobuf sources
-with `protoc`. Until then, gRPC clients that need the summary should read it from
-the usage metrics stream or use the HTTP edge.
+The gRPC `CreateIndexResponse` carries it as `provider_summary_json`, the same
+way `HealthResponse` carries `capabilities_json`. proto3 has no absent scalar, so
+a build that ran no pipeline sends an empty string and
+`create-index-response->map` turns that back into nil — a client that never asks
+reads exactly what it read before the field existed. Regenerating the stubs needs
+no system `protoc`: the repo-managed toolchain (ADR-042) is fetched by
+`clojure -T:build grpc-generate`.
 
 ## Minimal gRPC Edge
 

@@ -33,6 +33,11 @@ message CreateIndexResponse {
   int32 unit_count = 4;
   string repo_map_json = 5;
   string index_lifecycle_json = 6;
+  // plans/018 Stage 6.4. JSON-encoded provider summary, carried the same way
+  // HealthResponse carries capabilities_json. Empty when the build ran no
+  // provider pipeline, which keeps it additive: a client that never asks reads
+  // an empty string exactly as it read a missing field before.
+  string provider_summary_json = 7;
 }
 
 message ResolveContextRequest {

@@ -290,17 +290,36 @@
                                                   "max_age_stale"
                                                   "staleness_rule_stale")
 
-                                                ;; plans/018 Stage 6.3. Carried through
-                                                ;; rather than folded into the fallback:
-                                                ;; a rebuild caused by a changed authority
-                                                ;; model reported as `initial_build` would
-                                                ;; make the switch invisible in telemetry.
-                                                (= reason "authority_model_changed")
-                                                "authority_model_changed"
+                                                ;; An actual initial build is the only
+                                                ;; case that may be attributed to
+                                                ;; something other than what freshness
+                                                ;; decided: there is no prior snapshot, so
+                                                ;; the interesting fact is why this build
+                                                ;; was scoped the way it was.
+                                                (= reason "initial_build")
+                                                (cond
+                                                  (:manual_language_selection activation-state)
+                                                  "manual_language_selection"
 
+                                                  (seq paths) "paths_subset_requested"
+                                                  :else "initial_build")
 
-                                                (:manual_language_selection activation-state) "manual_language_selection"
-                                                (seq paths) "paths_subset_requested"
+                                                ;; Everything else freshness decided is
+                                                ;; forwarded verbatim — bugs/002. A
+                                                ;; whitelist used to send
+                                                ;; `no_prior_manifest`,
+                                                ;; `manifest_schema_incompatible`,
+                                                ;; `provider_or_pipeline_version_changed`,
+                                                ;; `delta_exceeds_threshold` and
+                                                ;; `authority_model_changed` to
+                                                ;; `initial_build`, so a workspace that
+                                                ;; rebuilt on every run because its delta
+                                                ;; kept exceeding the threshold reported
+                                                ;; the same reason as a cold start, and
+                                                ;; sent whoever asked why to look at
+                                                ;; storage instead of at the ratio.
+                                                (seq reason) reason
+
                                                 :else "initial_build")
                       
                       build-opts (cond-> (assoc opts

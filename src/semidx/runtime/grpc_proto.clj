@@ -117,14 +117,21 @@
    :language_policy (json-field "language_policy_json"
                                 (string-field :create-index-request message :language_policy_json))})
 
-(defn create-index-response [{:keys [snapshot_id indexed_at file_count unit_count repo_map index_lifecycle]}]
+(defn create-index-response [{:keys [snapshot_id indexed_at file_count unit_count repo_map
+                                    index_lifecycle provider_summary]}]
   (build-message :create-index-response
                  {:snapshot_id snapshot_id
                   :indexed_at indexed_at
                   :file_count (or file_count 0)
                   :unit_count (or unit_count 0)
                   :repo_map_json (json-string repo_map)
-                  :index_lifecycle_json (json-string index_lifecycle)}))
+                  :index_lifecycle_json (json-string index_lifecycle)
+                  ;; Empty string when the build ran no provider pipeline. proto3
+                  ;; has no absent scalar, so the empty string is how this edge
+                  ;; says "no summary" — the reader turns it back into nil.
+                  :provider_summary_json (if provider_summary
+                                           (json-string provider_summary)
+                                           "")}))
 
 (defn create-index-response->map [message]
   {:snapshot_id (string-field :create-index-response message :snapshot_id)
@@ -136,7 +143,10 @@
                         {})
    :repo_map (or (json-field "repo_map_json"
                              (string-field :create-index-response message :repo_map_json))
-                 {})})
+                 {})
+   :provider_summary (json-field "provider_summary_json"
+                                 (string-field :create-index-response message
+                                               :provider_summary_json))})
 
 (defn resolve-context-request [{:keys [root_path paths parser_opts query retrieval_policy language_policy]}]
   (build-message :resolve-context-request

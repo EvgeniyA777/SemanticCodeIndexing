@@ -358,7 +358,13 @@
           (is (= 429 (:status rejected)))
           (is (= "rate_limited" (get-in rejected [:json :error_code])))
           (is (= "capacity" (get-in rejected [:json :error_category])))
-          (is (= ["60"] (get-in rejected [:headers "retry-after"])))))
+          ;; Retry-After counts down inside the window rather than restating its
+          ;; width, so pinning 60 asserted that the preceding request took under a
+          ;; millisecond — a property of the machine, not of the limiter. The
+          ;; contract is a positive number of seconds no larger than the window.
+          (let [retry-after (first (get-in rejected [:headers "retry-after"]))]
+            (is (some? retry-after))
+            (is (<= 1 (Long/parseLong retry-after) 60)))))
       (testing "a different actor has an independent bucket"
         (is (= 200
                (:status

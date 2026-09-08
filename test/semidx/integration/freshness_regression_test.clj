@@ -73,3 +73,29 @@
         (is (= "incremental_update" (get-in after [:index_lifecycle :lifecycle_action])))
         (is (seq (:active_languages after)))
         (is (= (:active_languages index-a) (:active_languages after)))))))
+
+;; bugs/002 — the lifecycle used to resolve its rebuild reason through a
+;; whitelist that sent everything it did not recognise to `initial_build`, so a
+;; workspace rebuilding on every run because its delta kept exceeding the
+;; threshold reported the same reason as a cold start.
+(deftest a-rebuild-reports-the-reason-freshness-actually-decided-test
+  (let [root (tmp-root "sci-bugs-002-reason")
+        storage (sci/in-memory-storage)
+        build #(sci/create-index {:root_path root :storage storage :load_latest true
+                                  :freshness_delta_rebuild_ratio 0.5})]
+    (write-file! root "src/a.clj" "(ns a)\n(defn one [] 1)\n")
+    (write-file! root "src/b.clj" "(ns b)\n(defn two [] 2)\n")
+    (let [first-build (build)]
+      (testing "a genuine cold start still says so"
+        (is (= "full_rebuild" (get-in first-build [:index_lifecycle :lifecycle_action])))
+        (is (= "initial_build" (get-in first-build [:index_lifecycle :rebuild_reason]))))
+
+      (testing "and a rebuild driven by the delta ratio says that instead"
+        ;; Both files change: delta 2 over a threshold of 1.0.
+        (write-file! root "src/a.clj" "(ns a)\n(defn one [] 11)\n")
+        (write-file! root "src/b.clj" "(ns b)\n(defn two [] 22)\n")
+        (let [second-build (build)]
+          (is (= "full_rebuild" (get-in second-build [:index_lifecycle :lifecycle_action])))
+          (is (= "delta_exceeds_threshold"
+                 (get-in second-build [:index_lifecycle :rebuild_reason]))
+              "reported as itself, not as initial_build"))))))

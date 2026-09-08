@@ -67,4 +67,30 @@ public interface CreateIndexResponseOrBuilder extends
    */
   com.google.protobuf.ByteString
       getIndexLifecycleJsonBytes();
+
+  /**
+   * <pre>
+   * plans/018 Stage 6.4. JSON-encoded provider summary, carried the same way
+   * HealthResponse carries capabilities_json. Empty when the build ran no
+   * provider pipeline, which keeps it additive: a client that never asks reads
+   * an empty string exactly as it read a missing field before.
+   * </pre>
+   *
+   * <code>string provider_summary_json = 7;</code>
+   * @return The providerSummaryJson.
+   */
+  java.lang.String getProviderSummaryJson();
+  /**
+   * <pre>
+   * plans/018 Stage 6.4. JSON-encoded provider summary, carried the same way
+   * HealthResponse carries capabilities_json. Empty when the build ran no
+   * provider pipeline, which keeps it additive: a client that never asks reads
+   * an empty string exactly as it read a missing field before.
+   * </pre>
+   *
+   * <code>string provider_summary_json = 7;</code>
+   * @return The bytes for providerSummaryJson.
+   */
+  com.google.protobuf.ByteString
+      getProviderSummaryJsonBytes();
 }

@@ -2,9 +2,9 @@
 title: "Rebuild Reason Whitelist Reports Unrelated Rebuilds As initial_build"
 doc_type: "bug_report"
 lifecycle: "active"
-status: "open"
+status: "fixed"
 agent_action: "reference_for_context"
-updated: "2026-09-07"
+updated: "2026-09-08"
 ---
 
 # Rebuild Reason Whitelist Reports Unrelated Rebuilds As initial_build
@@ -72,3 +72,21 @@ forwarded — `snapshot_stale` splitting into `max_age_stale` and
 A regression test should assert one forwarded reason end to end — for example a
 `delta_exceeds_threshold` rebuild reporting that reason on the response — because
 the current tests assert the rebuild action and never the reason attached to it.
+
+## Resolution (2026-09-08)
+
+The `cond` now forwards whatever freshness decided, and `initial_build` is
+reserved for the case that is actually an initial build. The derived cases are
+unchanged: `snapshot_stale` still splits into `max_age_stale` and
+`staleness_rule_stale`, and the activation and paths attributions still apply —
+but only when freshness itself said `initial_build`, since a rebuild driven by a
+delta should report the delta rather than the scope it happened to be asked for.
+
+`no_prior_manifest`, `manifest_schema_incompatible`,
+`provider_or_pipeline_version_changed` and `delta_exceeds_threshold` now reach
+the response and the usage event as themselves.
+
+Covered by `test/semidx/integration/freshness_regression_test.clj`, which drives
+two builds over the same workspace: a cold start reports `initial_build`, and a
+rebuild whose delta exceeds the ratio reports `delta_exceeds_threshold` — the
+regression test the report asked for, and the one whose absence let this survive.

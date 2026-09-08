@@ -254,13 +254,17 @@
                                                                             (:root_path scope)
                                                                             false))
         index (:index entry)]
-    {:snapshot_id (:snapshot_id index)
-     :indexed_at (:indexed_at index)
-     :index_lifecycle (:index_lifecycle index)
-     :file_count (count (:files index))
-     :unit_count (count (:units index))
-     :repo_map (sci/repo-map index)
-     :project_context (project-context-summary entry)}))
+    (cond-> {:snapshot_id (:snapshot_id index)
+             :indexed_at (:indexed_at index)
+             :index_lifecycle (:index_lifecycle index)
+             :file_count (count (:files index))
+             :unit_count (count (:units index))
+             :repo_map (sci/repo-map index)
+             :project_context (project-context-summary entry)}
+      ;; plans/018 Stage 6.4, completed here: this edge could not carry the
+      ;; summary until the response message had a field for it.
+      (:provider_summary index)
+      (assoc :provider_summary (:provider_summary index)))))
 
 (defn- query-trace-correlation [query]
   (let [trace (get query :trace {})]
