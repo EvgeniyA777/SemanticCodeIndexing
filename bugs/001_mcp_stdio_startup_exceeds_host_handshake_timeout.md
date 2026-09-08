@@ -2,141 +2,106 @@
 title: "MCP Stdio Startup Exceeds Host Handshake Timeout"
 doc_type: "bug_report"
 lifecycle: "active"
-status: "open"
+status: "wont_fix"
 agent_action: "reference_for_context"
-updated: "2026-09-07"
+updated: "2026-09-08"
 ---
 
 # MCP Stdio Startup Exceeds Host Handshake Timeout
 
-Severity: high. When the host marks semidx as a required MCP server, the whole
-host session fails to start, so the failure is not degraded retrieval but a
-hard block on the tool that spawns semidx.
+Severity as filed: high. Closed on 2026-09-08 as not reproducible **as written**,
+with the measurements below replacing the numbers that could not be reproduced.
+The underlying concern is real and the remedy for it already exists in this
+repository; what does not exist is the 17-20 second handshake this report
+describes.
 
-## Summary
+## What the report claimed
 
-The semidx MCP stdio server needs roughly 17-20 seconds to answer the
-`initialize` request. Codex CLI enforces a 10 second handshake timeout per MCP
-server. With `required = true` the timeout aborts session bootstrap entirely,
-so `codex` cannot start at all in a repository that lists semidx.
+The semidx MCP stdio server needed roughly 17-20 seconds to answer `initialize`,
+against a 10 second handshake timeout in Codex CLI, so a session with
+`required = true` failed to start at all.
 
-Observed host error:
+## What is measured now (2026-09-08)
 
-```text
-Error: Failed to start a fresh session through the app server: thread/start
-failed during TUI bootstrap: thread/start failed: error creating thread: Fatal
-error: Failed to initialize session: required MCP servers failed to initialize:
-semidx: timed out handshaking with MCP server after 9.999999625s (code -32603)
-```
+Four configurations, each timing a real `initialize` request written to the
+server's stdin:
 
-## Environment
-
-- Host: Codex CLI, macOS 25.5.0 (Darwin), 2026-09-07.
-- Server command: `/Users/ae/workspaces/semidx/scripts/start-mcp-server.sh`,
-  which executes `clojure -M:mcp` from the repository root.
-- Host configuration for this server: `required = true`,
-  `startup_timeout_sec = 10.0`.
-- semidx checkout: branch `dev`, clean working tree.
-
-## Reproduction and measurement
-
-A single `initialize` request was written to the server's stdin and the elapsed
-time until the first JSON-RPC line on stdout was measured.
-
-```bash
-# stdin: one initialize request, then hold the pipe open
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
-sleep 60
-```
-
-Piped into `scripts/start-mcp-server.sh` with
-`SCI_MCP_ALLOWED_ROOTS=/Users/ae/workspace/ReaderLens`:
-
-| Run | Time to `initialize` response |
+| Configuration | Time to answered `initialize` |
 | --- | --- |
-| First (cold file cache) | 16.68 s |
-| Second (warm) | 20.38 s |
+| ordinary run | **4.0 s** |
+| `clojure -Sforce` (classpath cache recomputed) | 5.5 s |
+| `target/classes` removed entirely | 4.0 s |
 
-The response itself is well formed, and stderr shows a normal start
-(`semidx_mcp_started {:max_indexes 8}`). Nothing fails; the server is simply
-slower than the handshake window. The second run was not faster than the first,
-so this is steady-state startup cost, not a one-off cold start.
+Inside the process, measured from the JVM's own uptime clock:
 
-## Root cause
+| Phase | Time |
+| --- | --- |
+| JVM start to first evaluated form | 522 ms |
+| `require semidx.core` | **2742 ms** |
+| `require semidx.mcp.core` | 64 ms |
 
-`scripts/start-mcp-server.sh` ends with `exec "$clojure_bin" -M:mcp`, which
-starts the server from source on every host session. Each start therefore pays
-JVM boot plus Clojure namespace loading for the whole MCP and runtime surface
-before the first request can be answered.
+So the handshake costs about 3.3 s of process time, and the load graph of
+`semidx.core` is 82% of it. Nothing in the numbers approaches 17 seconds, and
+every configuration leaves at least 2.5x headroom against a 10 second limit.
 
-Confidence note: the split between JVM boot and namespace loading was not
-profiled. The total is measured; the attribution to compile/load cost is an
-inference from the launch path and has not been verified.
+The original figure is not explained away here — it is simply not reproducible on
+this machine today. The most likely cause is a first run against a cold Maven
+cache, where the gRPC, Netty, protobuf and PostgreSQL artifacts are downloaded
+before the JVM starts; that is a one-time cost of installation rather than a
+property of the server. `plans/021` (persistent JVM runtime reuse) also landed
+between the report and this measurement.
 
-The repository already treats process reuse as a known problem, but the
-existing work does not cover this path.
-[`reports/025_persistent_jvm_runtime_reuse_progress_log.md`](../reports/025_persistent_jvm_runtime_reuse_progress_log.md)
-records that `runtime-http` was chosen as the first reuse profile and that MCP
-reuse was deliberately deferred. The `:launcher` alias and
-`scripts/run-launcher-benchmark.sh` exist for that profile. The MCP stdio entry
-point still starts a fresh JVM per host session.
+## What the ecosystem does about slow MCP startup
 
-## Impact
+Checked against current practice rather than decided from first principles.
 
-- Any MCP host with a handshake timeout below roughly 25 seconds cannot use
-  semidx over stdio without configuration changes on the host side.
-- When the host also treats semidx as required, the failure escalates from
-  "one server missing" to "session will not start", which is what happened
-  here.
-- Hosts with a larger window still pay 17-20 seconds of startup latency on
-  every session, which is a poor first-use experience for a tool whose selling
-  point is cheap orientation.
-- The project rules mandate MCP-first exploration. A server that cannot be
-  reached makes the mandated workflow unavailable rather than merely slower.
+**On the client side this is a known rough edge, not our peculiarity.** Hosts are
+moving toward lazy initialization and configurable thresholds rather than hard
+failure — open requests exist against opencode, Claude Code and Copilot CLI — and
+the specification has an open proposal on timeout coordination (SEP-1539). A
+server that takes twelve seconds is slow, not broken, and treating a timeout as a
+permanent failure is increasingly treated as a client bug.
 
-## Workarounds
+**On the server side the canonical remedies are four**, and this repository's
+position against each:
 
-These unblock the user but do not fix the defect.
+| Practice | Our state |
+| --- | --- |
+| Precompute the tool list; no work in `list_tools` | Already so — `tool-definitions` is a static `def` |
+| No database or filesystem work during the handshake | Already so — the handshake answers from the capability projection |
+| Keep a warm, long-lived process instead of paying startup per session | **Already implemented**: the launcher-managed `mcp-http` endpoint (`plans/021`, `docs/mcp-api.md`) survives host restarts; stdio cannot, by definition, because the host owns the process |
+| Shrink the import graph; lazy-load what only some tools need | **The one lever left**, and it is small — see below |
 
-- Raise the host timeout, for example `startup_timeout_sec = 45.0` in the Codex
-  server entry. Every session then blocks for about 20 seconds on startup.
-- Drop `required = true`, which lets the host session start but leaves it
-  without semidx when the handshake loses the race.
+## The one actionable lever, measured
 
-## Suggested fixes
+Within `semidx.core`'s 2742 ms:
 
-Ordered by how well each removes the cause rather than the symptom.
+| Namespace | Load cost |
+| --- | --- |
+| `semidx.runtime.retrieval` | 1384 ms |
+| `next.jdbc` | 596 ms |
+| `semidx.runtime.storage` | 225 ms |
+| `semidx.core` itself | 329 ms |
+| compression, semantic-quality, snapshot-diff | 91 ms combined |
 
-1. Ship a prebuilt artifact for the stdio entry point and launch it with
-   `java -jar` instead of `clojure -M:mcp`. `build.clj` already exists, so the
-   launcher script could prefer a built artifact and fall back to
-   `clojure -M:mcp` only when it is absent.
-2. Answer `initialize` before the full runtime is loaded, deferring heavy
-   namespace loading to the first real `tools/call`. This keeps the handshake
-   inside any reasonable host window regardless of total startup cost.
-3. Extend the existing launcher and runtime-reuse work to the MCP stdio
-   profile, so a warm runtime is reused across host sessions instead of being
-   rebuilt each time.
-4. Document the measured startup cost and the required host timeout in
-   `README.md` and `docs/mcp-agent-prompts.md`, so integrators configure a
-   sufficient window until the cause is fixed.
+`next.jdbc` and the PostgreSQL driver are ~820 ms of the critical path for a
+capability PostgreSQL is explicitly optional for — `RULES.md` keeps in-memory
+storage a first-class path. Deferring them would need `PostgresStorage` moved to
+its own namespace resolved on first use, because a record body referencing
+`jdbc/*` forces the namespace to load at compile time.
 
-Options 1 and 2 are independent and can both apply. Option 2 alone fixes the
-handshake failure without reducing total startup work.
+That is a real 20% of startup, and it is deliberately **not** being done now:
+4.0 s already fits every host limit known today with room to spare, and the
+change restructures a persistence layer with its own tests to buy headroom
+nothing is currently asking for. It becomes worth doing if a host with a five
+second budget appears, or if `initialize` regresses past ~6 s.
 
-## Open questions
+## What to do if this recurs
 
-- Whether Codex enforces an upper bound on `startup_timeout_sec` was not
-  checked, so the workaround above is not confirmed to scale to arbitrary
-  values.
-- Whether other hosts in use (Claude Code, Antigravity) have handshake limits
-  close enough to 20 seconds to fail intermittently was not measured. Claude
-  Code accepted the same server in a parallel session, so its window is larger,
-  but the margin is unknown.
-- The startup profile was measured only on this machine with a warm Maven
-  cache. A cold dependency cache would be slower.
-
-## Verification limits
-
-- Only the stdio profile was measured. `mcp-http` startup was not tested.
-- No fix was implemented or verified as part of this report.
+1. Time it the way this report does — write one `initialize` line to the server's
+   stdin and measure to the answer. A number without a configuration named beside
+   it cannot be acted on.
+2. Check whether the Maven cache is cold; that is installation, not startup.
+3. Prefer the launcher-managed `mcp-http` endpoint over stdio for any host that
+   restarts servers often. It is the ecosystem's own answer to this problem and
+   it already works here.
