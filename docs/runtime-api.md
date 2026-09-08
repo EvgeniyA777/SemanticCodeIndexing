@@ -1479,8 +1479,13 @@ Endpoints:
 HTTP create/retrieval responses now also include additive `project_context` metadata summarizing the current canonical per-root activation state. If activation is already in progress, HTTP returns `409 language_activation_in_progress` and a `Retry-After` header.
 
 `POST /v1/index/create` also returns an additive `provider_summary` when the
-build ran the plans/018 provider pipeline — `parser_opts.provider_pipeline` set
-to `shadow` or `authority`. The key is absent, not null, for a build that ran no
+build ran the plans/018 provider pipeline. Since 2026-09-08 `authority` is the
+**default** mode, so a build that says nothing about `provider_pipeline` runs it:
+for Java and TypeScript the provider plan owns extraction, units carry an
+`authority`, and a file with no exact or structural evidence carries a
+`provider_authority_degraded` diagnostic. `parser_opts.provider_pipeline` set to
+`off` is the rollback and restores the previous behaviour exactly; `shadow`
+observes without changing units. The key is absent, not null, for a build that ran no
 pipeline, so a client that never asks for one sees exactly the response it saw
 before. `mode` distinguishes the two: a `shadow` summary reports what the
 pipeline would have produced beside the snapshot and carries the tier

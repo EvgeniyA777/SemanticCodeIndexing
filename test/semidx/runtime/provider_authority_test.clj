@@ -174,11 +174,13 @@
           parsed (authority/parse-file (root) path {} ctx)
           degradation (first (filter #(= "provider_authority_degraded" (str (:code %)))
                                      (:diagnostics parsed)))]
-      (is (= #{"fallback"} (set (map :parser_mode (:units parsed))))
-          "every unit is heuristic, so every unit is labelled fallback")
-      (is (= "fallback" (:parser_mode parsed)))
-      (is (= "fallback" (get-in parsed [:semantic_pipeline :parser_mode]))
-          "the file's pipeline record must not disagree with the file")
+      (is (= #{"heuristic"} (set (map :authority (:units parsed))))
+          "every unit rests on heuristic evidence, and says so on :authority")
+      (is (= #{"full"} (set (map :parser_mode (:units parsed))))
+          "and none is relabelled a failed parse: bugs/005 — a successful regex
+           parse that produced units is not an extraction failure, and calling it
+           one switched off impact analysis and the state-invariant packet")
+      (is (= "full" (:parser_mode parsed)))
       (is (some? degradation) "the degradation is stated, not left to be inferred")
       (is (re-find #"heuristic" (:summary degradation))))))
 
@@ -189,12 +191,9 @@
         by-authority (group-by :authority (:units parsed))]
     (is (seq (get by-authority "exact")))
     (is (= #{"full"} (set (map :parser_mode (get by-authority "exact"))))
-        "a symbol a semantic provider resolved is not a fallback")
-    (is (every? #(= "fallback" (:parser_mode %)) (get by-authority "heuristic" []))
-        "and a symbol only the regex tier saw is a fallback, whether or not this
-         particular file happens to contain one")
-    (is (= "full" (:parser_mode parsed))
-        "the file is degraded only when nothing in it has strong evidence")
+        "parser_mode keeps its own meaning throughout: it reports extraction, not
+         evidence strength")
+    (is (= "full" (:parser_mode parsed)))
     (is (empty? (filter #(= "provider_authority_degraded" (str (:code %)))
                         (:diagnostics parsed))))))
 

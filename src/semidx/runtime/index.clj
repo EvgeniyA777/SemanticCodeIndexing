@@ -68,25 +68,18 @@
 
 (def default-provider-pipeline-mode
   "The mode a build gets when it asks for nothing, and an unrecognised value
-  resolves here too.
+  resolves here too rather than to `:off`: since the flip, `:off` is a deliberate
+  opt-out from the semantic tier and a typo must not silently grant it.
 
-  Still `:off`. The flip to `:authority` was attempted on 2026-09-08 and reverted
-  the same day, because it disables more than it labels: Stage 6.2 marks a unit
-  whose only evidence is heuristic as `parser_mode \"fallback\"`, which drops the
-  selection's coverage to `fallback_only` and its confidence ceiling to `low`,
-  and `retrieval/impact-seed-degradations` treats a low-confidence selection as
-  degraded — so `impact-analysis` returns its degraded stub and never assembles
-  the state-invariant packet. On a machine with no Java semantic toolchain, which
-  is the common case, impact analysis and state invariants stop answering for
-  Java entirely.
-
-  The cause is a vocabulary collision rather than the labelling decision itself:
-  `parser_mode \"fallback\"` already meant \"the parser could not extract
-  structure\", and Stage 6.2 gave it a second meaning, \"the evidence is
-  heuristic\". Features keyed to the first meaning read the second. Separating
-  them — evidence tier on `:authority`, extraction failure on `parser_mode` — is
-  what the flip is waiting on. See plans/018 Stage 6."
-  :off)
+  `:authority` since 2026-09-08. The first attempt at this flip was reverted the
+  same day because Stage 6.2 wrote `parser_mode \"fallback\"` onto heuristic
+  units, which the rest of the system reads as \"the parser could not extract
+  structure\" — collapsing the confidence ceiling and switching off impact
+  analysis and the state-invariant packet for every Java workspace without a
+  semantic toolchain. `bugs/005` separated the two meanings: the evidence tier
+  lives on `:authority`, `parser_mode` still means extraction failure, and the
+  flip landed on the second attempt."
+  :authority)
 
 (defn provider-pipeline-mode [parser-opts]
   (let [mode (or (:provider_pipeline parser-opts)

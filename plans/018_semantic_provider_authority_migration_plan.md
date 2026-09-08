@@ -1521,6 +1521,45 @@ an empty `:signature`, which fails the context packet contract with
 authority build can produce those units, which is why nothing had hit it. Fixed
 in `unit-from-fact`, which now falls back to the symbol.
 
+##### The flip, landed (2026-09-08)
+
+`bugs/005` was fixed by taking `parser_mode` back: `provider-authority` no longer
+writes it, the evidence tier stays on `:authority`, and the file still says it is
+degraded through its own diagnostic. The state-invariant packet came back
+complete on the same fixture, and the twenty-odd failures across `runtime_test`,
+`http_test` and `grpc_test` disappeared with it. What remained was thirteen
+assertions whose premise was "the default is off"; each now names `off`
+explicitly where it means "no pipeline".
+
+`:authority` is the default. `:off` is the rollback and is available by name, an
+unrecognised mode resolves to the default rather than silently opting a caller
+out, and the deployment env var and caller options keep the precedence they had.
+
+Measured:
+
+| | `off` | default |
+| --- | --- | --- |
+| this repository | 14.8 s, 5081 units | 16.7 s, 5081 units, 1631 labelled heuristic |
+| Java corpus, toolchain present | 34 ms, 5 units | 482 ms, **6 units, all exact** |
+
+No unit is lost either way; the corpus gains one the lexical tier never produced.
+Gates: suite 681/3636/0, benchmarks 31/31, contracts ok at 80 files.
+
+Two things the flip changed that were not on the plan:
+
+- **The snapshot no longer carries a clock.** The authority summary's
+  `project_elapsed_ms` made two identical builds differ, which `snapshot-diff`
+  would have reported as a change and which contradicts ADR-046's determinism
+  driver. Removed. Shadow's `total_elapsed_ms` has the same flaw and was left
+  alone because shadow is opt-in.
+- **The confidence reduction from owner decision 1 is not in effect.** It was the
+  precise mechanism that disabled impact analysis. Degradation is explicit on
+  `:authority`, in the file diagnostic and in `files_degraded`, but a
+  heuristic-only selection keeps the ceiling its language strength already gave
+  it. Restoring a reduction means teaching `impact-seed-degradations` the
+  difference between heuristic evidence and absent structure; recorded in
+  `bugs/005` for the owner.
+
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision
 

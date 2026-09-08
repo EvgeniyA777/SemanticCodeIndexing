@@ -229,9 +229,6 @@
   unconditionally."
   #{"exact" "structural"})
 
-(defn- unit-parser-mode [unit]
-  (if (contains? strong-authorities (:authority unit)) "full" "fallback"))
-
 (defn- degradation-reasons
   "Why no strong tier reached this file, in the planner's own words.
 
@@ -247,30 +244,35 @@
        sort
        vec))
 
-(defn- relabel-degradation
-  "Stage 6.2. Give every unit the parser mode its evidence earns, and say so at
-  the file level.
+(defn- announce-degradation
+  "Stage 6.2, corrected by bugs/005. Say that a file's evidence is heuristic,
+  without claiming its parser failed.
 
-  `parser_mode` is not cosmetic: `retrieval-policy/coverage-level` counts
-  fallback units to pick a coverage level, and `confidence-ceiling` caps a
-  fallback-only selection at `low`. Labelling honestly here is what makes the
-  confidence recalibration happen at all."
+  The first version of this wrote `parser_mode \"fallback\"` onto every
+  heuristic unit. That field already had an owner: it means the parser could not
+  extract structure, and the whole system reads it that way —
+  `retrieval-policy/coverage-level` counts fallback units, the ceiling collapses
+  to `low`, and `retrieval/impact-seed-degradations` then treats the selection as
+  degraded, so impact analysis returns a stub and the state-invariant packet is
+  never assembled. A successful regex parse that produced methods, fields, calls
+  and relations is not a failed parse, and labelling it as one switched off
+  working features for every Java workspace without a semantic toolchain.
+
+  The evidence tier lives on `:authority`, which every merged unit carries, and
+  the fact that no strong tier reached this file is stated once, on the file, as
+  a diagnostic. Both are additive: nothing that read `parser_mode` before reads
+  anything different now."
   [parsed plan]
-  (let [units (mapv #(assoc % :parser_mode (unit-parser-mode %)) (:units parsed))
-        degraded? (and (seq units)
-                       (every? #(= "fallback" (:parser_mode %)) units))
-        file-mode (if degraded? "fallback" (:parser_mode parsed))
-        reasons (when degraded? (degradation-reasons plan))]
-    (cond-> (assoc parsed
-                   :units units
-                   :parser_mode file-mode
-                   :semantic_pipeline (assoc (:semantic_pipeline parsed)
-                                             :parser_mode file-mode))
-      degraded?
+  (let [units (:units parsed)
+        heuristic-only? (and (seq units)
+                             (every? #(not (contains? strong-authorities (:authority %))) units))
+        reasons (when heuristic-only? (degradation-reasons plan))]
+    (cond-> parsed
+      heuristic-only?
       (update :diagnostics conj
               {:code "provider_authority_degraded"
-               :summary (str "no exact or structural evidence for this file, so every"
-                             " unit is heuristic and confidence is capped"
+               :summary (str "no exact or structural evidence reached this file, so every"
+                             " unit rests on heuristic evidence"
                              (when (seq reasons)
                                (str "; excluded: " (str/join ", " reasons))))}))))
 
@@ -314,7 +316,7 @@
                                :summary (str (count added)
                                              " unit(s) supplied by a semantic provider that the"
                                              " file parser did not produce")}))
-        (relabel-degradation plan))))
+        (announce-degradation plan))))
 
 (defn parse-file
   "Default extraction for one file, with the provider plan authoritative for
@@ -370,9 +372,13 @@
   - `:units_supplied` counts the units no parser produced, which only an
     authority build can have.
 
-  `:project_elapsed_ms` is the project tier alone. Per-file provider work is
-  interleaved with parsing in this mode and is not honestly separable, so no
-  total is reported rather than a made-up one."
+  **No timing.** This summary rides in the snapshot, and a snapshot must be
+  deterministic for the same content, provider versions and configuration
+  (ADR-046). A latency field would make two identical builds differ and would
+  surface in `snapshot-diff` as a change where nothing changed. The project
+  tier's duration is measured in `build-context` and stays available to a caller
+  that wants it; the whole build's latency is already on the create_index usage
+  event."
   [ctx files-data]
   (let [units (vec (:units files-data))
         authority-units (filterv #(contains? authority-languages (:language %)) units)
@@ -399,5 +405,4 @@
                             (mapcat :diagnostics)
                             (map (comp str :code))
                             frequencies
-                            (into (sorted-map)))
-     :project_elapsed_ms (:project_elapsed_ms ctx)}))
+                            (into (sorted-map)))}))

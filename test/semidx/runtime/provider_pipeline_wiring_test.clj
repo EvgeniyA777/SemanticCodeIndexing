@@ -22,23 +22,29 @@
 
 (def ^:private java-corpus "fixtures/provider-authority/corpus/java")
 
-(deftest mode-defaults-to-off-and-rejects-nonsense-test
-  (is (= :off (idx/provider-pipeline-mode {})))
-  (is (= :off (idx/provider-pipeline-mode {:provider_pipeline "not-a-mode"}))
-      "an unknown mode falls back to off rather than to something surprising")
+(deftest mode-defaults-to-authority-and-rejects-nonsense-test
+  (is (= :authority (idx/provider-pipeline-mode {}))
+      "the default since 2026-09-08; :off is now the deliberate opt-out")
+  (is (= :authority (idx/provider-pipeline-mode {:provider_pipeline "not-a-mode"}))
+      "an unknown mode resolves to the default rather than silently opting the
+       caller out of the semantic tier")
+  (is (= :off (idx/provider-pipeline-mode {:provider_pipeline "off"}))
+      "and the opt-out is available by name")
   (is (= :shadow (idx/provider-pipeline-mode {:provider_pipeline "shadow"})))
   (is (= :shadow (idx/provider-pipeline-mode {:provider_pipeline :shadow}))
       "string or keyword, because parser opts arrive from JSON as well"))
 
-(deftest a-default-build-carries-no-provider-summary-test
+(deftest an-opted-out-build-carries-no-provider-summary-test
   (testing "the seam costs nothing when it is off: no key, so no consumer can
             start depending on it by accident"
-    (let [index (sci/create-index {:root_path java-corpus})]
+    (let [index (sci/create-index {:root_path java-corpus
+                                   :parser_opts {:provider_pipeline "off"}})]
       (is (not (contains? index :provider_summary)))
       (is (pos? (count (:units index))) "and the build itself is unaffected"))))
 
 (deftest a-shadow-build-observes-the-pipeline-without-changing-the-index-test
-  (let [plain (sci/create-index {:root_path java-corpus})
+  (let [plain (sci/create-index {:root_path java-corpus
+                                 :parser_opts {:provider_pipeline "off"}})
         shadowed (sci/create-index {:root_path java-corpus
                                     :parser_opts {:provider_pipeline "shadow"}})
         summary (:provider_summary shadowed)]
@@ -79,9 +85,10 @@
       (is (some? (get-in (first (usage/emitted-events sink)) [:payload :provider_summary]))))
 
     (let [sink (usage/in-memory-usage-metrics)]
-      (sci/create-index {:root_path java-corpus :usage_metrics sink})
+      (sci/create-index {:root_path java-corpus :usage_metrics sink
+                         :parser_opts {:provider_pipeline "off"}})
       (is (not (contains? (:payload (first (usage/emitted-events sink))) :provider_summary))
-          "a default build records what it always recorded"))))
+          "an opted-out build records what it always recorded"))))
 
 (deftest the-deployment-can-switch-observation-on-without-touching-callers-test
   (testing "an operator decides once for a server; a caller should not have to
@@ -96,10 +103,12 @@
                    (mcp/normalize-parser-opts {:provider_pipeline "off"})))
           "but an explicit caller value still wins")))
 
-  (testing "with nothing set, nothing changes"
+  (testing "with nothing set, the build gets the default"
     (with-redefs [mcp/deployment-parser-opts (constantly {})]
-      (is (= :off (idx/provider-pipeline-mode (mcp/normalize-parser-opts nil))))
-      (is (= mcp/default-parser-opts (mcp/normalize-parser-opts nil))))))
+      (is (= :authority (idx/provider-pipeline-mode (mcp/normalize-parser-opts nil))))
+      (is (= mcp/default-parser-opts (mcp/normalize-parser-opts nil))
+          "and the parser opts themselves are untouched: the default lives in the
+           runtime, not in the MCP defaults"))))
 
 (defn- mcp-create-index-event
   "Drive the real MCP tool handler and return the usage event it emitted.
@@ -128,8 +137,8 @@
       (is (some? (get-in event [:payload :provider_summary])))
       (is (= "shadow" (get-in event [:payload :provider_summary :mode])))))
 
-  (testing "and a default build records exactly what it recorded before"
-    (let [event (mcp-create-index-event nil)]
+  (testing "and an opted-out build records exactly what it recorded before"
+    (let [event (mcp-create-index-event {:provider_pipeline "off"})]
       (is (not (contains? (:payload event) :provider_summary))))))
 
 (deftest the-summary-carries-the-tier-comparison-test
@@ -265,6 +274,7 @@
             (is (= "authority" (get-in payload [:provider_summary :mode]))))
           (finally (.stop server 0)))))
 
-    (testing "and a build with no pipeline answers exactly what it answered before"
-      (let [index (sci/create-index {:root_path java-corpus})]
+    (testing "and a build that opts out answers exactly what it answered before"
+      (let [index (sci/create-index {:root_path java-corpus
+                                     :parser_opts {:provider_pipeline "off"}})]
         (is (not (contains? index :provider_summary)))))))

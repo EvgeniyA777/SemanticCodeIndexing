@@ -2,7 +2,7 @@
 title: "parser_mode fallback Now Means Two Different Things, And Features Read The Wrong One"
 doc_type: "bug_report"
 lifecycle: "active"
-status: "open"
+status: "fixed"
 agent_action: "reference_for_context"
 updated: "2026-09-08"
 ---
@@ -89,3 +89,37 @@ packet contract (`internal_contract_error`, "should be at least 1 character") as
 soon as such a unit reaches retrieval. Fixed in
 `semidx.runtime.provider-authority/unit-from-fact`, which now falls back to the
 symbol. That fix is independent of the flip and stays.
+
+## Resolution (2026-09-08)
+
+`provider-authority` no longer writes `parser_mode`. The evidence tier stays on
+`:authority`, the file still carries the `provider_authority_degraded`
+diagnostic, and `parser_mode` means what it always meant. Verified on the same
+entity fixture: under `:authority` the units now keep `parser_mode "full"`,
+carry `authority "heuristic"`, and the state-invariant packet comes back
+complete with its entity candidates.
+
+The default flip landed on the second attempt the same day. Suite 681 tests /
+3636 assertions / 0 failures, benchmarks 31/31, contracts ok.
+
+Two things came out of the fix and are worth carrying forward.
+
+**A snapshot must not contain a clock.** With the pipeline on by default, two
+identical builds differed, because the authority summary carried
+`project_elapsed_ms`. That would surface in `snapshot-diff` as a change where
+nothing changed, against ADR-046's determinism driver. Timing was removed from
+the summary; the project tier's duration is still measured in `build-context`
+and the whole build's latency is already on the create_index usage event. The
+shadow summary still carries `total_elapsed_ms` and has the same flaw, but
+shadow is opt-in and was left alone rather than changed in passing.
+
+**The confidence reduction from decision 1 is not implemented.** Lowering the
+ceiling for a heuristic-only selection was the exact mechanism that disabled
+impact analysis, because `impact-seed-degradations` reads a low-confidence
+selection as one it cannot reason about. Degradation is now explicit —
+`:authority` on every unit, a file diagnostic, and `files_degraded` in the
+summary — but a heuristic-only Java selection keeps the ceiling its language
+strength already gave it. Restoring a real reduction requires teaching that gate
+the difference between "the evidence is heuristic" and "there is no structure to
+reason about", which is a change to a shared gate and is left for the owner to
+decide.
