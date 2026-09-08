@@ -1,0 +1,61 @@
+{
+  "fixture_id": "retrieval_clojure_happy_path_001",
+  "category": "clojure_onboarding",
+  "purpose": "Clojure exact symbol targeting keeps the namespace-qualified definition in the top authority band.",
+  "adr_refs": [
+    "ADR-022"
+  ],
+  "snapshot_ref": "seed-clojure-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the Clojure authority implementation for my.app.order/process-order."
+      },
+      "targets": {
+        "symbols": [
+          "my.app.order/process-order"
+        ],
+        "paths": [
+          "src/my/app/order.clj"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "clojure"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-clojure-happy-path-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "src/my/app/order.clj::my.app.order/process-order"
+    ],
+    "must_include_paths": [
+      "src/my/app/order.clj"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved",
+      "target_path_match"
+    ],
+    "confidence_level": "high",
+    "autonomy_posture": "draft_patch_safe"
+  }
+}

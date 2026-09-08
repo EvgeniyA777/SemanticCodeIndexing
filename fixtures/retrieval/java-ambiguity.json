@@ -1,0 +1,63 @@
+{
+  "fixture_id": "retrieval_java_ambiguity_001",
+  "category": "java_onboarding",
+  "purpose": "Two same-name overloads in one class are both kept in the top authority band, distinguished by arity in their unit ids rather than merged into one identity.",
+  "adr_refs": [
+    "ADR-022",
+    "ADR-046"
+  ],
+  "snapshot_ref": "seed-java-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the com.acme.text.Normalizer#normalize overloads."
+      },
+      "targets": {
+        "symbols": [
+          "com.acme.text.Normalizer#normalize"
+        ],
+        "paths": [
+          "src/com/acme/text/Normalizer.java"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "java"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-java-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "src/com/acme/text/Normalizer.java::com.acme.text.Normalizer#normalize$arity1$sig9932d3aa",
+      "src/com/acme/text/Normalizer.java::com.acme.text.Normalizer#normalize$arity2$sige2a53e56"
+    ],
+    "must_include_paths": [
+      "src/com/acme/text/Normalizer.java"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved",
+      "target_path_match"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

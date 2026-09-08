@@ -5,7 +5,11 @@
 
 (def ^:private java-package-re #"^\s*package\s+([a-zA-Z0-9_\.]+)\s*;")
 (def ^:private java-import-re #"^\s*import\s+(?:static\s+)?([a-zA-Z0-9_\.\*]+)\s*;")
-(def ^:private java-class-re #"^\s*(?:public\s+)?(?:class|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+extends\s+([A-Za-z0-9_\.]+))?")
+;; Any legal ordering of class modifiers, not just `public`. Accepting only
+;; `public` made every method of a `final`, `abstract`, or package-private class
+;; resolve to `UnknownClass`, which is wrong in the two places it matters most:
+;; the unit's owner and the canonical fact key built from it.
+(def ^:private java-class-re #"^\s*(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*(?:class|interface|enum)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+extends\s+([A-Za-z0-9_\.]+))?")
 (def ^:private java-method-re
   #"^\s*(?:(public|private|protected)\s+)?(?:(?:static|final|native|synchronized|abstract|default)\s+)*([A-Za-z0-9_<>,\[\]\.\?]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|throws|;)")
 (def ^:private java-constructor-re

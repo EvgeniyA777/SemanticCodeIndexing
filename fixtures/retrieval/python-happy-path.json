@@ -1,0 +1,62 @@
+{
+  "fixture_id": "retrieval_python_happy_path_001",
+  "category": "python_onboarding",
+  "purpose": "Python exact symbol targeting keeps the module-qualified function in the top authority band and pulls in the module it calls.",
+  "adr_refs": [
+    "ADR-022"
+  ],
+  "snapshot_ref": "seed-python-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the Python authority implementation for app.workflow/run."
+      },
+      "targets": {
+        "symbols": [
+          "app.workflow/run"
+        ],
+        "paths": [
+          "app/workflow.py"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "python"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-python-happy-path-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "app/workflow.py::app.workflow/run"
+    ],
+    "must_include_paths": [
+      "app/workflow.py",
+      "app/orders.py"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved",
+      "target_path_match"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

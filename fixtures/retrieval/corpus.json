@@ -139,6 +139,54 @@
       "category": "shorthand_symbol_hints",
       "path": "shorthand-suspected-symbols-recovery.json",
       "purpose": "Suspected symbol hints should recover source authority units without promoting vendored lexical matches."
+    },
+    {
+      "fixture_id": "retrieval_clojure_happy_path_001",
+      "category": "clojure_onboarding",
+      "path": "clojure-happy-path.json",
+      "purpose": "Clojure exact symbol targeting keeps the namespace-qualified definition in the top authority band."
+    },
+    {
+      "fixture_id": "retrieval_clojure_ambiguity_001",
+      "category": "clojure_onboarding",
+      "path": "clojure-ambiguity.json",
+      "purpose": "An unqualified Clojure symbol that also names a test must resolve to the definition; the same-named test is pulled in as a related-test neighbour rather than displacing it."
+    },
+    {
+      "fixture_id": "retrieval_java_happy_path_001",
+      "category": "java_onboarding",
+      "path": "java-happy-path.json",
+      "purpose": "Java exact symbol targeting keeps the package-and-class-qualified method in the top authority band. The expected unit id carries the arity and signature key on purpose: that identity is the lane's Variant C decision, and a change to it should break this fixture loudly."
+    },
+    {
+      "fixture_id": "retrieval_java_ambiguity_001",
+      "category": "java_onboarding",
+      "path": "java-ambiguity.json",
+      "purpose": "Two same-name overloads in one class are both kept in the top authority band, distinguished by arity in their unit ids rather than merged into one identity."
+    },
+    {
+      "fixture_id": "retrieval_python_happy_path_001",
+      "category": "python_onboarding",
+      "path": "python-happy-path.json",
+      "purpose": "Python exact symbol targeting keeps the module-qualified function in the top authority band and pulls in the module it calls."
+    },
+    {
+      "fixture_id": "retrieval_python_ambiguity_001",
+      "category": "python_onboarding",
+      "path": "python-ambiguity.json",
+      "purpose": "An unqualified Python symbol that names both a module function and a class method reports target ambiguity and keeps both candidates rather than silently choosing one."
+    },
+    {
+      "fixture_id": "retrieval_elixir_happy_path_001",
+      "category": "elixir_onboarding",
+      "path": "elixir-happy-path.json",
+      "purpose": "Elixir exact symbol targeting keeps the module-qualified function in the top authority band, with the arity in its unit id."
+    },
+    {
+      "fixture_id": "retrieval_elixir_ambiguity_001",
+      "category": "elixir_onboarding",
+      "path": "elixir-ambiguity.json",
+      "purpose": "A function reachable both through a defdelegate and through the module it delegates to keeps both definitions in the top authority band rather than collapsing them."
     }
   ]
 }

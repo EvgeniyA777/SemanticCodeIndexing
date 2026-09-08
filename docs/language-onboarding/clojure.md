@@ -1,14 +1,32 @@
-# Clojure Onboarding
+# Clojure Onboarding Status
 
-Status: placeholder
+Clojure is the repository's own implementation language and its most complete
+lane. It predates `scripts/new-language-adapter.sh`, so this document was a
+placeholder until `plans/023` brought every lane up to the same checklist.
 
-This repository already has mature Clojure support, but it does not yet have a dedicated onboarding document in the same style as the Lua and TypeScript notes.
+## Current State
 
-Use these as the current starting points:
+- Language key: `clojure`
+- File extensions: `.clj`, `.cljc`, `.cljs`
+- Static strength: `high` (`semidx.runtime.language-registry/language-lanes`)
+- Language module: `semidx.runtime.languages.clojure/parse-file`, required
+  statically by `semidx.runtime.adapters`
+- Extraction engines: `clj-kondo` analysis by default with a regex fallback, and
+  an optional tree-sitter extraction mode
+- Fixture files:
+  - `fixtures/retrieval/clojure-happy-path.json`
+  - `fixtures/retrieval/clojure-ambiguity.json`
+- Onboarding regression test:
+  `test/semidx/integration/clojure_onboarding_test.clj`
+- Unit tests: `test/semidx/runtime/languages/clojure_test.clj`
 
-- `src/semidx/runtime/languages/clojure.clj`
-- `src/semidx/runtime/adapters.clj`
-- `test/semidx/runtime_test.clj`
-- `adr/022-define-standard-onboarding-flow-for-new-language-adapters.md`
+Clojure is outside the `plans/018` provider-authority scope: that migration
+covers Java and TypeScript, and this lane keeps its single-parser default path.
 
-If a fuller Clojure-specific onboarding guide is needed later, expand this file instead of creating another root-level language note.
+## Next Steps (ADR-022)
+
+1. Keep running `./scripts/validate-language-onboarding.sh clojure`.
+2. Expand the ambiguity fixture if a same-name-across-namespaces case starts
+   mattering for retrieval quality.
+3. Treat the `high` strength as earned by the `clj-kondo` analysis path; a
+   regex-only fallback run is weaker than the lane's number suggests.

@@ -1,0 +1,65 @@
+{
+  "fixture_id": "retrieval_java_happy_path_001",
+  "category": "java_onboarding",
+  "purpose": "Java exact symbol targeting keeps the package-and-class-qualified method in the top authority band. The expected unit id carries the arity and signature key on purpose: that identity is the lane's Variant C decision, and a change to it should break this fixture loudly.",
+  "adr_refs": [
+    "ADR-022",
+    "ADR-046"
+  ],
+  "snapshot_ref": "seed-java-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the Java authority implementation for com.acme.CheckoutService#processOrder."
+      },
+      "targets": {
+        "symbols": [
+          "com.acme.CheckoutService#processOrder"
+        ],
+        "paths": [
+          "src/com/acme/CheckoutService.java"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "java"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-java-happy-path-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "src/com/acme/CheckoutService.java::com.acme.CheckoutService#processOrder$arity1$sig9932d3aa"
+    ],
+    "must_include_paths": [
+      "src/com/acme/CheckoutService.java"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved",
+      "target_path_match"
+    ],
+    "must_include_warning_codes": [
+      "capability_ceiling"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "fixture_id": "retrieval_clojure_ambiguity_001",
+  "category": "clojure_onboarding",
+  "purpose": "An unqualified Clojure symbol that also names a test must resolve to the definition; the same-named test is pulled in as a related-test neighbour rather than displacing it.",
+  "adr_refs": [
+    "ADR-022"
+  ],
+  "snapshot_ref": "seed-clojure-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the process-order implementation and the test that covers it."
+      },
+      "targets": {
+        "symbols": [
+          "process-order"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "clojure"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": true,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-clojure-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "src/my/app/order.clj::my.app.order/process-order"
+    ],
+    "must_include_paths": [
+      "src/my/app/order.clj",
+      "test/my/app/order_test.clj"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved",
+      "graph_related_test_neighbor"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

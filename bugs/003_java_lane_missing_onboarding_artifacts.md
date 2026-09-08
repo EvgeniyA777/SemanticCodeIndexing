@@ -2,9 +2,9 @@
 title: "Java Lane Is Missing The Onboarding Artifacts Its Own Validator Requires"
 doc_type: "bug_report"
 lifecycle: "active"
-status: "open"
+status: "fixed"
 agent_action: "reference_for_context"
-updated: "2026-09-07"
+updated: "2026-09-08"
 ---
 
 # Java Lane Is Missing The Onboarding Artifacts Its Own Validator Requires
@@ -71,3 +71,19 @@ Two honest options, and the choice is the owner's:
 
 Whichever is chosen, it should be settled before the authority default flip, so
 that a lane-level gate failure at that moment means something.
+
+## Resolution (2026-09-08)
+
+Fixed by [`plans/023`](../plans/023_uniform_language_onboarding_completeness_plan.md),
+which took the wider reading of this report: the problem was the checklist's
+uneven application rather than Java's artifacts alone. Clojure, python and elixir
+failed it too.
+
+Both suggested options were used where each was right. Artifacts were produced
+where they were genuinely missing — the Java onboarding document, four
+integration onboarding tests, eight retrieval fixtures — and the validator was
+corrected where it tested a spelling rather than a property: elixir's lazily
+resolved adapter wiring and its named parse-file wrapper are now accepted as the
+legitimate shapes they are.
+
+All ten lanes now report zero errors, so the gate can fail usefully again.

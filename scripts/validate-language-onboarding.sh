@@ -115,10 +115,22 @@ check_file "$CORPUS_FILE"
 check_contains "\"${LANG_ID}\"" "$REGISTRY_FILE" "language lane registered in registry"
 check_contains "ns semidx\\.runtime\\.languages\\.${LANG_NS}" "$LANGUAGE_MODULE" "language module uses the canonical namespace"
 check_contains "\\(defn parse-file " "$LANGUAGE_MODULE" "language module exposes parse-file"
-check_contains "semidx\\.runtime\\.languages\\.${LANG_NS} :as [A-Za-z0-9_-]+-language" "$ADAPTERS_FILE" "language module is required by adapter facade"
+# Either a static require or a lazy `requiring-resolve` counts: what matters is
+# that the facade reaches the language module, not when it loads it. Elixir
+# resolves lazily on purpose, and a check that insists on the static spelling
+# would be asking the code to change to suit the checker.
+check_contains_any "$ADAPTERS_FILE" "language module is reachable from the adapter facade" \
+  "semidx\\.runtime\\.languages\\.${LANG_NS} :as [A-Za-z0-9_-]+-language" \
+  "requiring-resolve 'semidx\\.runtime\\.languages\\.${LANG_NS}/parse-file"
+# Three spellings are legitimate and all three are in use: a direct call into the
+# language module, a local `parse-<lang>` helper, and a named wrapper such as
+# `parse-elixir-language-file` for a lane whose branch needs more than a
+# forwarding call. The check is that the branch exists and forwards the standard
+# argument list, not which of the three a lane happens to use.
 check_contains_any "$ADAPTERS_FILE" "parse-file branch wired" \
   "\"${LANG_ID}\" \\([A-Za-z0-9_-]+-language/parse-file root-path file-path lines parser-opts\\)" \
-  "\"${LANG_ID}\" \\(parse-${LANG_ID} root-path file-path lines parser-opts\\)"
+  "\"${LANG_ID}\" \\(parse-${LANG_ID} root-path file-path lines parser-opts\\)" \
+  "\"${LANG_ID}\" \\(parse-${LANG_ID}-[A-Za-z0-9_-]+ root-path file-path lines parser-opts\\)"
 
 check_contains "ns semidx\\.integration\\.${LANG_NS}-onboarding-test" "$TEST_FILE" "onboarding test uses mirrored integration namespace (auto-discovered)"
 

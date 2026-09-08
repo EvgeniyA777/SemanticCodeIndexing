@@ -1,0 +1,61 @@
+{
+  "fixture_id": "retrieval_python_ambiguity_001",
+  "category": "python_onboarding",
+  "purpose": "An unqualified Python symbol that names both a module function and a class method reports target ambiguity and keeps both candidates rather than silently choosing one.",
+  "adr_refs": [
+    "ADR-022"
+  ],
+  "snapshot_ref": "seed-python-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the process_order implementation."
+      },
+      "targets": {
+        "symbols": [
+          "process_order"
+        ],
+        "paths": [
+          "app/orders.py"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "python"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-python-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "app/orders.py::app.orders/process_order",
+      "app/orders.py::app.orders.OrderService/process_order"
+    ],
+    "must_include_paths": [
+      "app/orders.py"
+    ],
+    "must_include_warning_codes": [
+      "target_ambiguous"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}

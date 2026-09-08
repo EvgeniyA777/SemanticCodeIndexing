@@ -1,0 +1,59 @@
+{
+  "fixture_id": "retrieval_elixir_ambiguity_001",
+  "category": "elixir_onboarding",
+  "purpose": "A function reachable both through a defdelegate and through the module it delegates to keeps both definitions in the top authority band rather than collapsing them.",
+  "adr_refs": [
+    "ADR-022"
+  ],
+  "snapshot_ref": "seed-elixir-app@rev-001",
+  "input": {
+    "query": {
+      "api_version": "1.0",
+      "schema_version": "1.0",
+      "intent": {
+        "purpose": "code_understanding",
+        "details": "Locate the charge implementation."
+      },
+      "targets": {
+        "symbols": [
+          "charge"
+        ]
+      },
+      "constraints": {
+        "token_budget": 1200,
+        "language_allowlist": [
+          "elixir"
+        ],
+        "max_raw_code_level": "enclosing_unit",
+        "freshness": "current_snapshot"
+      },
+      "hints": {
+        "prefer_definitions_over_callers": true
+      },
+      "options": {
+        "include_tests": false,
+        "include_impact_hints": true,
+        "allow_raw_code_escalation": false
+      },
+      "trace": {
+        "trace_id": "44444444-4444-4444-8444-444444444444",
+        "request_id": "fixture-elixir-ambiguity-001"
+      }
+    }
+  },
+  "expected": {
+    "top_authority_units": [
+      "lib/my_app/order.ex::MyApp.Order/charge$arity1",
+      "lib/my_app/payments/adapter.ex::MyApp.Payments.Adapter/charge$arity1"
+    ],
+    "must_include_paths": [
+      "lib/my_app/order.ex",
+      "lib/my_app/payments/adapter.ex"
+    ],
+    "must_include_selection_reason_codes": [
+      "exact_target_resolved"
+    ],
+    "confidence_level": "medium",
+    "autonomy_posture": "plan_safe"
+  }
+}
