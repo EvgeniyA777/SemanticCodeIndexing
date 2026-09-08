@@ -51,25 +51,50 @@
 (def provider-pipeline-modes
   "How the plans/018 provider pipeline participates in an index build.
 
-  `:off` is the default and costs nothing: not a single provider is planned or
-  executed, and the build is byte-identical to one from before this seam
-  existed. `:shadow` runs the pipeline alongside the real parse and records what
-  it would have produced, changing no unit and no snapshot. `:authority`
-  (Stage 6.1) makes the provider plan the default extraction path for Java and
-  TypeScript: arbitrated facts upgrade the units the parse produced and supply
-  the ones it missed.
+  `:authority` makes the provider plan own default extraction for Java and
+  TypeScript: arbitrated facts upgrade the units the parse produced, supply the
+  ones it missed, and a unit whose only evidence is heuristic is labelled
+  `fallback`. `:shadow` runs the pipeline alongside the real parse and records
+  what it would have produced, changing no unit. `:off` is the default and the
+  rollback: not a single provider is planned or executed and the build is what it
+  was before this seam existed.
 
-  `:authority` is not yet the default for a build that asks for nothing. The
-  workspace fingerprint does not yet distinguish the two models (Stage 6.3), so
-  flipping it here would let a snapshot built under one be reused under the
-  other."
+  Every mode is part of workspace identity (Stage 6.3), so a snapshot built under
+  one is never served to a build asking for another. Making `:authority` the
+  default therefore costs every existing workspace exactly one rebuild, reported
+  as `authority_model_changed` — see `default-provider-pipeline-mode` for why
+  that flip has not happened yet."
   #{:off :shadow :authority})
+
+(def default-provider-pipeline-mode
+  "The mode a build gets when it asks for nothing, and an unrecognised value
+  resolves here too.
+
+  Still `:off`. The flip to `:authority` was attempted on 2026-09-08 and reverted
+  the same day, because it disables more than it labels: Stage 6.2 marks a unit
+  whose only evidence is heuristic as `parser_mode \"fallback\"`, which drops the
+  selection's coverage to `fallback_only` and its confidence ceiling to `low`,
+  and `retrieval/impact-seed-degradations` treats a low-confidence selection as
+  degraded — so `impact-analysis` returns its degraded stub and never assembles
+  the state-invariant packet. On a machine with no Java semantic toolchain, which
+  is the common case, impact analysis and state invariants stop answering for
+  Java entirely.
+
+  The cause is a vocabulary collision rather than the labelling decision itself:
+  `parser_mode \"fallback\"` already meant \"the parser could not extract
+  structure\", and Stage 6.2 gave it a second meaning, \"the evidence is
+  heuristic\". Features keyed to the first meaning read the second. Separating
+  them — evidence tier on `:authority`, extraction failure on `parser_mode` — is
+  what the flip is waiting on. See plans/018 Stage 6."
+  :off)
 
 (defn provider-pipeline-mode [parser-opts]
   (let [mode (or (:provider_pipeline parser-opts)
                  (:provider-pipeline parser-opts))
         mode (cond-> mode (string? mode) keyword)]
-    (if (contains? provider-pipeline-modes mode) mode :off)))
+    (if (contains? provider-pipeline-modes mode)
+      mode
+      default-provider-pipeline-mode)))
 
 (defn- provider-shadow-observation
   "Run the provider pipeline over one build's eligible paths, project tier first.

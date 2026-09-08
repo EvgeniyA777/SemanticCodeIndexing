@@ -1481,6 +1481,46 @@ place. `docs/mcp-api.md` and `docs/runtime-api.md` now describe
 What remains before the flip: the owner's decision on `bugs/003`, and the flip
 itself — one line in `index/provider-pipeline-mode`, deliberately left for last.
 
+##### The flip, attempted and reverted (2026-09-08)
+
+`bugs/003` was closed by `plans/023`, so the flip was attempted: default mode
+`:authority`, with an unrecognised value resolving to the default rather than to
+`:off`.
+
+It was reverted the same day. The suite failed in about twenty places across
+`runtime_test`, `http_test` and `grpc_test`, and the failures were not stale
+expectations. The substantive one: **impact analysis and the entire
+state-invariant feature stop answering for Java on any machine without a semantic
+toolchain.**
+
+Measured on a two-file Java entity fixture, same units and same five relations
+either way, only the labels differing: with the pipeline off the state-invariant
+packet is complete; under `:authority` it is empty, with no entity candidates at
+all.
+
+The chain is `parser_mode "fallback"` → coverage `fallback_only` → confidence
+ceiling `low` → `impact-seed-degradations` calls the selection degraded →
+`impact-analysis` returns its stub without assembling the packet.
+
+The cause is a vocabulary collision, not the owner's labelling decision.
+`parser_mode "fallback"` already meant "the parser could not extract structure";
+Stage 6.2 gave it a second meaning, "the evidence is heuristic", and the features
+keyed to the first meaning cannot tell them apart. A successful regex parse that
+produced methods, fields and relations is not a failed parse.
+
+Recorded as
+[`bugs/005`](../bugs/005_parser_mode_fallback_means_two_different_things.md) with
+the fix that unblocks the flip: keep `parser_mode` for extraction failure, keep
+the evidence tier on `:authority`, and have `coverage-level` and
+`selected-language-strengths` read `:authority` for the heuristic case — the way
+`evidence-strength` already reads it for the exact case.
+
+One defect was found and kept from the attempt: a provider-supplied unit carried
+an empty `:signature`, which fails the context packet contract with
+`internal_contract_error` the moment such a unit reaches retrieval. Only an
+authority build can produce those units, which is why nothing had hit it. Fixed
+in `unit-from-fact`, which now falls back to the symbol.
+
 
 ### Stage 7. Compatibility Cleanup And Expansion Decision
 

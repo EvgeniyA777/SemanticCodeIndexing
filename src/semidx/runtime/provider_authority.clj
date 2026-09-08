@@ -176,7 +176,15 @@
      :module (:owner key*)
      :start_line start
      :end_line (or (:end_line location) start)
-     :signature (or (:signature value) "")
+     ;; Never empty: the context packet contract requires at least one
+     ;; character, and a provider-supplied unit often has no value to recover a
+     ;; signature from — a SCIP class symbol the lexical tier never produced is
+     ;; the common case. The symbol is the truthful minimum; inventing source
+     ;; text the provider never gave us would be worse than saying the name.
+     :signature (let [signature (:signature value)]
+                  (if (and signature (seq (str signature)))
+                    signature
+                    symbol*))
      :summary (str "provider unit " symbol*)
      :docstring_excerpt nil
      :imports (vec file-imports)
