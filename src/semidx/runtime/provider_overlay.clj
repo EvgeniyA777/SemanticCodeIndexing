@@ -412,7 +412,7 @@
         states (document-states executions)
         runner (overlay-run-provider executions run-provider)
         files (mapv (fn [{:keys [path]}]
-                      (provider-execution/shadow-facts-for-file
+                      (provider-execution/facts-for-file
                        {:root_path root_path
                         :path path
                         :parser_opts parser_opts

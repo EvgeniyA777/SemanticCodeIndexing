@@ -124,23 +124,23 @@
         (is (= "sha256:0000" (:expected d)))
         (is (re-matches #"sha256:[0-9a-f]{64}" (:actual d)))))))
 
-;; --- shadow-facts-for-project ---------------------------------------
+;; --- facts-for-project ---------------------------------------
 
-(deftest shadow-facts-for-project-is-unavailable-not-an-error-without-a-cli
-  (let [result (st/shadow-facts-for-project {:root_path corpus-root
+(deftest facts-for-project-is-unavailable-not-an-error-without-a-cli
+  (let [result (st/facts-for-project {:root_path corpus-root
                                              :scip_toolchain_dir "/semidx/does-not-exist"})]
     (is (= "unavailable" (:result result)))
     (is (= ["scip_cli_missing"] (:reason_codes result)))
     (is (empty? (:facts result)))
     (is (= [:scip_provider_unavailable] (map :code (:diagnostics result))))))
 
-(deftest shadow-facts-for-project-requires-a-root-path
+(deftest facts-for-project-requires-a-root-path
   (is (thrown? clojure.lang.ExceptionInfo
-               (st/shadow-facts-for-project {}))))
+               (st/facts-for-project {}))))
 
 (deftest end-to-end-through-the-repo-managed-cli
   (if-let [cli (st/resolve-cli {})]
-    (let [result (st/shadow-facts-for-project {:root_path corpus-root
+    (let [result (st/facts-for-project {:root_path corpus-root
                                                :scip_typescript_cli_path cli})]
       (is (= "ready" (:result result)))
       (is (= "0.4.0" (get-in result [:cli :version])))

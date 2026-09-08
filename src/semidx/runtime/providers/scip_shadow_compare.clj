@@ -115,7 +115,7 @@
 (defn compare-scip-run
   "Compare an already-computed SCIP result against the Stage 2 seam.
 
-  `scip` is a `scip-typescript/shadow-facts-for-project` or `facts-from-index`
+  `scip` is a `scip-typescript/facts-for-project` or `facts-from-index`
   result (it must carry `:result`, `:facts`, `:raw_facts`, `:coverage`,
   `:unmapped`). The Stage 2 seam is run here over `:ts_paths` under
   `:root_path`. When `scip` is not `ready` the comparison is skipped."
@@ -126,7 +126,7 @@
      :scip_diagnostics (:diagnostics scip)
      :comparison :skipped_scip_not_ready}
     (let [legacy-runs (mapv (fn [p]
-                              (provider-execution/shadow-facts-for-file
+                              (provider-execution/facts-for-file
                                {:root_path root_path :path p :parser_opts parser_opts}))
                             ts_paths)
           legacy-facts (vec (mapcat :facts legacy-runs))
@@ -151,11 +151,11 @@
 
   CLI-resolution keys (`:scip_typescript_cli_path`, `:scip_toolchain_dir`,
   `:expected_document_digests`) are forwarded to
-  `scip-typescript/shadow-facts-for-project`. When SCIP is not `ready` the
+  `scip-typescript/facts-for-project`. When SCIP is not `ready` the
   report carries the reason and skips the comparison."
   [{:keys [root_path] :as opts}]
   (let [scip-run (measure
-                  #((requiring-resolve 'semidx.runtime.providers.scip-typescript/shadow-facts-for-project)
+                  #((requiring-resolve 'semidx.runtime.providers.scip-typescript/facts-for-project)
                     (merge (select-keys opts [:scip_typescript_cli_path
                                               :scip_toolchain_dir
                                               :expected_document_digests])
@@ -201,7 +201,7 @@
 
 (defn project-report
   "Standard project-level shadow comparison for a
-  `semidx.runtime.provider-batch/shadow-facts-for-project` result.
+  `semidx.runtime.provider-batch/facts-for-project` result.
 
   Stage 4.5 turns what Stage 3 ran as a one-off harness into ordinary
   diagnostic output. The two tiers are separated back out of the per-file runs
@@ -238,13 +238,13 @@
 (defn project-shadow-report
   "Run the Stage 4.5 project seam and report the comparison plus its latency.
 
-  Options are `provider-batch/shadow-facts-for-project` options. `:paths`
+  Options are `provider-batch/facts-for-project` options. `:paths`
   defaults to every path a project provider selects under `:root_path`. When no
   project provider is admitted the report still renders: the comparison is
   simply the legacy tier against an empty exact tier, which is what a workspace
   without a toolchain should look like."
   [{:keys [root_path paths languages] :as opts}]
   (let [paths (vec (or (seq paths) (discover-paths root_path languages)))
-        run (measure #(provider-batch/shadow-facts-for-project (assoc opts :paths paths)))]
+        run (measure #(provider-batch/facts-for-project (assoc opts :paths paths)))]
     (assoc (project-report (:value run))
            :latency {:project_run_ms (:elapsed_ms run)})))

@@ -1593,57 +1593,57 @@ Exit criteria:
 
 Commit boundary: cleanup only; do not combine with a new language migration.
 
-#### Stage 7 as delivered, part one (2026-09-08)
+#### Stage 7 as delivered (2026-09-08), including a withdrawn decision
 
-Two of the four deliverables are decisions and land now; the third is scheduled
-and deliberately not taken; the fourth is documentation, done.
+**The engine-option deprecation was announced and withdrawn the same day.** It
+rested on the claim that `:java_engine` and `:typescript_engine` had become
+inert — "the plan admits tiers by status, so naming an engine can only agree with
+it or be ignored". That is false, and checking it took one command: with
+`:java_engine :tree-sitter` the parse attempts the structural path and reports
+`tree_sitter_missing_grammar`, with `:regex` it does not. The option still
+chooses which **local** extractor runs, and that extractor is the tier the
+provider plan merges its semantic evidence with. What the option never controlled
+is the semantic tier.
 
-**Deprecation schedule for engine-specific parser options.** Checked against
-current deprecation practice rather than invented: a policy names its scope,
-gives a machine-readable signal before it removes anything, keeps the deprecated
-thing working through an announced window, and states a date rather than letting
-one be discovered.
+Worse, this plan's own Rollback Strategy says the opposite of what the schedule
+proposed: *"Stage 6 retains explicit tree-sitter and regex overrides for
+diagnosis and emergency rollback."* The deprecation contradicted a decision this
+document already carried, and the contradiction went unnoticed until the owner
+asked what removal would buy.
 
-- **Scope**: `:java_engine` and `:typescript_engine`. Not `:clojure_engine` and
-  not `:elixir_engine` — those lanes are outside the migration and their engine
-  option is still the thing that chooses. Not `:tree_sitter_enabled` either: it
-  still governs whether the structural tier is available at all, which the
-  provider plan reads rather than replaces.
-- **Why they are deprecated**: the provider plan admits tiers by observed status
-  and authority, so naming an engine can now only agree with the plan or be
-  ignored. An option that cannot change the outcome is a misleading control.
-- **Signal**: a build that passes one gets it back under
-  `provider_summary.deprecated_options`. Deliberately not a log line — the
-  summary is where every other provider observation already lands, and a
-  deprecation nobody can query is a note rather than a schedule.
-- **Window**: one week from 2026-09-08. Removal is **proposed** after
-  2026-09-15 and taken as its own decision (owner, 2026-09-08).
-- **Migration path**: `:provider_pipeline "off"` for the whole previous
-  behaviour, which is also the documented rollback.
+Withdrawn: the `deprecated_options` key, its test, and the schedule. The docs now
+state what is true instead — the options select the local tier, they cannot
+override the semantic one, and `:provider_pipeline "off"` is the wholesale
+rollback.
 
-**Expansion decision: no further language migrates now.** The bar the plan set is
-evidence, not symmetry, and the evidence does not exist: `plans/020` is still
-paused, so there is no comparative task-value measurement for any lane, and the
-one thing Stage 6 did measure — the Java corpus gaining an exact tier and a unit
-the lexical tier missed — says the mechanism works, not that another language
-would benefit. What would meet the bar for a candidate lane: a semantic provider
-that can be run reproducibly for it, a corpus where the exact tier disagrees with
-the lexical one often enough to matter, and a measured retrieval difference on
-that corpus. Python and Elixir are the obvious candidates by size; neither has
-the first of those three today.
+**There are no shadow-only legacy branches to remove either.** `:shadow` stopped
+being scaffolding when Stage 6b gave it the exact-versus-legacy `comparison`,
+which exists nowhere else. The code that is only reachable under it —
+`provider-shadow-observation`, `provider-shadow-summary` — is that mode's
+implementation, not residue.
 
-**Retention and rollback.** `:off` restores the pre-Stage-6 path exactly and is
-tested as such. Shadow-only legacy branches stay until the window closes; their
-removal is the second half of this stage.
+**What the second half was actually worth: the names.** The default path ran
+through functions called `shadow-facts-for-file` and `shadow-facts-for-project`,
+so every future reader of the default path met a word for something it stopped
+being. Renamed to `facts-for-file` and `facts-for-project` across 14 files, and —
+the part that mattered more — the docstrings around them were corrected: several
+still claimed "everything here is shadow work", "no caller writes it into a
+snapshot", "default extraction is untouched". All false since the flip.
+`provider-overlay/shadow-facts-for-overlay` keeps its name, because the LSP
+overlay genuinely is not on the default path.
 
-**A stale metric found while writing the schedule.** `files_degraded` in the
-authority summary still counted units with `parser_mode "fallback"`. bugs/005
-took that field back, so the count had been silently zero for every build since.
-It reads the file diagnostic now, and the test asserts the count and the
-diagnostic that produced it agree.
+**Expansion decision, unchanged**: no further language migrates. The bar is
+evidence rather than symmetry, `plans/020` is still paused, and nothing measured
+in Stage 6 says another lane would gain. A candidate needs a reproducibly
+runnable semantic provider, a corpus where the exact tier disagrees with the
+lexical one often enough to matter, and a measured retrieval difference.
 
-Not done, by the owner's instruction: removal of the deprecated options and of
-the shadow-only branches, to be proposed after 2026-09-15.
+**One stale metric found and fixed**: `files_degraded` counted units by
+`parser_mode "fallback"`, which `bugs/005` had made impossible, so it had been
+zero for every build. It reads the file diagnostic now, and a test asserts the
+count agrees with the diagnostic that produced it.
+
+Stage 7 is complete. Nothing is scheduled for removal.
 
 ## Verification Gates
 

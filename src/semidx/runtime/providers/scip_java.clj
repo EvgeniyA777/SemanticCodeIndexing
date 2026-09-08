@@ -1,6 +1,7 @@
 (ns semidx.runtime.providers.scip-java
   "Stage 4 of the Semantic Provider Authority Migration (plans/018, ADR-046):
-  the Java SCIP provider adapter. Shadow / default-off.
+  the Java SCIP provider adapter. On the default path since Stage 6, whenever
+  its toolchain resolves.
 
   Everything language-neutral — the per-document stale gate, the arity-only
   overload guard, `FactBatch` assembly, and the result shapes — lives in
@@ -223,7 +224,7 @@
 (defn facts-from-index
   "Turn an already-read Java SCIP index into arbitrated shadow facts.
 
-  Test / fixture seam only — production callers use `shadow-facts-for-project`.
+  Test / fixture seam only — production callers use `facts-for-project`.
   The arity-only overload guard is always on for Java: the tier cannot supply a
   typed signature, so an unguarded run could assert one exact identity for two
   distinct same-arity overloads."
@@ -237,7 +238,7 @@
           (select-keys opts [:project-root :expected-document-digests
                              :provider-id :provider-version]))))
 
-(defn shadow-facts-for-project
+(defn facts-for-project
   "Run the repo-managed Java SCIP toolchain over `root_path`, then normalize,
   gate, and arbitrate its output into shadow facts.
 
@@ -248,7 +249,7 @@
   to a snapshot."
   [{:keys [root_path expected_document_digests javac_classpath] :as opts}]
   (when-not root_path
-    (throw (ex-info "shadow-facts-for-project requires :root_path"
+    (throw (ex-info "facts-for-project requires :root_path"
                     {:error_code :missing_root_path})))
   (let [toolchain (resolve-toolchain opts)]
     (if-not toolchain

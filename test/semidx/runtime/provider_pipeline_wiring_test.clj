@@ -12,7 +12,6 @@
             [semidx.mcp.core :as mcp]
             [semidx.runtime.http :as runtime-http]
             [semidx.runtime.index :as idx]
-            [semidx.runtime.provider-authority :as authority]
             [semidx.runtime.provider-batch :as batch]
             [semidx.runtime.provider-execution :as provider-execution]
             [semidx.runtime.storage :as storage]
@@ -66,7 +65,7 @@
 
 (deftest a-failing-provider-cannot-fail-the-build-test
   (testing "a shadow observation must never take a real index down"
-    (with-redefs [provider-execution/shadow-facts-for-file
+    (with-redefs [provider-execution/facts-for-file
                   (fn [_] (throw (ex-info "provider exploded" {})))]
       (let [index (sci/create-index {:root_path java-corpus
                                      :parser_opts {:provider_pipeline "shadow"}})
@@ -280,25 +279,7 @@
                                      :parser_opts {:provider_pipeline "off"}})]
         (is (not (contains? index :provider_summary)))))))
 
-;; --- Stage 7: the deprecation signal, and a metric bugs/005 had silently retired
-
-(deftest a-deprecated-engine-option-is-reported-not-just-noted-test
-  (testing "the provider plan owns extraction for Java and TypeScript, so naming
-            an engine no longer decides what runs. The option keeps working
-            through its retention window, and the build says it was used — a
-            deprecation nobody can query is a note, not a schedule"
-    (let [used (:provider_summary
-                (sci/create-index {:root_path java-corpus
-                                   :parser_opts {:java_engine :regex}}))
-          untouched (:provider_summary (sci/create-index {:root_path java-corpus}))]
-      (is (= ["java_engine"] (:deprecated_options used)))
-      (is (not (contains? untouched :deprecated_options))
-          "and a build that passes none says nothing about them")))
-
-  (testing "lanes outside the migration are not deprecated: their engine option
-            is still the thing that chooses"
-    (is (empty? (authority/deprecated-options-used {:clojure_engine :clj-kondo
-                                                    :elixir_engine :regex})))))
+;; --- Stage 7: a metric bugs/005 had silently retired
 
 (deftest the-degraded-file-count-still-counts-test
   (testing "bugs/005 took parser_mode back, so counting fallback units here would

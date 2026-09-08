@@ -80,22 +80,23 @@ Example with parser options:
                 :tree_sitter_enabled false}})
 ```
 
-**Deprecated since 2026-09-08: `:java_engine` and `:typescript_engine`.** The
-provider plan owns default extraction for those two lanes, so naming an engine no
-longer decides what runs — the plan admits tiers by observed status and
-authority, and the option can only agree with it or be ignored. Both options are
-still accepted and still honoured wherever they mean something, and a build that
-passes one has it reported back under `provider_summary.deprecated_options`, so
-the usage is queryable rather than silent.
+**What the engine options do, and do not do.** `:java_engine`,
+`:typescript_engine`, `:clojure_engine`, `:elixir_engine` and
+`:tree_sitter_enabled` choose which **local** extractor runs — the structural
+tree-sitter path or the lexical one. They still do exactly that, including for
+Java and TypeScript under the provider plan, where the chosen extractor is the
+tier the plan merges its semantic evidence with.
 
-Retention window: one week from 2026-09-08. Removal is **proposed** after
-2026-09-15 and taken as a separate decision, not automatically.
+What they cannot do is override the **semantic** tier: whether fresh SCIP or LSP
+evidence participates is decided by the provider plan from observed toolchain
+status, not by a parser option, and it never was decided by one. To turn the
+provider plan off wholesale, set `:provider_pipeline "off"`; that is the
+documented rollback and it restores the pre-Stage-6 path exactly.
 
-To keep the previous behaviour wholesale, set `:provider_pipeline "off"` instead
-of reaching for an engine name; that is the documented rollback and it restores
-the pre-Stage-6 path exactly. `:clojure_engine` and `:elixir_engine` are **not**
-deprecated: those lanes are outside the provider migration and their engine
-option is still the thing that chooses.
+A deprecation of these options was announced on 2026-09-08 and withdrawn the same
+day: it rested on the claim that the options had become inert, which is false —
+they still select the local tier, and `plans/018` explicitly retains them for
+diagnosis and emergency rollback.
 
 Legacy tree-sitter extraction path (current implementation):
 

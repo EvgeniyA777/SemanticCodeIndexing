@@ -106,7 +106,7 @@
   (let [started (System/nanoTime)
         elapsed-ms #(/ (double (- (System/nanoTime) started)) 1e6)]
     (try
-      (let [result ((requiring-resolve 'semidx.runtime.provider-batch/shadow-facts-for-project)
+      (let [result ((requiring-resolve 'semidx.runtime.provider-batch/facts-for-project)
                     {:root_path root-path
                      :paths paths
                      :parser_opts parser-opts})]

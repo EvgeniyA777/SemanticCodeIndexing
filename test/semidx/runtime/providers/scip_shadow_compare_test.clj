@@ -129,7 +129,7 @@
 
 (deftest project-report-separates-the-two-tiers-again
   (let [scip (st/facts-from-index (scip/read-index fixture-scip) {:project-root corpus-root})
-        result (batch/shadow-facts-for-project {:root_path (.getPath corpus-root)
+        result (batch/facts-for-project {:root_path (.getPath corpus-root)
                                                 :paths corpus-paths
                                                 :project_roles (project-roles-returning scip)})
         report (cmp/project-report result)]
@@ -154,7 +154,7 @@
 (deftest project-report-renders-without-an-admitted-provider
   (testing "no toolchain: the report is the legacy tier against an empty exact tier,
             not an error"
-    (let [result (batch/shadow-facts-for-project
+    (let [result (batch/facts-for-project
                   {:root_path (.getPath corpus-root)
                    :paths corpus-paths
                    :project_statuses {"scip-typescript" {:state "unavailable"

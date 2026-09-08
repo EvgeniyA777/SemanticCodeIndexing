@@ -1,6 +1,7 @@
 (ns semidx.runtime.provider-batch
   "Stage 4.5 of the Semantic Provider Authority Migration (plans/018, ADR-046):
-  the project-scoped provider execution boundary. Shadow / default-off.
+  the project-scoped provider execution boundary. On the default path since
+  Stage 6 made `:authority` the default mode.
 
   A SCIP provider indexes a project once and then yields facts for the documents
   that run covered. That is a different execution shape from
@@ -63,9 +64,9 @@
   provider must supply: a status probe that never runs the indexer, and a run
   function returning the project result contract below."
   {"scip-typescript" {:status-fn (adapter-fn "scip-typescript" 'provider-status)
-                      :run-fn (adapter-fn "scip-typescript" 'shadow-facts-for-project)}
+                      :run-fn (adapter-fn "scip-typescript" 'facts-for-project)}
    "scip-java" {:status-fn (adapter-fn "scip-java" 'provider-status)
-                :run-fn (adapter-fn "scip-java" 'shadow-facts-for-project)}})
+                :run-fn (adapter-fn "scip-java" 'facts-for-project)}})
 
 (def result-states
   "The `:result` values a project run may carry. `unavailable` means the
@@ -259,7 +260,7 @@
   "The execution envelope without the fact payload.
 
   Facts reach a caller through the per-file results, which arbitrate them; a
-  project-level copy would double the size of the shadow artifact for nothing."
+  project-level copy would double the size of the artifact for nothing."
   [execution]
   (update execution :results
           (fn [results]
@@ -361,13 +362,14 @@
        distinct
        vec))
 
-(defn shadow-facts-for-project
+(defn facts-for-project
   "Run the project providers over `:root_path`, then plan and execute every path
   in `:paths` with their coverage available.
 
-  This is the Stage 4.5 seam end to end. Its result is a shadow artifact: no
-  caller writes it into a snapshot, `adapters/parse-file` is untouched, and a
-  path outside a fresh batch is planned exactly as it was before this stage.
+  This is the Stage 4.5 seam end to end. Since Stage 6 its facts reach the
+  snapshot through `provider-authority`, which merges them with the parse rather
+  than replacing it; a path outside a fresh batch is still planned exactly as it
+  was before this stage.
 
   Options:
   - `:root_path` (required) and `:paths` — the workspace-relative files to plan;
@@ -385,7 +387,7 @@
     :or {mode "shadow"}
     :as opts}]
   (when-not root_path
-    (throw (ex-info "shadow-facts-for-project requires :root_path"
+    (throw (ex-info "facts-for-project requires :root_path"
                     {:error_code :missing_root_path})))
   (let [paths (vec paths)
         languages (vec (or (seq languages) (languages-for paths)))
@@ -402,7 +404,7 @@
         coverage (batch-coverage execution)
         runner (batch-run-provider execution run-provider)
         files (mapv (fn [path]
-                      (provider-execution/shadow-facts-for-file
+                      (provider-execution/facts-for-file
                        {:root_path root_path
                         :path path
                         :parser_opts parser_opts

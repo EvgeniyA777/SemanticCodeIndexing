@@ -181,7 +181,7 @@
 (deftest project-seam-merges-exact-and-legacy-into-one-identity-test
   (let [scip-result (scip-typescript/facts-from-index (scip/read-index fixture-scip)
                                                       {:project-root corpus-root})
-        result (batch/shadow-facts-for-project
+        result (batch/facts-for-project
                 {:root_path (.getPath corpus-root)
                  :paths corpus-paths
                  :project_roles (roles (fn [_] scip-result))})
@@ -209,7 +209,7 @@
   (let [scip-result (scip-typescript/facts-from-index (scip/read-index fixture-scip)
                                                       {:project-root corpus-root})
         run (fn [paths]
-              (->> (batch/shadow-facts-for-project
+              (->> (batch/facts-for-project
                     {:root_path (.getPath corpus-root)
                      :paths paths
                      :project_roles (roles (fn [_] scip-result))})
@@ -220,7 +220,7 @@
         "arbitrated output is a function of the plan, not of run order")))
 
 (deftest a-workspace-without-a-toolchain-degrades-to-the-file-tiers-test
-  (let [with-batch (batch/shadow-facts-for-project
+  (let [with-batch (batch/facts-for-project
                     {:root_path (.getPath corpus-root)
                      :paths corpus-paths
                      :project_roles (roles (fn [_] (assoc (ready-result {})
@@ -228,7 +228,7 @@
                                                           :reason_codes ["scip_cli_missing"])))})
         plain (mapv (fn [path]
                       (comparable-plan
-                       (:plan (provider-execution/shadow-facts-for-file
+                       (:plan (provider-execution/facts-for-file
                                {:root_path (.getPath corpus-root) :path path}))))
                     corpus-paths)]
     (is (= {} (:batch_coverage with-batch)))
@@ -237,7 +237,7 @@
 
 (deftest end-to-end-through-the-repo-managed-cli
   (if (scip-typescript/resolve-cli {})
-    (let [result (batch/shadow-facts-for-project {:root_path (.getPath corpus-root)
+    (let [result (batch/facts-for-project {:root_path (.getPath corpus-root)
                                                   :paths corpus-paths})
           coverage (get (:batch_coverage result) "scip-typescript")]
       (is (= "ready" (get-in result [:project_execution :results "scip-typescript" :result])))
