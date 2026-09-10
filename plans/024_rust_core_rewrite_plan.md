@@ -75,12 +75,32 @@ transport and `semidx-core` can emit JSON Schema without pulling a parser.
 | Parsing | `tree-sitter` plus grammar crates | Grammars compiled in; no runtime download |
 | Storage | `rusqlite` with `bundled` feature | No external database, no server |
 | Lexical | SQLite FTS5 | BM25 in the same file as the graph |
-| Vectors | `fastembed` or `ort` for inference; `sqlite-vec` or `usearch` for ANN | Maturity of `sqlite-vec` to be confirmed at M3; `usearch` is the fallback |
+| Vectors | `fastembed` or `ort` for inference; `usearch` 2.26 for ANN | Vectors are stored as BLOBs in SQLite; the ANN index is a derived, rebuildable artifact. See the note below on why not `sqlite-vec` |
 | Parallelism | `rayon` | Per-file work parallelizes without shared mutable state |
 | Contracts | `serde` + `schemars` | Schema derived from types |
-| MCP | `rmcp` (official Rust SDK) | Fastest-moving dependency; confirm current status before M1 |
+| MCP | `rmcp` 3.x (official Rust SDK) | Mainstream and actively maintained; the major line still moves, so keep the MCP layer thin |
 | CLI / HTTP | `clap`, `axum` | HTTP only if a second transport is actually requested |
 | Snapshot tests | `insta` | Replaces the REPL feedback loop for extraction output |
+
+Dependency status was checked against crates.io on 2026-09-10 and is recorded
+here so a later reader can tell a stale assumption from a current one:
+
+| Crate | Version observed | Signal |
+| --- | --- | --- |
+| `rmcp` | 3.3.0, released 2026-09-10 | 25.5M downloads total, 13.0M recent. The official SDK is mainstream, not a bet. Three major versions in its history means the API does move; the mitigation is architectural, not a pin |
+| `usearch` | 2.26.2, released 2026-08-31 | 1.05M downloads total, 397k recent. Stable 2.x line, Apache-2.0, actively released |
+| `sqlite-vec` | 0.1.10-alpha.4, released 2026-05-18 | 2.78M downloads total, 1.06M recent — widely used, but still pre-v1 alpha with breaking changes expected to both the SQL API and the on-disk storage format |
+
+**Why `usearch` rather than `sqlite-vec`, despite the latter being the tidier
+design.** A storage-format break in a dependency is not an upgrade chore here —
+it is a forced reindex on every user's machine, for a tool whose entire adoption
+argument is that it installs and works. `sqlite-vec` states that breakage is
+expected before v1, and the most recent release as of this check is still an
+alpha from May 2026. Keeping vectors as SQLite BLOBs and treating the ANN index as
+derived means the format risk is confined to a file that can be rebuilt from the
+database at any time, and it leaves the door open: when `sqlite-vec` reaches v1,
+adopting it removes a dependency without a migration, because the source of
+truth never moved out of SQLite.
 
 ### Graph representation
 
@@ -100,8 +120,13 @@ units(id, snapshot_id, file_id, symbol, kind, module,
 relations(snapshot_id, src_unit, dst_unit, kind, evidence,
           authority, resolved)
 units_fts  -- FTS5 over symbol, module, path, doc
-unit_vectors(unit_id, embedding)
+unit_vectors(unit_id, embedding)  -- BLOB; source of truth for vectors
 ```
+
+The ANN index (`usearch`) lives in a separate file alongside the database and is
+**derived**: it is rebuilt from `unit_vectors` whenever it is missing, stale, or
+written by an incompatible version. Nothing depends on it for correctness, only
+for speed.
 
 `files.content_hash` is what makes reindexing incremental: unchanged files keep
 their units and relations, and only changed files are reparsed. The current
@@ -246,8 +271,8 @@ that problem disappears), and eight language lanes.
 | --- | --- |
 | Borrow checker friction on a cyclic graph | Arena indices from the start; no reference-linked nodes |
 | Loss of the REPL feedback loop | `insta` snapshot tests over extraction output; fixture corpus available at M1 |
-| `rmcp` instability | Keep the MCP layer thin and transport-agnostic; the four tools are library calls first |
-| `sqlite-vec` maturity | `usearch` as a drop-in fallback; decision deferred to M3 |
+| `rmcp` major-version churn | Not a stability risk — the SDK is official and heavily used — but the 3.x line moves. Keep the MCP layer thin and transport-agnostic so the four tools are library calls first and an SDK upgrade touches one crate |
+| Vector storage format churn | Resolved by construction: vectors are SQLite BLOBs, the ANN index is derived and rebuildable. `sqlite-vec` is revisited only after it reaches v1 |
 | Grammar version skew | Pin grammar crate versions; extraction tests fail loudly on tree shape changes |
 | Rewrite absorbs attention that fixes nothing | M0 gate; every milestone has a measured exit, not a feature checklist |
 | Single maintainer, unfamiliar language | Two lanes only; four tools only; no optional infrastructure until there is a user |
