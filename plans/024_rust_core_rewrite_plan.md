@@ -75,7 +75,8 @@ transport and `semidx-core` can emit JSON Schema without pulling a parser.
 | Parsing | `tree-sitter` plus grammar crates | Grammars compiled in; no runtime download |
 | Storage | `rusqlite` with `bundled` feature | No external database, no server |
 | Lexical | SQLite FTS5 | BM25 in the same file as the graph |
-| Vectors | `fastembed` or `ort` for inference; `usearch` 2.26 for ANN | Vectors are stored as BLOBs in SQLite; the ANN index is a derived, rebuildable artifact. See the note below on why not `sqlite-vec` |
+| Inference | `fastembed` 6.x over `ort` 2.0-rc, behind an `Embedder` trait | `candle` is the fallback; the decision has a stated criterion at M3, see below |
+| Vectors | `usearch` 2.26 for ANN | Vectors are stored as BLOBs in SQLite; the ANN index is a derived, rebuildable artifact. See the note below on why not `sqlite-vec` |
 | Parallelism | `rayon` | Per-file work parallelizes without shared mutable state |
 | Contracts | `serde` + `schemars` | Schema derived from types |
 | MCP | `rmcp` 3.x (official Rust SDK) | Mainstream and actively maintained; the major line still moves, so keep the MCP layer thin |
@@ -90,6 +91,9 @@ here so a later reader can tell a stale assumption from a current one:
 | `rmcp` | 3.3.0, released 2026-09-10 | 25.5M downloads total, 13.0M recent. The official SDK is mainstream, not a bet. Three major versions in its history means the API does move; the mitigation is architectural, not a pin |
 | `usearch` | 2.26.2, released 2026-08-31 | 1.05M downloads total, 397k recent. Stable 2.x line, Apache-2.0, actively released |
 | `sqlite-vec` | 0.1.10-alpha.4, released 2026-05-18 | 2.78M downloads total, 1.06M recent — widely used, but still pre-v1 alpha with breaking changes expected to both the SQL API and the on-disk storage format |
+| `fastembed` | 6.0.3, released 2026-09-07 | 3.29M downloads total, 1.86M recent. Actively released; pulls `ort` through feature flags and downloads ONNX Runtime binaries by default |
+| `ort` | 2.0.0-rc.13, released 2026-07-28 | 17.9M downloads total, 6.76M recent. Formally a release candidate, in practice the standard ONNX Runtime binding for Rust |
+| `candle` | 0.11.0, released 2026-06-26 | 7.85M downloads total, 2.67M recent. Pure Rust, no external runtime to link |
 
 **Why `usearch` rather than `sqlite-vec`, despite the latter being the tidier
 design.** A storage-format break in a dependency is not an upgrade chore here —
@@ -101,6 +105,46 @@ derived means the format risk is confined to a file that can be rebuilt from the
 database at any time, and it leaves the door open: when `sqlite-vec` reaches v1,
 adopting it removes a dependency without a migration, because the source of
 truth never moved out of SQLite.
+
+**Inference engine: a decision with a criterion, not a preference.** The two
+candidates fail in opposite directions, and the deciding constraint is M5, not
+M3.
+
+`fastembed` over `ort` is the faster path and covers more models, but ONNX
+Runtime is a native library. Its default strategy downloads Microsoft's prebuilt
+binaries, which is exactly the "install a toolchain first" failure this rewrite
+exists to escape. A self-contained binary is achievable — `ort` exposes a
+`compile-static` feature and an `ORT_LIB_PATH` for statically built libraries,
+and its own documentation recommends static linking where the execution
+providers allow it — but ONNX Runtime then has to be compiled per target, on
+native CI runners rather than by cross-compilation, and the documentation is
+explicit that this "will take a very long time".
+
+`candle` is pure Rust with no external runtime to link, so cross-compilation to
+all five targets is ordinary `cargo build`. The cost is a narrower set of
+ready-made embedding models and, most likely, slower CPU inference.
+
+**Criterion, evaluated at M3:** if a statically linked binary can be produced for
+darwin-arm64, darwin-x64, linux-x64, linux-arm64 and windows-x64 within an
+acceptable CI budget, ship `fastembed`/`ort`. If it cannot, ship `candle`.
+Either way the inference call sits behind an `Embedder` trait in
+`semidx-retrieve`, so the swap touches one crate and no contract.
+
+**Model selection is a measurement, not a leaderboard lookup.** The M0 harness
+already provides ground truth over real merged pull requests, so candidate
+models are ranked by recall@k on that corpus rather than by general text
+benchmarks, which measure prose retrieval and not code. Two hard filters apply
+before any measurement:
+
+1. **License must be permissive** (Apache-2.0 or MIT). Several models at the top
+   of public embedding leaderboards — `jina-embeddings-v3` and `NV-Embed-v2`
+   among them — are CC-BY-NC and cannot be shipped in a commercial tool.
+2. **Quantized size must fit the distribution story.** A model that adds a
+   multi-gigabyte download undoes M5. Candidates in range at the time of this
+   check: `EmbeddingGemma-300M` (reported under 200 MB quantized),
+   `Qwen3-Embedding-0.6B` (Apache-2.0, roughly 1.5 GB — likely fetched on first
+   run rather than bundled), and `all-MiniLM-L6-v2` (~100 MB) as a cheap floor
+   to measure against.
 
 ### Graph representation
 
@@ -219,9 +263,17 @@ FTS5 candidates, typed-relation expansion, budget packing, `find` tool.
 **Exit**: beats the M0 baseline on recall@10 without embeddings. If it does
 not, the problem is the relation model and M3 will not rescue it.
 
-### M3 — Embeddings and fusion (~2 weeks)
+### M3 — Embeddings and fusion (~2 weeks, plus CI build time)
 
-Local inference, vector storage, reciprocal rank fusion.
+Local inference behind the `Embedder` trait, vector storage, reciprocal rank
+fusion. Two decisions land here, both by the criteria stated above: the
+inference engine (`fastembed`/`ort` if static linking fits the CI budget, else
+`candle`) and the model (ranked by recall@k on the M0 corpus, filtered first by
+permissive license and quantized size).
+
+The estimate covers engineering time only. If static ONNX Runtime builds are
+attempted, per-target CI compilation is measured in hours and should be set up
+during M2 rather than discovered here.
 
 **Exit**: the `reports/029` Finding 2 query — "where is the retrieval ranking
 pipeline that scores code units" — returns the ranking module in the top three
@@ -273,6 +325,8 @@ that problem disappears), and eight language lanes.
 | Loss of the REPL feedback loop | `insta` snapshot tests over extraction output; fixture corpus available at M1 |
 | `rmcp` major-version churn | Not a stability risk — the SDK is official and heavily used — but the 3.x line moves. Keep the MCP layer thin and transport-agnostic so the four tools are library calls first and an SDK upgrade touches one crate |
 | Vector storage format churn | Resolved by construction: vectors are SQLite BLOBs, the ANN index is derived and rebuildable. `sqlite-vec` is revisited only after it reaches v1 |
+| A native ONNX Runtime dependency reintroduces the install problem | The `Embedder` trait plus a decision criterion at M3; `candle` needs no external runtime, so the escape hatch is designed in rather than hoped for |
+| Shipping a non-commercial-licensed model | License filter applied before measurement, not after; CC-BY-NC models are excluded from the candidate set outright |
 | Grammar version skew | Pin grammar crate versions; extraction tests fail loudly on tree shape changes |
 | Rewrite absorbs attention that fixes nothing | M0 gate; every milestone has a measured exit, not a feature checklist |
 | Single maintainer, unfamiliar language | Two lanes only; four tools only; no optional infrastructure until there is a user |
@@ -281,8 +335,10 @@ that problem disappears), and eight language lanes.
 
 - Does the M0 harness use public repositories only, or is ReaderLens available
   as a fixed permissioned corpus?
-- Which embedding model is acceptable to ship: size, license, and whether it
-  can be bundled or must be fetched on first run?
+- Is a first-run model download acceptable, or must the binary work fully
+  offline out of the box? This is the one embedding question the M0 harness
+  cannot answer, because it is a product constraint rather than a quality one —
+  and it decides whether a ~1.5 GB model is a candidate at all.
 - Is Windows a supported target at M5, or does it wait for a request?
 - Does the current Clojure implementation continue receiving fixes in parallel
   during M1-M4, and if so, for how long?
