@@ -146,6 +146,64 @@ before any measurement:
    run rather than bundled), and `all-MiniLM-L6-v2` (~100 MB) as a cheap floor
    to measure against.
 
+### Model delivery
+
+"Bundle the model or download it on first run" is a false dilemma, and the
+industry does not resolve it as one. The decision has three parts, and only the
+third is load-bearing.
+
+**1. Default: fetch on first use, not on install.** A small binary plus a
+separately versioned model artifact is the settled pattern — Ollama, LM Studio,
+and the Hugging Face ecosystem all work this way, needing the network exactly
+once. The benefit is not size but decoupling: a model update stops being a tool
+release, and a tool release stops being a model download. The fetch happens on
+the first index that requests embeddings, never during installation and never
+silently in the background, with visible progress and a SHA-256 check.
+
+**2. Offline is a supported delivery mode, not a fallback flag.** Air-gapped
+environments require the model to load with no runtime downloads and no
+telemetry, shipped alongside its tokenizer, config, version, and model card, and
+signed so the receiving side can verify integrity without reaching the internet.
+Concretely:
+
+- `SEMIDX_MODEL_DIR` overrides the cache location; the default is the XDG cache
+  path.
+- `SEMIDX_MODEL_URL` points at an internal mirror.
+- `--offline` / `SEMIDX_OFFLINE=1` makes any network call an error rather than
+  an attempt.
+- Each release publishes `semidx-model-<name>-<version>.tar.zst` with a checksum
+  and a signature, for transfer into a closed network.
+- An unreachable network times out and degrades. It never hangs.
+
+**3. The load-bearing decision: embeddings are an upgrade, never a
+prerequisite.** Without a model, semidx runs in lexical-plus-graph mode — which
+is exactly M2, and M2 is already required to beat the M0 baseline on its own.
+With a model, retrieval quality improves. This is the same degradation ladder
+the project already applies to facts (exact over structural over heuristic),
+extended to the query side rather than invented for it.
+
+That inversion is what dissolves the original question:
+
+- The first run always works, including behind a corporate proxy that blocks
+  public model hosts.
+- Model download becomes a quality upgrade rather than an installation step, so
+  it cannot block M5.
+- A ~1.5 GB model stops being a distribution problem and becomes an opt-in
+  choice for users who want maximum quality.
+
+**Target class:** aim at a model at or under 400 MB quantized
+(`EmbeddingGemma-300M` is reported under 200 MB), which is small enough that
+bundling versus fetching stops being a painful call. `Qwen3-Embedding-0.6B` is
+an explicit "quality" mode, never the default.
+
+**Test the offline path in our own code.** The fastembed ecosystem has known
+defects of exactly this class — `HF_HUB_OFFLINE=1` bypassing the local cache and
+falling back to a remote host, and hangs behind a firewall despite a present
+local model. Those issues are filed against the Python library rather than the
+Rust crate this plan selects, so they are an ecosystem signal rather than direct
+evidence; the conclusion is that offline behavior must be owned and tested here,
+not assumed from a dependency.
+
 ### Graph representation
 
 Arena-based, not pointer-based: units and relations live in `Vec` storage
@@ -278,7 +336,9 @@ during M2 rather than discovered here.
 **Exit**: the `reports/029` Finding 2 query — "where is the retrieval ranking
 pipeline that scores code units" — returns the ranking module in the top three
 on this repository's own successor. Measurable improvement over M2 on the
-harness.
+harness. Additionally: with `--offline` and no model present, retrieval still
+returns M2-quality results and says so in the response, rather than failing or
+hanging.
 
 ### M4 — Impact surface (~2 weeks)
 
@@ -298,7 +358,9 @@ documentation.
 **Exit**: a person who has never seen the project installs it and completes a
 first retrieval on their own repository in under ten minutes with no
 assistance. This is acceptance criterion one from
-`docs/development-strategy.md`, finally testable.
+`docs/development-strategy.md`, finally testable. The same run is repeated on a
+machine with no access to public model hosts, and must succeed with the same
+setup time.
 
 ## What Carries Over
 
@@ -327,6 +389,7 @@ that problem disappears), and eight language lanes.
 | Vector storage format churn | Resolved by construction: vectors are SQLite BLOBs, the ANN index is derived and rebuildable. `sqlite-vec` is revisited only after it reaches v1 |
 | A native ONNX Runtime dependency reintroduces the install problem | The `Embedder` trait plus a decision criterion at M3; `candle` needs no external runtime, so the escape hatch is designed in rather than hoped for |
 | Shipping a non-commercial-licensed model | License filter applied before measurement, not after; CC-BY-NC models are excluded from the candidate set outright |
+| A blocked model host makes the tool unusable at a corporate pilot | Embeddings are an upgrade, not a prerequisite: no model means lexical-plus-graph retrieval with an explicit diagnostic. Verified as an M3 exit, not assumed |
 | Grammar version skew | Pin grammar crate versions; extraction tests fail loudly on tree shape changes |
 | Rewrite absorbs attention that fixes nothing | M0 gate; every milestone has a measured exit, not a feature checklist |
 | Single maintainer, unfamiliar language | Two lanes only; four tools only; no optional infrastructure until there is a user |
@@ -335,10 +398,8 @@ that problem disappears), and eight language lanes.
 
 - Does the M0 harness use public repositories only, or is ReaderLens available
   as a fixed permissioned corpus?
-- Is a first-run model download acceptable, or must the binary work fully
-  offline out of the box? This is the one embedding question the M0 harness
-  cannot answer, because it is a product constraint rather than a quality one —
-  and it decides whether a ~1.5 GB model is a candidate at all.
+- Does the offline model bundle need signing at M5, or is a published checksum
+  sufficient until a pilot actually requires transfer into a closed network?
 - Is Windows a supported target at M5, or does it wait for a request?
 - Does the current Clojure implementation continue receiving fixes in parallel
   during M1-M4, and if so, for how long?
